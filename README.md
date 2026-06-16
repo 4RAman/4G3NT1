@@ -1,12 +1,14 @@
 # AI Button
 
 A Raspberry Pi 3B+ device: one physical button, three gestures (short
-press / long press / double tap), routed through **time-aware rules** —
-the same gesture can mean different things at different times of day.
-An RGB LED and feedback sounds show device state; a BLE GATT peripheral
-broadcasts state changes and results to any subscribed phone/laptop.
+press / long press / double tap) plus a reserved **5-tap** escape, routed
+through **time-aware modes** — the same gesture can mean different things
+at different times of day or in different modes. An RGB LED and feedback
+sounds show device state; a BLE GATT peripheral broadcasts state changes
+and results to any subscribed phone/laptop.
 
-Rules resolve first-match-wins against four action primitives:
+The everyday **actions** mode resolves a gesture first-match-wins against
+four action primitives:
 
 | Action | What it does |
 |---|---|
@@ -16,8 +18,8 @@ Rules resolve first-match-wins against four action primitives:
 | `webhook` | POST to any URL — the IFTTT / Make / n8n / Home Assistant hook |
 
 Example: between 05:00 and 07:00, a double tap logs `meds_taken`;
-any other time it falls through to the default rule and asks the AI for
-a random fact. See the `rules` section of [config.json](config.json).
+any other time it falls through to the permanent Default mode. See the
+`modes` section of [config.json](config.json).
 
 A built-in **web UI** (http://\<pi\>:8080) shows live device state and the
 event log, and includes a **point-and-click configuration menu**: add,
@@ -83,13 +85,19 @@ Config errors never crash the service — a missing file, bad JSON, or a
 wrongly-typed key falls back per-key with a logged warning, and the web API
 surfaces those same warnings so the editor shows what was actually accepted.
 
-> **Roadmap — the mode machine.** The rules + actions model is evolving into
-> a **mode machine**: the button is always in one *mode* (built from a
-> *behaviour template* — actions, alarm, stopwatch, counter) activated by a
-> *trigger* (always / time-window / scheduled time / entered from another
-> mode). This subsumes today's rules, adds scheduled alarms the button stops,
-> and keeps the config surface small as capability grows. Full plan and
-> phasing in [DESIGN.md](DESIGN.md).
+> **The mode machine (shipped).** The button is always in one *mode*, built
+> from a *behaviour template* — `actions`, `alarm`, `stopwatch`, `counter`,
+> `pomodoro` — activated by a *trigger* (always / time-window / scheduled time /
+> entered from another mode). **Ambient** modes (actions) answer gestures
+> first-match-wins in config order; the permanent **Default** is the locked
+> always-on floor at the bottom that everything else overrides. **Takeover**
+> modes own the button until you exit them — an alarm fires on a schedule and
+> rings until dismissed; a stopwatch, counter or Pomodoro is started by an
+> *enter a mode* gesture. A reserved **5-tap** is the global escape: it exits a
+> takeover, or toggles the device off/on from the Default. Counters count up by
+> configurable increments (+1/+10/+20); Pomodoro is a 25/5 auto-repeating focus
+> timer with assignable gestures. Full design, decisions, and the ESP32 audio
+> plan in [DESIGN.md](DESIGN.md); usage in [MANUAL.md](MANUAL.md).
 
 ## Dev quickstart (no Pi needed)
 

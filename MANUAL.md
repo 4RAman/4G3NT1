@@ -30,9 +30,12 @@ restart.
 | **Short press** | a single quick press and release |
 | **Long press** | press and hold (~1 second) |
 | **Double tap** | two quick presses |
+| **5 taps** | five quick presses in a row — the one *global* gesture |
 
-That is the entire physical vocabulary. Everything the device does is one of
-these three gestures, interpreted by whatever mode is active.
+The first three are interpreted by whatever mode is active. **5 taps** is
+different: it is a reserved, mode-independent **escape / power** gesture, the
+same everywhere (see §6.1). Everything else the device does is one of the three
+mode gestures.
 
 ---
 
@@ -48,12 +51,16 @@ that owns:
 There are two kinds of mode:
 
 - **Ambient modes** sit quietly and *answer* your presses. The **Default**
-  mode is ambient and is always available as the floor. You can add other
-  ambient modes scoped to a time window (e.g. a different behaviour 5–7 am).
+  mode is ambient and **permanent** — it is always present as the floor, locked
+  to the *Always* activation, and sits at the bottom of the list as the
+  lowest-priority fallback. You can add other ambient modes above it (e.g. a
+  different behaviour 5–7 am); because the list is checked top to bottom, those
+  modes *override* the Default for the gestures they define.
 - **Takeover modes** *take over* the button. When one starts — an alarm
-  ringing, a stopwatch running, a counter open — every press goes to that mode
-  until you exit it, then the button drops back to the ambient layer. While a
-  takeover mode is active, your normal rules are paused; that is the point.
+  ringing, a stopwatch running, a counter open, a Pomodoro counting down —
+  every press goes to that mode until you exit it (5 taps), then the button
+  drops back to the ambient layer. While a takeover mode is active, your normal
+  rules are paused; that is the point.
 
 You build the device by defining modes and the **trigger** that activates each.
 
@@ -150,28 +157,56 @@ Fields:
 
 Activate an alarm with **At a time** (a real alarm clock) — see §6.
 
-### 5.3 Stopwatch — time something **[Phase 2]**
+### 5.3 Stopwatch — time something
 
-A **takeover** mode. Starting it begins timing (LED shows a running state).
+A **takeover** mode. Starting it begins timing (LED shows a teal running pulse).
 
 | Gesture | Result |
 |---|---|
-| **Short press** | lap (records a marker) |
+| **Short press / double tap** | lap (records a marker) |
 | **Long press** | stop and exit; total elapsed time is logged |
+| **5 taps** | stop and exit (the universal escape) |
 
 Field: **Timer name** — what the elapsed time is logged as (e.g. `focus`).
 Daily totals accumulate, so you can see total focus time for the day.
 
-### 5.4 Counter — tally something **[Phase 2]**
+### 5.4 Counter — tally something
 
-A **takeover** mode. Opening it starts a tally (LED shows a counting state).
+A **takeover** mode. Opening it starts a tally at 0 (LED shows a magenta
+counting breathe). Each gesture adds its own **increment**, so you can count up
+fast in batches:
 
 | Gesture | Result |
 |---|---|
-| **Short press / double tap** | +1 (each is logged, so counts and streaks build up) |
-| **Long press** | exit |
+| **Short press** | add the *short* increment (default **+1**) |
+| **Long press** | add the *long* increment (default **+10**) |
+| **Double tap** | add the *double* increment (default **+20**) |
+| **5 taps** | exit (with a session summary) |
 
-Field: **Event name** — what each increment is logged as (e.g. `water`).
+Each increment is logged against the event name (as a single +N entry), so
+daily counts and streaks build up correctly. Fields: **Event name** (e.g.
+`gratitude`) and the three increments.
+
+### 5.5 Pomodoro — focus timer
+
+A **takeover** mode: a **work → break** countdown that **auto-repeats** until
+you exit. The LED is an amber breathe during work and a green breathe during a
+break; a sound marks each phase change. Each completed work block is logged for
+daily focus totals.
+
+The three gestures are **assignable** (pick a command per gesture); the
+defaults are:
+
+| Gesture | Default command | Result |
+|---|---|---|
+| **Short press** | Start / Pause | pause or resume the countdown |
+| **Long press** | Restart | reset the current interval to full |
+| **Double tap** | Extend | add the extend amount (**+10:00**) |
+| **5 taps** | — (reserved) | exit (with a session summary) |
+
+Fields: **Work minutes** (default 25), **Break minutes** (default 5),
+**Extend minutes** (default 10), **Log work as** (e.g. `pomodoro`), and the
+three assignable gesture commands.
 
 ---
 
@@ -179,20 +214,35 @@ Field: **Event name** — what each increment is logged as (e.g. `water`).
 
 | Activation | For | You set | Behaviour |
 |---|---|---|---|
-| **Always** | the Default ambient mode | — | the floor; active whenever nothing else has taken over. Exactly one mode is Always. |
+| **Always** | the permanent Default | — | the floor; active whenever nothing else has taken over. The Default is **locked** to Always and pinned at the bottom of the list (lowest priority). |
 | **Time window** | ambient modes | start + end time, optional days | active only inside the window (it may cross midnight, e.g. 22:00–06:00); overrides Default for the gestures it defines |
 | **At a time** | Alarm (and other takeover modes) | a clock time, optional days | fires at that time and takes over — this is how you set an alarm |
-| **Entered from another mode** | Stopwatch / Counter | — | never starts on its own; you reach it with an **Enter a mode** action on a gesture in another mode |
+| **Entered from another mode** | Stopwatch / Counter / Pomodoro | — | never starts on its own; you reach it with an **Enter a mode** action on a gesture in another mode |
 
 How they interact when you press the button:
 
 1. If a **takeover** mode is active, the press goes to it.
-2. Otherwise the device checks **ambient** modes top to bottom — time-window
-   modes first, then Default — and the first one that defines the pressed
-   gesture wins. (Same first-match-wins logic throughout.)
+2. Otherwise the device checks **ambient** modes top to bottom — your added
+   modes first, then the permanent Default last — and the first one that
+   defines the pressed gesture wins. (Same first-match-wins logic throughout.)
+   This is the priority system: anything you put above the Default overrides it.
 
 A scheduled alarm can fire at any time; if one is due while another takeover
 is running, the alarm takes priority.
+
+### 6.1 Turning it off — and the 5-tap escape
+
+**5 quick taps** is the one gesture that means the same thing everywhere. What
+it does depends on context:
+
+- **In a takeover mode** (alarm, stopwatch, counter, Pomodoro) → **exit** back
+  to the ambient layer. This is how you leave a counter or Pomodoro now that
+  their long-press is used for something else.
+- **On the Default (ambient)** → **turn the device off**. The LED goes dark and
+  presses are ignored — except another 5 taps, which turns it back on. A wake
+  alarm still rings while off (then returns to off when dismissed).
+
+So 5 taps is "escape", and on the home screen "escape" means "off".
 
 ---
 
@@ -215,10 +265,18 @@ Add mode → "Focus" → Template **Stopwatch** (timer name `focus`) → Activat
 mode → Focus**. Long-press to start timing; short-press to lap; long-press to
 stop and log the elapsed time.
 
-**Water tracker [Phase 2]**
-Add mode → "Water" → Template **Counter** (event `water`) → Entered from
-another mode. In Default, map **Double tap → Enter a mode → Water**. Open it,
-tap once per glass, long-press to close.
+**Gratitude / water tracker**
+Add mode → "Gratitude" → Template **Counter** (event `gratitude`, increments
++1/+10/+20) → Entered from another mode. In Default, map **Double tap → Enter a
+mode → Gratitude**. Open it, short-tap once per item (long-press +10 to batch),
+5 taps to close.
+
+**A Pomodoro focus timer**
+Add mode → "Pomodoro" → Template **Pomodoro** (25 work / 5 break, log work as
+`pomodoro`) → Entered from another mode. In Default, map **Short press → Enter a
+mode → Pomodoro**. Short-tap to pause/resume, long-press to restart the
+interval, double-tap to add 10 minutes, 5 taps to stop. Work and break repeat
+automatically; each work block adds to your daily focus total.
 
 **Everyday default**
 Keep a **Default** Actions mode (Always) with, say, Short press → Ask the AI,
@@ -238,17 +296,28 @@ The RGB LED shows device state; short feedback sounds confirm what happened.
 | **Success** | green (2 s) | action succeeded |
 | **Error** | red flashes | action failed / no rule matched |
 | **Ringing** | urgent red/white flash | an alarm is going off |
-| **Timing [Phase 2]** | (running indicator) | a stopwatch is open |
-| **Counting [Phase 2]** | (counting indicator) | a counter is open |
+| **Timing** | teal/cyan pulse | a stopwatch is open |
+| **Counting** | magenta breathe | a counter is open |
+| **Pomodoro work** | amber breathe | a Pomodoro work interval |
+| **Pomodoro break** | green breathe | a Pomodoro break interval |
+| **Off** | dark | the device is toggled off (5 taps) |
+
+Feedback sounds are designed so the *interval* matches the meaning — a rising
+tone means "good", a falling/dissonant one means "bad":
 
 | Sound | Tone | When |
 |---|---|---|
-| **Ack** | single high beep | a press was registered |
-| **Success** | rising two-tone | action succeeded |
-| **Error** | low triple buzz | action failed |
+| **Ack** | single high click | a press was registered |
+| **Success** | rising perfect-fifth | action succeeded |
+| **Error** | falling tritone into a low note | action failed |
 | **Alarm** | urgent repeating | an alarm is ringing (loops until you stop it) |
+| **Wake** | rising arpeggio | the device turned on |
+| **Sleep** | falling arpeggio | the device turned off |
+| **Phase** | rising perfect-fourth | a Pomodoro phase change |
 
-Feedback sounds can be turned off in **Device settings → Feedback sounds**.
+Each cue is also slightly varied every time it plays (tiny pitch/length jitter)
+so repetition doesn't grate. Feedback sounds can be turned off in **Device
+settings → Feedback sounds**.
 
 ---
 
@@ -312,5 +381,8 @@ timeouts are all in **Device settings → AI backends**.
   Device drawer.
 - **Phase 2** — **Stopwatch** and **Counter** modes, plus the **Enter a mode**
   action that starts them by gesture.
+- **Phase 3** — **Pomodoro** mode (assignable gestures), **Counter increments**
+  (+1/+10/+20), the **5-tap** global on/off + takeover escape, the **permanent
+  locked Default** floor, and the interval-based **feedback sound** redesign.
 
 Implementation detail and rationale: [DESIGN.md](DESIGN.md).

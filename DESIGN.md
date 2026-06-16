@@ -1,9 +1,11 @@
 # Design: the mode machine
 
-Status: **planned** (not yet built). This is the cross-phase reference for
-reworking the button from a flat *rules + actions* model into a **mode
-machine**. Until Phase 1 lands, the shipped behaviour is the one described in
-[README.md](README.md) and [config.py](aibutton/config.py).
+Status: **built** (Phases 1–3 shipped). This is the cross-phase reference for
+the button's **mode machine** — the rework from a flat *rules + actions* model.
+The schema and runtime described here are live in
+[config.py](aibutton/config.py) and [main.py](aibutton/main.py); the Phase 3
+section at the bottom records what landed most recently. The body below is kept
+as the original design narrative.
 
 ## The idea in one line
 
@@ -261,3 +263,81 @@ will be rewritten to a `schedule`d alarm mode plus a Default actions mode.
 |---|---|
 | **1** | Mode model + ambient resolution + **scheduler** (with ≤1s tick), `actions` + `alarm` templates, `always`/`window`/`schedule` activations, the **collapsible Modes menu + Device drawer**, `select` widget, migration, remove the `alarm` action, tests. → *ships scheduled alarms and the whole new UX.* |
 | **2** | `stopwatch` + `counter` templates, `manual` activation + the `enter_mode` action, `TIMING`/`COUNTING` LED states, tests. → *pure registry additions.* |
+| **3** | `pomodoro` template (assignable gestures), counter **increments**, the **5-tap** global on/off + takeover escape, the **permanent locked Default** floor, interval-based **feedback sounds**, `OFF`/`POMODORO_WORK`/`POMODORO_BREAK` LED states, tests. → *shipped; see below.* |
+
+---
+
+## Phase 3 — implemented
+
+The TODO.md feature set landed on top of the mode machine. Highlights and the
+choices baked in:
+
+### Pomodoro template (`pomodoro`)
+
+A fourth takeover template, `manual` activation, reached by an `enter_mode`
+gesture exactly like stopwatch/counter (registry addition, no new wiring). A
+work→break countdown that **auto-repeats**; each completed work block is logged
+via `store.log_duration()` (a `timer_stop` row) so `total_today` accumulates
+focus time with no schema change. Its three gestures are **assignable** to
+commands `start_pause` / `restart` / `extend` (stored flat as
+`short_press`/`long_press`/`double_tap` = command string, mirroring how actions
+store fields). Defaults: short = start/pause, long = restart, double = +10 min.
+The async handler races press vs a ≤1 s display tick (same pattern as the
+scheduler) and reads `loop.time()` for the countdown.
+
+### Counter increments
+
+Each gesture adds its own configurable amount (defaults short +1, long +10,
+double +20) instead of a flat +1. To keep `count_today` accurate without
+inflating the table, the store gained a `count` column (default 1, migrated
+onto older DBs with `ALTER TABLE`); `+N` is one row, `count_today` sums it.
+
+### The 5-tap gesture — global on/off + takeover escape
+
+The button's reassignment of long-press (counter +10, Pomodoro restart) left
+takeovers with no per-gesture exit, so a **fifth gesture** was added.
+`TriggerDetector` was generalised from "double-tap special case" into a
+**tap-chord counter** that resolves on the inter-tap timeout: 1→short, 2→double,
+5→`quintuple_tap` (fired immediately on the 5th press); 3 and 4 are ignored. The
+5-tap is **contextual escape** (the chosen model): during a takeover it exits to
+the ambient layer; on the Default it toggles the device **off** (LED dark,
+gestures ignored, `OFF` state) and **on** again. Scheduled alarms still fire
+while off (it is an alarm clock), returning to off when dismissed. `quintuple_tap`
+is deliberately **not** in `TRIGGER_TYPES` — it is reserved, never mode-mappable.
+
+### Permanent, locked Default (priority for overrides)
+
+`resolve()` is unchanged: priority is still **config order, first-match-wins**.
+"Locking the Default to Always" is realised as: the built-in set and the web UI
+guarantee exactly one always-`actions` mode, **pinned last** (the lowest-priority
+floor), with its delete/move/activation locked in the editor and new modes
+inserted **above** it so they override it. The built-in set now ships 5AM Alarm,
+Gratitude counter, Stopwatch and Pomodoro, all reachable from the Default's
+`enter_mode` gestures.
+
+### Feedback sounds — decision (TODO 7)
+
+The "Smart Button Sound Design Research" doc targets a generative ESP32-C3 DSP
+synth (wavetable morphing, exponential ADSR, IIR portamento, MIDI playback).
+That belongs to the ESP32 refactor, not the Pi today. The **decision for now**:
+apply the doc's *principles* in a lightweight, dependency-free way on the Pi —
+rebuild the stdlib-`wave` tone bank around the doc's **musical-interval
+semantics** (rising P5 = success, falling tritone = error, root-P5-octave
+wake / its inverse sleep, P4 phase chime) in the upper-mid "sweet" register with
+a soft exponential ping decay, and add the doc's **micro-variation** as a
+round-robin bank of jittered renders (the sample-based stand-in for live
+generative variation) to dodge the "machine-gun" fatigue effect. The full DSP
+engine is captured below as future ESP32 work.
+
+### ESP32 audio + hardware assessment (TODO 8)
+
+Deferred per the project direction ("Python on the Pi is fine for now"), but the
+research answers the feasibility question: **yes**, an ESP32-C3 can drive these
+features. The synth runs as a FreeRTOS task feeding I²S DMA buffers into a
+MAX98357A class-D amp; with fixed-point / minimised-float wavetable synthesis,
+target-ratio exponential envelopes, first-order IIR portamento and cubic soft
+clipping it fits the single RISC-V core alongside the BLE/Wi-Fi stacks. When the
+firmware is ported, `audio.py`'s `Sound` enum + interval definitions map onto
+synth patches, and the round-robin variants become live parameter jitter. The
+mode machine, store, and config schema are platform-agnostic and carry over;
+the GPIO/LED/audio/BLE I/O layers are what get reimplemented.
