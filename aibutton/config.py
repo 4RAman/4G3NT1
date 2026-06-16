@@ -199,19 +199,53 @@ class StopwatchBehavior:
 
 @dataclass(frozen=True)
 class CounterBehavior:
-    """The takeover counter template: enter resets the tally to 0;
-    short_press/double_tap logs `event` (so existing count_today/streaks just
-    work) and bumps the count; long_press exits. Handled by main.py's
-    run_counter loop, not actions.execute()."""
+    """The takeover counter template: enter resets the tally to 0; each gesture
+    adds its own increment and logs `event` by that amount (one row of count=N,
+    so existing count_today/streaks just work). The 5-tap escape exits.
+    Defaults: short_press +1, long_press +10, double_tap +20. Handled by
+    main.py's run_counter loop, not actions.execute()."""
 
     event: str = ""
+    tap_increment: int = 1
+    long_increment: int = 10
+    double_increment: int = 20
 
     @property
     def template(self) -> str:
         return "counter"
 
 
-Behavior = ActionsBehavior | AlarmBehavior | StopwatchBehavior | CounterBehavior
+# The assignable Pomodoro gesture commands (mirrors schema.js).
+POMODORO_COMMANDS = ("start_pause", "restart", "extend")
+
+
+def _default_pomodoro_gestures() -> dict[str, str]:
+    return {"short_press": "start_pause", "long_press": "restart", "double_tap": "extend"}
+
+
+@dataclass(frozen=True)
+class PomodoroBehavior:
+    """The takeover Pomodoro template: a work/break countdown that auto-repeats
+    (work -> break -> work ...) until the 5-tap escape exits. Each gesture runs
+    an assignable command - start_pause toggles the countdown, restart resets
+    the current interval to full, extend adds extend_minutes. Completed work
+    intervals are logged as a `log_as` timer pair for daily focus totals.
+    Handled by main.py's run_pomodoro loop, not actions.execute()."""
+
+    work_minutes: float = 25.0
+    break_minutes: float = 5.0
+    extend_minutes: float = 10.0
+    log_as: str = "pomodoro"
+    gestures: dict[str, str] = field(default_factory=_default_pomodoro_gestures)
+
+    @property
+    def template(self) -> str:
+        return "pomodoro"
+
+
+Behavior = (
+    ActionsBehavior | AlarmBehavior | StopwatchBehavior | CounterBehavior | PomodoroBehavior
+)
 
 # Which activation types each template accepts (per-template allow-list,
 # mirroring schema.js's `allowedActivations`). A mode whose activation type is
@@ -221,6 +255,7 @@ _ALLOWED_ACTIVATIONS = {
     "alarm": (ScheduleActivation,),
     "stopwatch": (ManualActivation,),
     "counter": (ManualActivation,),
+    "pomodoro": (ManualActivation,),
 }
 
 
@@ -239,24 +274,42 @@ class Mode:
 
 
 def _default_modes() -> tuple[Mode, ...]:
+    """The built-in mode set (also the safe fallback for an empty/broken
+    config): a 5 AM wake alarm, a Gratitude counter, a Stopwatch, and a
+    Pomodoro - the three takeovers reachable from the permanent Default's
+    gestures - with Default last as the always-on floor (lowest priority).
+    The Default is permanent; the other four are removable in the web UI."""
     return (
+        Mode(
+            name="5AM Alarm",
+            activation=ScheduleActivation(at=time(5, 0)),
+            behavior=AlarmBehavior(
+                message="Wake up", snooze_minutes=9, dismiss_event="woke_up"
+            ),
+        ),
+        Mode(
+            name="Gratitude",
+            activation=ManualActivation(),
+            behavior=CounterBehavior(event="gratitude"),
+        ),
+        Mode(
+            name="Stopwatch",
+            activation=ManualActivation(),
+            behavior=StopwatchBehavior(log_as="stopwatch"),
+        ),
+        Mode(
+            name="Pomodoro",
+            activation=ManualActivation(),
+            behavior=PomodoroBehavior(),
+        ),
         Mode(
             name="Default",
             activation=AlwaysActivation(),
             behavior=ActionsBehavior(
                 actions={
-                    "short_press": PromptAction(
-                        prompt="Summarize the latest system status in one sentence.",
-                        label="Status Check",
-                    ),
-                    "long_press": PromptAction(
-                        prompt="What is the current time and a productivity tip?",
-                        label="Focus Prompt",
-                    ),
-                    "double_tap": PromptAction(
-                        prompt="Tell me something interesting.",
-                        label="Random Fact",
-                    ),
+                    "short_press": EnterModeAction(target="Pomodoro"),
+                    "long_press": EnterModeAction(target="Stopwatch"),
+                    "double_tap": EnterModeAction(target="Gratitude"),
                 },
             ),
         ),
@@ -501,14 +554,79 @@ def _parse_stopwatch_body(raw: dict, where: str) -> StopwatchBehavior | None:
     return StopwatchBehavior(log_as=log_as)
 
 
+def _parse_int_field(raw: dict, key: str, default: int, where: str) -> int:
+    """An integer flat field that falls back per-key (rejects bools)."""
+    if key not in raw:
+        return default
+    value = raw[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        log.error("config: %s.%s must be a number - using default", where, key)
+        return default
+    return int(value)
+
+
+def _parse_positive_float(raw: dict, key: str, default: float, where: str) -> float:
+    """A positive (> 0) float flat field that falls back per-key."""
+    if key not in raw:
+        return default
+    value = raw[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        log.error("config: %s.%s must be a number > 0 - using default", where, key)
+        return default
+    return float(value)
+
+
 def _parse_counter_body(raw: dict, where: str) -> CounterBehavior | None:
-    """Parse the flat counter-template field, falling back per-key."""
+    """Parse the flat counter-template fields, each falling back per-key."""
     defaults = CounterBehavior()
     event = raw.get("event", defaults.event)
     if not isinstance(event, str):
         log.error("config: %s.event must be a string - using default", where)
         event = defaults.event
-    return CounterBehavior(event=event)
+    return CounterBehavior(
+        event=event,
+        tap_increment=_parse_int_field(raw, "tap_increment", defaults.tap_increment, where),
+        long_increment=_parse_int_field(raw, "long_increment", defaults.long_increment, where),
+        double_increment=_parse_int_field(
+            raw, "double_increment", defaults.double_increment, where
+        ),
+    )
+
+
+def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior | None:
+    """Parse the flat pomodoro-template fields, each falling back per-key. The
+    three gesture commands start from the defaults; a valid command overrides,
+    an empty string unassigns, anything else warns and keeps the default."""
+    defaults = PomodoroBehavior()
+    log_as = raw.get("log_as", defaults.log_as)
+    if not isinstance(log_as, str):
+        log.error("config: %s.log_as must be a string - using default", where)
+        log_as = defaults.log_as
+
+    gestures = dict(defaults.gestures)
+    for trigger in TRIGGER_TYPES:
+        if trigger not in raw:
+            continue
+        value = raw[trigger]
+        if value in POMODORO_COMMANDS:
+            gestures[trigger] = value
+        elif value in ("", "none", None):
+            gestures.pop(trigger, None)  # explicitly unassigned -> do nothing
+        else:
+            log.error(
+                "config: %s.%s must be one of %s - using default",
+                where, trigger, "/".join(POMODORO_COMMANDS),
+            )
+
+    return PomodoroBehavior(
+        work_minutes=_parse_positive_float(raw, "work_minutes", defaults.work_minutes, where),
+        break_minutes=_parse_positive_float(raw, "break_minutes", defaults.break_minutes, where),
+        extend_minutes=_parse_positive_float(
+            raw, "extend_minutes", defaults.extend_minutes, where
+        ),
+        log_as=log_as,
+        gestures=gestures,
+    )
 
 
 def _parse_mode(raw, idx: int) -> Mode | None:
@@ -545,6 +663,8 @@ def _parse_mode(raw, idx: int) -> Mode | None:
         behavior = _parse_stopwatch_body(raw, where)
     elif template == "counter":
         behavior = _parse_counter_body(raw, where)
+    elif template == "pomodoro":
+        behavior = _parse_pomodoro_body(raw, where)
     else:  # pragma: no cover - allow-list keys and this dispatch stay in sync
         log.error("config: %s (%r) has unknown template %r - skipped", where, name, template)
         return None
@@ -772,6 +892,16 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["log_as"] = mode.behavior.log_as
     elif isinstance(mode.behavior, CounterBehavior):
         entry["event"] = mode.behavior.event
+        entry["tap_increment"] = mode.behavior.tap_increment
+        entry["long_increment"] = mode.behavior.long_increment
+        entry["double_increment"] = mode.behavior.double_increment
+    elif isinstance(mode.behavior, PomodoroBehavior):
+        entry["work_minutes"] = mode.behavior.work_minutes
+        entry["break_minutes"] = mode.behavior.break_minutes
+        entry["extend_minutes"] = mode.behavior.extend_minutes
+        entry["log_as"] = mode.behavior.log_as
+        for trigger, command in mode.behavior.gestures.items():
+            entry[trigger] = command
     return entry
 
 

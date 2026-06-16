@@ -42,7 +42,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .audio import Sound
-from .config import TRIGGER_TYPES, ConfigManager, as_dict, parse_config
+from .config import ConfigManager, as_dict, parse_config
 from .store import EventStore
 
 log = logging.getLogger(__name__)
@@ -186,11 +186,13 @@ def create_app(ctx: WebContext) -> FastAPI:
 
     @app.post("/api/trigger/{trigger}")
     async def trigger(trigger: str):
-        if trigger not in TRIGGER_TYPES:
-            raise HTTPException(404, f"unknown trigger {trigger!r}")
         from .button import TriggerType  # deferred: pulls in gpiozero
 
-        ctx.trigger_queue.put_nowait(TriggerType(trigger))
+        try:
+            kind = TriggerType(trigger)  # accepts quintuple_tap (the 5-tap toggle) too
+        except ValueError:
+            raise HTTPException(404, f"unknown trigger {trigger!r}")
+        ctx.trigger_queue.put_nowait(kind)
         return {"queued": trigger}
 
     @app.post("/api/dev/clock")

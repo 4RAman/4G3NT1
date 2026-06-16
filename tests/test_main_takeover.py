@@ -100,11 +100,12 @@ async def test_run_enter_mode_stopwatch_then_counter(tmp_path, monkeypatch):
         await feed(TriggerType.LONG_PRESS)   # stop -> timer_stop, exit
         await asyncio.sleep(0.1)
 
-        # Counter: double_tap enters Water, two increments, long_press exits.
-        await feed(TriggerType.DOUBLE_TAP)   # enter_mode -> Water
-        await feed(TriggerType.SHORT_PRESS)  # +1 -> log water
-        await feed(TriggerType.DOUBLE_TAP)   # +1 -> log water
-        await feed(TriggerType.LONG_PRESS)   # exit
+        # Counter: double_tap enters Water, gestures add their increments,
+        # quintuple_tap (the 5-tap escape) exits.
+        await feed(TriggerType.DOUBLE_TAP)     # enter_mode -> Water
+        await feed(TriggerType.SHORT_PRESS)    # +1  -> log water (count 1)
+        await feed(TriggerType.LONG_PRESS)     # +10 -> log water (count 10)
+        await feed(TriggerType.QUINTUPLE_TAP)  # exit
         await asyncio.sleep(0.1)
     finally:
         # Stop the run loop: SIGTERM isn't wired on Windows, so cancel the task.
@@ -127,5 +128,104 @@ async def test_run_enter_mode_stopwatch_then_counter(tmp_path, monkeypatch):
     assert kinds_names.count(("timer_stop", "focus")) == 1
     assert kinds_names.count(("log", "focus_lap")) == 1
 
-    # Counter: two "water" log rows (one per increment).
+    # Counter: two "water" log rows (one per increment gesture: +1 and +10).
     assert kinds_names.count(("log", "water")) == 2
+    # The +1 and +10 are summed by the count column, not by row inflation.
+    store2 = EventStore(str(db_path))
+    try:
+        assert store2.count_today("water") == 11
+    finally:
+        store2.close()
+
+
+POMO_CONFIG = {
+    "sounds_enabled": False,
+    "web_enabled": False,
+    "modes": [
+        {"name": "Default", "template": "actions", "activation": {"type": "always"},
+         "short_press": {"action": "enter_mode", "target": "Pomo"}},
+        # A tiny work interval so the work->break transition (and its logged
+        # work block) happens within the test instead of in 25 minutes.
+        {"name": "Pomo", "template": "pomodoro", "activation": {"type": "manual"},
+         "work_minutes": 0.002, "break_minutes": 9, "log_as": "pomo"},
+    ],
+}
+
+
+async def _start_run(cfg, tmp_path, monkeypatch):
+    db_path = tmp_path / "events.db"
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps(dict(cfg, database_path=str(db_path))), encoding="utf-8")
+    listener = _FakeListener()
+    monkeypatch.setattr(main, "_SUCCESS_DISPLAY_S", 0.05)
+    monkeypatch.setattr(main, "_ERROR_DISPLAY_S", 0.05)
+    import aibutton.button as button_mod
+    monkeypatch.setattr(button_mod, "ButtonListener", lambda *a, **k: listener)
+    args = main._parse_args(["--mock", "--no-ble", "--no-web", "--config", str(cfg_path)])
+    run_task = asyncio.create_task(main.run(args))
+    await asyncio.sleep(0.1)
+    return run_task, listener, db_path
+
+
+async def test_run_pomodoro_logs_work_block_and_exits(tmp_path, monkeypatch):
+    run_task, listener, db_path = await _start_run(POMO_CONFIG, tmp_path, monkeypatch)
+
+    async def feed(trigger):
+        listener.events.put_nowait(trigger)
+        await _drain(listener.events)
+        await asyncio.sleep(0.05)
+
+    try:
+        await feed(TriggerType.SHORT_PRESS)   # enter Pomo (work countdown starts)
+        await asyncio.sleep(0.3)              # let the ~0.12 s work block elapse
+        await feed(TriggerType.QUINTUPLE_TAP)  # the 5-tap escape exits
+        await asyncio.sleep(0.1)
+    finally:
+        run_task.cancel()
+        with pytest.raises((asyncio.CancelledError,)):
+            await run_task
+
+    store = EventStore(str(db_path))
+    try:
+        rows = store.recent(100)
+        # one completed work block logged as a timer_stop for "pomo"
+        assert sum(1 for (_t, k, n, _d) in rows if k == "timer_stop" and n == "pomo") >= 1
+    finally:
+        store.close()
+
+
+SLEEP_CONFIG = {
+    "sounds_enabled": False,
+    "web_enabled": False,
+    "modes": [
+        {"name": "Default", "template": "actions", "activation": {"type": "always"},
+         "short_press": {"action": "log", "event": "ping"}},
+    ],
+}
+
+
+async def test_quintuple_toggles_device_off_and_on(tmp_path, monkeypatch):
+    run_task, listener, db_path = await _start_run(SLEEP_CONFIG, tmp_path, monkeypatch)
+
+    async def feed(trigger):
+        listener.events.put_nowait(trigger)
+        await _drain(listener.events)
+        await asyncio.sleep(0.05)
+
+    try:
+        await feed(TriggerType.QUINTUPLE_TAP)  # off
+        await feed(TriggerType.SHORT_PRESS)    # ignored while off -> no ping
+        await feed(TriggerType.QUINTUPLE_TAP)  # on
+        await feed(TriggerType.SHORT_PRESS)    # logs ping
+        await asyncio.sleep(0.1)
+    finally:
+        run_task.cancel()
+        with pytest.raises((asyncio.CancelledError,)):
+            await run_task
+
+    store = EventStore(str(db_path))
+    try:
+        pings = sum(1 for (_t, k, n, _d) in store.recent(100) if k == "log" and n == "ping")
+        assert pings == 1  # only the press made while the device was on
+    finally:
+        store.close()

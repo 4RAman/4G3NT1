@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS events (
     ts TEXT NOT NULL,
     kind TEXT NOT NULL,          -- 'log' | 'timer_start' | 'timer_stop'
     name TEXT NOT NULL,
-    duration_s REAL              -- set on 'timer_stop' rows
+    duration_s REAL,             -- set on 'timer_stop' rows
+    count INTEGER NOT NULL DEFAULT 1  -- amount for a 'log' row (counter +N is one row)
 )
 """
 
@@ -51,24 +52,39 @@ class EventStore:
             db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(db_path)
         self._conn.execute(_SCHEMA)
+        self._migrate()
         self._conn.commit()
         log.info("event store at %s", db_path)
 
-    def log_event(self, name: str) -> datetime:
+    def _migrate(self) -> None:
+        """Bring an older DB up to the current schema. `count` was added so a
+        counter increment of +N is a single row; pre-existing rows have no
+        column and read back as 1 via COALESCE."""
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(events)")}
+        if "count" not in cols:
+            self._conn.execute(
+                "ALTER TABLE events ADD COLUMN count INTEGER NOT NULL DEFAULT 1"
+            )
+
+    def log_event(self, name: str, count: int = 1) -> datetime:
+        """Record a `log` event. `count` (default 1) is the amount: a counter
+        increment of +10 is one row with count=10, so count_today stays
+        accurate without inflating the table."""
         now = _utcnow()
         self._conn.execute(
-            "INSERT INTO events (ts, kind, name) VALUES (?, 'log', ?)",
-            (now.isoformat(), name),
+            "INSERT INTO events (ts, kind, name, count) VALUES (?, 'log', ?, ?)",
+            (now.isoformat(), name, count),
         )
         self._conn.commit()
         return now
 
     def count_today(self, name: str) -> int:
-        """Number of `log` events named `name` since local midnight
-        (inclusive of one just written) - for habit counters."""
+        """Summed amount of `log` events named `name` since local midnight
+        (inclusive of one just written) - for habit counters. Sums `count`
+        so a single +N increment counts as N."""
         start, end = _local_day_bounds_utc()
         row = self._conn.execute(
-            "SELECT COUNT(*) FROM events "
+            "SELECT COALESCE(SUM(count), 0) FROM events "
             "WHERE kind = 'log' AND name = ? AND ts >= ? AND ts < ?",
             (name, start, end),
         ).fetchone()
@@ -134,6 +150,17 @@ class EventStore:
         )
         self._conn.commit()
         return "started", None
+
+    def log_duration(self, name: str, seconds: float) -> datetime:
+        """Record a completed fixed-length session (e.g. a Pomodoro work block)
+        as a 'timer_stop' row, so total_today(name) sums it like a stopwatch."""
+        now = _utcnow()
+        self._conn.execute(
+            "INSERT INTO events (ts, kind, name, duration_s) VALUES (?, 'timer_stop', ?, ?)",
+            (now.isoformat(), name, seconds),
+        )
+        self._conn.commit()
+        return now
 
     def recent(self, limit: int = 50) -> list[tuple]:
         """Newest-first (ts, kind, name, duration_s) rows - for the future web UI."""

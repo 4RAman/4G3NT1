@@ -100,8 +100,11 @@ def test_full_valid_v3_config(tmp_path):
 def test_default_modes_when_empty(tmp_path):
     cfg = load_config(write(tmp_path, {"ble_device_name": "x"}))
     assert cfg.modes == AppConfig().modes
-    assert cfg.modes[0].name == "Default"
-    assert isinstance(cfg.modes[0].activation, AlwaysActivation)
+    names = [m.name for m in cfg.modes]
+    assert names == ["5AM Alarm", "Gratitude", "Stopwatch", "Pomodoro", "Default"]
+    # The permanent Default is the always-on floor, pinned last (lowest priority).
+    assert cfg.modes[-1].name == "Default"
+    assert isinstance(cfg.modes[-1].activation, AlwaysActivation)
 
 
 # --- migration: legacy v0.2 "rules" -> modes ----------------------------
@@ -512,6 +515,104 @@ def test_actions_with_manual_is_skipped(tmp_path):
     assert [m.name for m in cfg.modes] == ["Good"]
 
 
+# --- counter increments + pomodoro (TODO 2/5/6) -------------------------
+
+def test_counter_increments_parse(tmp_path):
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {"name": "Gratitude", "template": "counter", "activation": {"type": "manual"},
+             "event": "gratitude", "tap_increment": 1, "long_increment": 5,
+             "double_increment": 25},
+        ],
+    }))
+    assert cfg.modes[0].behavior == CounterBehavior(
+        event="gratitude", tap_increment=1, long_increment=5, double_increment=25
+    )
+
+
+def test_counter_increment_bad_type_falls_back_per_key(tmp_path):
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {"name": "C", "template": "counter", "activation": {"type": "manual"},
+             "event": "x", "long_increment": "lots", "double_increment": True},
+        ],
+    }))
+    # bad increments fall back to defaults; the mode survives
+    assert cfg.modes[0].behavior == CounterBehavior(event="x")
+
+
+def test_pomodoro_mode_parses(tmp_path):
+    from aibutton.config import PomodoroBehavior
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {"name": "Focus", "template": "pomodoro", "activation": {"type": "manual"},
+             "work_minutes": 50, "break_minutes": 10, "extend_minutes": 5,
+             "log_as": "deep", "short_press": "start_pause", "long_press": "restart",
+             "double_tap": "extend"},
+        ],
+    }))
+    mode = cfg.modes[0]
+    assert mode.template == "pomodoro"
+    assert isinstance(mode.activation, ManualActivation)
+    assert mode.behavior == PomodoroBehavior(
+        work_minutes=50.0, break_minutes=10.0, extend_minutes=5.0, log_as="deep",
+        gestures={"short_press": "start_pause", "long_press": "restart",
+                  "double_tap": "extend"},
+    )
+
+
+def test_pomodoro_defaults_and_unassign(tmp_path):
+    from aibutton.config import PomodoroBehavior
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            # nothing but the template -> all defaults
+            {"name": "P1", "template": "pomodoro", "activation": {"type": "manual"}},
+            # bad duration + unassigned short press
+            {"name": "P2", "template": "pomodoro", "activation": {"type": "manual"},
+             "work_minutes": -3, "short_press": ""},
+        ],
+    }))
+    p1, p2 = cfg.modes
+    assert p1.behavior == PomodoroBehavior()
+    assert p2.behavior.work_minutes == 25.0  # bad value fell back
+    assert "short_press" not in p2.behavior.gestures  # explicitly unassigned
+
+
+def test_pomodoro_invalid_command_keeps_default(tmp_path):
+    from aibutton.config import PomodoroBehavior
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {"name": "P", "template": "pomodoro", "activation": {"type": "manual"},
+             "long_press": "explode"},
+        ],
+    }))
+    assert cfg.modes[0].behavior.gestures["long_press"] == "restart"  # default kept
+
+
+def test_pomodoro_roundtrips(tmp_path):
+    from aibutton.config import PomodoroBehavior
+    cfg = AppConfig(modes=(
+        Mode(name="Default", activation=AlwaysActivation(),
+             behavior=ActionsBehavior(actions={
+                 "short_press": EnterModeAction(target="Focus")})),
+        Mode(name="Focus", activation=ManualActivation(),
+             behavior=PomodoroBehavior(work_minutes=50.0, break_minutes=10.0)),
+    ))
+    assert parse_config(as_dict(cfg)) == cfg
+
+
+def test_pomodoro_with_window_is_skipped(tmp_path):
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {"name": "Wrong", "template": "pomodoro",
+             "activation": {"type": "window", "between": ["06:00", "07:00"]}},
+            {"name": "Good", "template": "actions", "activation": {"type": "always"},
+             "short_press": {"action": "log", "event": "y"}},
+        ],
+    }))
+    assert [m.name for m in cfg.modes] == ["Good"]
+
+
 # --- enter_mode action --------------------------------------------------
 
 def test_enter_mode_action_parses(tmp_path):
@@ -639,6 +740,7 @@ def test_all_four_templates_and_enter_mode_roundtrip(tmp_path):
     assert dumped["modes"][3] == {
         "name": "Water", "template": "counter",
         "activation": {"type": "manual"}, "event": "water",
+        "tap_increment": 1, "long_increment": 10, "double_increment": 20,
     }
     assert parse_config(dumped) == cfg  # exact round-trip
 

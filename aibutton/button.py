@@ -9,12 +9,16 @@ Timing rules
 ------------
 - long_press fires *while held*, as soon as the hold reaches 1.0 s
   (better feedback than waiting for release); the release is consumed.
-- double_tap fires on the second press when two press-starts are
-  < 0.4 s apart.
-- short_press is press+release < 1.0 s. Emission is delayed until the
-  double-tap window (press start + 0.4 s) closes so a second tap can
-  upgrade it; if the press itself outlives the window, it emits
-  immediately on release. Worst-case added latency: 0.4 s.
+- Taps are counted into a "chord": consecutive quick presses whose
+  starts are each < 0.4 s apart. The chord resolves once the window
+  after the last tap closes (or, for a single tap that outlives the
+  window, immediately on release):
+    1 tap  -> short_press
+    2 taps -> double_tap
+    5 taps -> quintuple_tap (the global on/off + takeover-escape gesture),
+              emitted immediately on the 5th press so it feels instant
+    3 or 4 taps -> nothing (an ambiguous partial chord)
+  Worst-case added latency for short/double: 0.4 s.
 
 Debounce (50 ms) is handled by gpiozero's bounce_time.
 """
@@ -32,6 +36,7 @@ log = logging.getLogger(__name__)
 DEBOUNCE_S = 0.05
 HOLD_S = 1.0
 DOUBLE_WINDOW_S = 0.4
+QUINTUPLE_TAPS = 5  # taps in a chord that mean "global toggle / escape"
 _EPSILON = 1e-6  # guards float jitter when a timer fires exactly on its deadline
 
 
@@ -39,41 +44,58 @@ class TriggerType(Enum):
     SHORT_PRESS = "short_press"
     LONG_PRESS = "long_press"
     DOUBLE_TAP = "double_tap"
+    QUINTUPLE_TAP = "quintuple_tap"
 
 
 class TriggerDetector:
     """Pure state machine; every method takes a monotonic timestamp.
 
-    The caller must invoke on_timeout(now) at (or after) the deadline
-    returned by on_release(). Stale timeouts are harmless - they no-op
-    once the pending press has been resolved.
+    Quick presses accumulate into a tap chord (`_count`); the chord resolves
+    on on_timeout(now), which the caller must invoke at (or after) the
+    deadline returned by on_release(). Stale timeouts are harmless - they
+    no-op once the chord has been resolved or superseded.
     """
 
     def __init__(self) -> None:
-        self._press_t: float | None = None
-        self._ignore_current = False  # press already consumed by hold/double-tap
-        self._pending_press_t: float | None = None  # short press awaiting its window
+        self._press_t: float | None = None  # current press, for duration calc
+        self._ignore_current = False  # this press's hold/release already spoken for
+        self._count = 0  # taps in the open chord (0 = none pending)
+        self._last_press_t = 0.0  # start of the most recent tap in the chord
+
+    def _resolve(self) -> TriggerType | None:
+        """Close the chord and map its tap count to a gesture."""
+        count, self._count = self._count, 0
+        if count == 1:
+            return TriggerType.SHORT_PRESS
+        if count == 2:
+            return TriggerType.DOUBLE_TAP
+        if count >= QUINTUPLE_TAPS:
+            return TriggerType.QUINTUPLE_TAP  # normally already emitted on press
+        return None  # 3 or 4: ambiguous partial chord
 
     def on_press(self, t: float) -> TriggerType | None:
-        if (
-            self._pending_press_t is not None
-            and (t - self._pending_press_t) < DOUBLE_WINDOW_S
-        ):
-            self._pending_press_t = None
-            self._press_t = t
-            self._ignore_current = True  # second tap: its hold/release are spoken for
-            return TriggerType.DOUBLE_TAP
-        # A pending press older than the window has already been emitted by
-        # the timer (timers fire before later button events on the loop).
-        self._pending_press_t = None
+        if self._count > 0 and (t - self._last_press_t) < DOUBLE_WINDOW_S:
+            self._count += 1  # continues the open chord
+        else:
+            self._count = 1  # starts a fresh chord
+        self._last_press_t = t
         self._press_t = t
         self._ignore_current = False
+        if self._count >= QUINTUPLE_TAPS:
+            # Fire the moment the fifth tap lands; swallow its hold/release and
+            # close the chord so the trailing timeouts no-op.
+            self._count = 0
+            self._ignore_current = True
+            return TriggerType.QUINTUPLE_TAP
         return None
 
     def on_hold(self, t: float) -> TriggerType | None:
-        if self._ignore_current or self._press_t is None:
+        # Only a single sustained press is a long press; a hold after taps is
+        # ignored. Consume the upcoming release.
+        if self._ignore_current or self._count != 1:
             return None
-        self._ignore_current = True  # consume the upcoming release
+        self._count = 0
+        self._ignore_current = True
         return TriggerType.LONG_PRESS
 
     def on_release(self, t: float) -> tuple[TriggerType | None, float | None]:
@@ -86,19 +108,20 @@ class TriggerDetector:
             return None, None
         duration = t - press_t
         if duration >= HOLD_S:
+            self._count = 0
             return TriggerType.LONG_PRESS, None  # safety net if the hold event was missed
         if duration >= DOUBLE_WINDOW_S:
-            # No second press can start inside the window anymore - emit now.
-            return TriggerType.SHORT_PRESS, None
-        self._pending_press_t = press_t
-        return None, press_t + DOUBLE_WINDOW_S
+            # This press outlived the inter-tap window, so no later tap can join
+            # the chord - resolve it now.
+            return self._resolve(), None
+        # A quick tap: wait for the window after it to close before resolving.
+        return None, self._last_press_t + DOUBLE_WINDOW_S
 
     def on_timeout(self, t: float) -> TriggerType | None:
-        if self._pending_press_t is None:
+        if self._count == 0:
             return None
-        if (t - self._pending_press_t) >= DOUBLE_WINDOW_S - _EPSILON:
-            self._pending_press_t = None
-            return TriggerType.SHORT_PRESS
+        if (t - self._last_press_t) >= DOUBLE_WINDOW_S - _EPSILON:
+            return self._resolve()
         return None
 
 

@@ -82,6 +82,42 @@ def test_count_today(tmp_path):
     store.close()
 
 
+def test_count_today_sums_increments(tmp_path):
+    store = EventStore(str(tmp_path / "events.db"))
+    store.log_event("water")            # +1
+    store.log_event("water", count=10)  # +10
+    store.log_event("water", count=20)  # +20
+    assert store.count_today("water") == 31
+    # recorded as three rows, not 31 of them
+    assert len(store.recent()) == 3
+    store.close()
+
+
+def test_count_column_migrated_onto_old_db(tmp_path):
+    """A DB created before the count column still loads, and pre-existing
+    log rows read back as +1 each."""
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "ts TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, duration_s REAL)"
+    )
+    conn.execute(
+        "INSERT INTO events (ts, kind, name) VALUES (?, 'log', 'water')",
+        (datetime.now(timezone.utc).isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+    store = EventStore(str(path))
+    assert store.count_today("water") == 1  # legacy row counts as +1
+    store.log_event("water", count=5)
+    assert store.count_today("water") == 6
+    store.close()
+
+
 def test_count_today_ignores_other_days(tmp_path):
     store = EventStore(str(tmp_path / "events.db"))
     _insert(store, "log", "pushups", days_ago=1)

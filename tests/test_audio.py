@@ -1,7 +1,28 @@
 import asyncio
 import wave
 
-from aibutton.audio import _TONES, Sound, SoundPlayer, write_tone_wav
+from aibutton.audio import _VARIANTS, _TONES, Sound, SoundPlayer, write_tone_wav
+
+
+def test_every_sound_has_a_tone():
+    # The sound bank and the Sound enum stay in sync.
+    assert set(_TONES) == set(Sound)
+
+
+def test_round_robin_serves_distinct_variants(monkeypatch):
+    monkeypatch.setattr("aibutton.audio.shutil.which", lambda _: None)
+    player = SoundPlayer(enabled=True)
+    paths = player._paths[Sound.ACK]
+    assert len(paths) == _VARIANTS
+    # variant 0 is the base tone the web UI serves; variants differ on disk
+    assert player.path_for(Sound.ACK) == paths[0]
+    sizes = {p.stat().st_size for p in paths}
+    assert len(sizes) > 1  # jitter makes lengths differ
+    # _next_variant cycles through the whole bank, then wraps
+    served = [player._next_variant(Sound.ACK) for _ in range(_VARIANTS + 1)]
+    assert served[:_VARIANTS] == paths
+    assert served[_VARIANTS] == paths[0]
+    player.close()
 
 
 def test_all_tones_produce_valid_wavs(tmp_path):

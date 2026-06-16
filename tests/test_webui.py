@@ -53,7 +53,7 @@ async def test_status_shape(client, ctx):
     data = res.json()
     assert data["state"] == "THINKING"
     assert data["device_name"] == "TestBtn"
-    assert data["mode_count"] == 1  # defaults
+    assert data["mode_count"] == 5  # built-in default mode set
     assert data["last_trigger"] == "short_press"
     assert data["uptime_s"] >= 0
 

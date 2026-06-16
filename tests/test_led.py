@@ -107,6 +107,54 @@ async def test_timing_pulses_teal_until_state_changes(mock_pins):
     led.close()
 
 
+async def test_off_is_dark_until_state_changes(mock_pins):
+    led = LEDController()
+    led.set_state(LEDState.OFF)
+    await asyncio.sleep(0.1)
+    assert tuple(led._led.color) == (0, 0, 0)  # fully dark
+    assert not led._task.done()  # held until woken
+    led.set_state(LEDState.IDLE)
+    await asyncio.sleep(0.05)
+    led.close()
+
+
+async def test_pomodoro_work_breathes_amber(mock_pins):
+    led = LEDController()
+    led.set_state(LEDState.POMODORO_WORK)
+    await asyncio.sleep(0.15)
+    assert not led._task.done()
+    # amber: red + green channels lit, never blue
+    seen_lit = False
+    for _ in range(8):
+        r, g, b = led._led.color
+        assert b == 0  # no blue, unlike IDLE/TIMING/COUNTING
+        if r > 0.05 and g > 0.02:
+            seen_lit = True
+        await asyncio.sleep(0.05)
+    assert seen_lit
+    led.set_state(LEDState.IDLE)
+    await asyncio.sleep(0.05)
+    led.close()
+
+
+async def test_pomodoro_break_breathes_green(mock_pins):
+    led = LEDController()
+    led.set_state(LEDState.POMODORO_BREAK)
+    await asyncio.sleep(0.15)
+    assert not led._task.done()
+    seen_lit = False
+    for _ in range(8):
+        r, g, b = led._led.color
+        assert r == 0 and b == 0  # green-only breathe
+        if g > 0.05:
+            seen_lit = True
+        await asyncio.sleep(0.05)
+    assert seen_lit
+    led.set_state(LEDState.IDLE)
+    await asyncio.sleep(0.05)
+    led.close()
+
+
 async def test_counting_breathes_magenta_until_state_changes(mock_pins):
     led = LEDController()
     led.set_state(LEDState.COUNTING)
