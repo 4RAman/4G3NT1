@@ -1,0 +1,5 @@
+# Development/test dependencies (Windows or any desktop).
+-r requirements.txt
+pytest>=8.0
+pytest-asyncio>=0.23
+bleak>=0.22

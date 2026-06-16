@@ -1,0 +1,75 @@
+{
+  "ollama_host": "http://192.168.1.10:11434",
+  "local_ollama_host": "http://127.0.0.1:11434",
+  "local_model": "smollm2:135m",
+  "remote_model": "llama3.2:1b",
+  "prefer_remote": true,
+  "fallback_to_local": true,
+  "remote_timeout_s": 5,
+  "local_timeout_s": 60,
+  "ble_device_name": "AIButton",
+  "sounds_enabled": true,
+  "database_path": "data/events.db",
+  "web_enabled": true,
+  "web_host": "0.0.0.0",
+  "web_port": 8080,
+  "modes": [
+    {
+      "name": "Default",
+      "template": "actions",
+      "activation": {
+        "type": "window",
+        "days": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri",
+          "sat",
+          "sun"
+        ],
+        "between": [
+          "05:00",
+          "06:20"
+        ]
+      },
+      "short_press": {
+        "action": "log",
+        "event": "Medicine"
+      },
+      "long_press": {
+        "action": "log",
+        "event": "Food"
+      }
+    },
+    {
+      "name": "Wake up",
+      "template": "alarm",
+      "activation": {
+        "type": "schedule",
+        "at": "05:00",
+        "days": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri",
+          "sat",
+          "sun"
+        ]
+      },
+      "message": "Wake up",
+      "label": "",
+      "snooze_minutes": 9,
+      "dismiss_event": "woke_up"
+    },
+    {
+      "name": "Stopwatch",
+      "template": "stopwatch",
+      "activation": {
+        "type": "manual"
+      },
+      "log_as": "stopwatch"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+# Install: sudo cp aibutton.service /etc/systemd/system/
+#          sudo systemctl daemon-reload && sudo systemctl enable --now aibutton
+# Logs:    journalctl -u aibutton -f
+# Reload config without restart: sudo systemctl reload aibutton
+
+[Unit]
+Description=AI Button — physical button to Ollama with LED + BLE feedback
+# network-online (not network): we reach a LAN Ollama host at startup.
+# The service tolerates network failure either way (falls back / retries
+# per press), so this only smooths the first query after boot.
+Wants=network-online.target
+After=network-online.target bluetooth.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/aibutton
+ExecStart=/home/pi/aibutton/.venv/bin/python -m aibutton.main
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

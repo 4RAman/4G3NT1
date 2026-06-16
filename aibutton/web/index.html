@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Button</title>
+<style>
+  :root {
+    --bg: #111418; --panel: #1a1f26; --line: #2a313b;
+    --text: #d8dee6; --dim: #8a94a3;
+    --blue: #4f8ef7; --amber: #e0a93e; --green: #43b97f; --red: #e05c5c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0 auto; max-width: 880px; padding: 16px;
+         background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em;
+       color: var(--dim); margin: 0 0 10px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+           margin-bottom: 6px; }
+  #meta, #last { color: var(--dim); font-size: 13px; }
+  #last { margin: 0 0 16px; min-height: 1.4em; overflow-wrap: anywhere; }
+  #clockbar { background: #5c4413; color: #ffd98a; border-radius: 8px;
+              padding: 8px 14px; margin-bottom: 16px; font-size: 14px; }
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+  .badge { padding: 2px 10px; border-radius: 99px; font-size: 12px;
+           font-weight: 600; background: var(--line); }
+  .badge.IDLE { background: #1d3a6e; color: #9ec2ff; }
+  .badge.THINKING { background: #5c4413; color: #ffd98a; }
+  .badge.SUCCESS { background: #14452e; color: #8fe6bb; }
+  .badge.ERROR, .badge.OFFLINE { background: #58201f; color: #ffb3b0; }
+  /* A ringing alarm: urgent, animated so it reads as "act now". */
+  .badge.ALARMING { background: #6e1d1d; color: #ffdede;
+                    animation: alarmPulse .7s steps(1) infinite; }
+  @keyframes alarmPulse { 0%, 100% { background: #6e1d1d; color: #ffdede; }
+                          50% { background: #e05c5c; color: #2a0d0d; } }
+  /* Takeover modes: a running stopwatch (teal/cyan) and an open counter
+     (magenta), distinct from the alarm's red so each reads at a glance. */
+  .badge.TIMING { background: #0c4a4a; color: #8ff0ee; }
+  .badge.COUNTING { background: #4a1d52; color: #f0b6ff; }
+  button { background: #232a34; color: var(--text); border: 1px solid var(--line);
+           border-radius: 8px; padding: 7px 14px; font: inherit; cursor: pointer; }
+  button:hover { background: #2c3542; }
+  button.primary { background: #1d3a6e; border-color: #2c4f8f; }
+  input[type=time] { background: #0d1014; color: var(--text); font: inherit;
+                     border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  .virtual-row { display: flex; align-items: center; gap: 18px; }
+  .led { width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+         background: #20262e; transition: background .15s; }
+  .led.IDLE { background: var(--blue); animation: breathe 3s ease-in-out infinite; }
+  .led.LISTENING { background: #ffd34d; box-shadow: 0 0 22px #ffd34d99; }
+  /* Thinking: fast rainbow fade, rotating colors - mirrors the hardware LED. */
+  .led.THINKING { animation: rainbow 1s linear infinite; }
+  .led.SUCCESS { background: var(--green); box-shadow: 0 0 22px #43b97f99; }
+  .led.ERROR { background: var(--red); animation: flash .4s steps(1) infinite; }
+  /* Ringing alarm: urgent red/white flash. */
+  .led.ALARMING, .led.ALERT { animation: alarmFlash .5s steps(1) infinite; }
+  /* Stopwatch running: a steady teal/cyan pulse - calm but clearly "live". */
+  .led.TIMING { background: #18c8c0; animation: timingPulse 1.4s ease-in-out infinite; }
+  /* Counter open: a magenta breathe, distinct from the idle blue breathe. */
+  .led.COUNTING { background: #c850e0; animation: countingBreathe 2.2s ease-in-out infinite; }
+  @keyframes breathe { 0%, 100% { opacity: .12; } 50% { opacity: 1; } }
+  @keyframes timingPulse { 0%, 100% { box-shadow: 0 0 8px #18c8c066; opacity: .85; }
+                           50% { box-shadow: 0 0 24px #18c8c0; opacity: 1; } }
+  @keyframes countingBreathe { 0%, 100% { opacity: .3; } 50% { opacity: 1; box-shadow: 0 0 22px #c850e0aa; } }
+  @keyframes flash { 0%, 100% { opacity: 1; } 50% { opacity: .08; } }
+  @keyframes alarmFlash { 0%, 100% { background: var(--red); box-shadow: 0 0 26px #e05c5c; }
+                          50% { background: #ffffff; box-shadow: 0 0 26px #ffffff; } }
+  @keyframes rainbow {
+    0%   { background: hsl(0,   90%, 60%); }
+    17%  { background: hsl(60,  90%, 60%); }
+    33%  { background: hsl(120, 90%, 60%); }
+    50%  { background: hsl(180, 90%, 60%); }
+    67%  { background: hsl(240, 90%, 60%); }
+    83%  { background: hsl(300, 90%, 60%); }
+    100% { background: hsl(360, 90%, 60%); }
+  }
+  #vstate { font-weight: 600; }
+  #vsound { color: var(--dim); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 500; }
+  .kind-log { color: var(--green); }
+  .kind-timer_start { color: var(--amber); }
+  .kind-timer_stop { color: var(--blue); }
+  .empty { color: var(--dim); font-size: 13px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+  .hint { color: var(--dim); font-size: 12px; margin: 8px 0 0; }
+
+  /* --- config menu ------------------------------------------------- */
+  .menu-h { font-size: 15px; margin: 18px 0 2px; }
+  .menu-h:first-child { margin-top: 0; }
+  .menu-hint { color: var(--dim); font-size: 12px; margin: 0 0 10px; }
+  /* --- collapsible mode cards --- */
+  .mode-card { border: 1px solid var(--line); border-radius: 8px;
+               margin-bottom: 8px; background: #161b22; }
+  .mode-card.expanded { background: #181d25; }
+  .mode-head { display: flex; gap: 8px; align-items: baseline;
+               padding: 9px 12px; cursor: default; }
+  .mode-toggle { background: none; border: none; color: var(--dim);
+                 padding: 0 2px; font-size: 13px; cursor: pointer; line-height: 1; }
+  .mode-toggle:hover { background: none; color: var(--text); }
+  .mode-summary { flex: 1; font-size: 13px; overflow-wrap: anywhere; }
+  .mode-sum-name { font-weight: 600; color: var(--text); }
+  .mode-sum-sep { color: var(--line); }
+  .mode-sum-act { color: var(--amber); }
+  .mode-sum-tpl { color: var(--dim); }
+  .mode-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; }
+  .mode-body[hidden] { display: none; }
+  .mode-edit-head { display: flex; gap: 6px; align-items: center; }
+  .mode-name { flex: 1; font-weight: 600; }
+  .pick-row { display: flex; flex-direction: column; gap: 8px; }
+  .pick-head { display: flex; gap: 10px; align-items: center; }
+  .pick-head .fld-label { min-width: 80px; }
+  .pick-head .inp { max-width: 220px; }
+  .tpl-body, .act-body { border-left: 2px solid var(--line); margin-left: 4px;
+                         padding: 4px 0 4px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .tpl-body:empty, .act-body:empty { display: none; }
+  .tpl-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+  .mini { padding: 4px 9px; line-height: 1; }
+  .mini.danger { color: #ffb3b0; border-color: #58201f; }
+  .scope-box { border-left: 2px solid var(--line); margin: 10px 0;
+               padding: 4px 0 4px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .scope-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .scope-lbl { color: var(--dim); font-size: 12px; min-width: 200px; }
+  .sep { color: var(--dim); }
+  .days-row { gap: 6px; }
+  .day-pill { display: inline-flex; align-items: center; gap: 4px;
+              font-size: 12px; color: var(--dim); }
+  .gestures { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+  .gesture-row { border-top: 1px solid var(--line); padding-top: 10px; }
+  .gesture-head { display: flex; gap: 10px; align-items: center; }
+  .gesture-name { color: var(--blue); min-width: 96px; font-size: 13px; }
+  .gesture-fields { display: flex; flex-direction: column; gap: 8px;
+                    margin: 8px 0 0 96px; }
+  .add-mode { margin-top: 2px; }
+  /* Device settings live in a collapsed drawer so they stay out of the way. */
+  .settings-drawer { margin-top: 18px; border: 1px solid var(--line);
+                     border-radius: 8px; background: #161b22; }
+  .settings-summary { cursor: pointer; padding: 10px 12px; font-size: 14px;
+                      font-weight: 600; color: var(--text); list-style: none; }
+  .settings-summary::-webkit-details-marker { display: none; }
+  .settings-summary::before { content: '▸ '; color: var(--dim); }
+  .settings-drawer[open] .settings-summary::before { content: '▾ '; }
+  .settings-drawer[open] .settings-summary { border-bottom: 1px solid var(--line); }
+  .settings-drawer .settings-wrap { padding: 12px; }
+  .settings-wrap { display: flex; flex-direction: column; gap: 14px; }
+  .settings-title { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+                    color: var(--dim); margin: 0 0 8px; }
+  .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+  .fld { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+  .fld-check { flex-direction: row; align-items: center; gap: 8px; }
+  .fld-label { color: var(--dim); font-size: 12px; }
+  .fld-hint { color: var(--dim); font-size: 11px; }
+  .fld-err { color: var(--red); font-size: 11px; min-height: 0; }
+  .inp { width: 100%; background: #0d1014; color: var(--text); font: inherit;
+         border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  .inp.mono { font: 13px/1.45 ui-monospace, monospace; }
+  textarea.inp { resize: vertical; }
+  input[type=checkbox] { width: auto; accent-color: var(--blue); }
+  .menu-bar { display: flex; gap: 8px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+  .menu-status { color: var(--dim); font-size: 12px; }
+  .menu-result { font-size: 13px; white-space: pre-wrap; margin: 10px 0 0; overflow-wrap: anywhere; }
+  .menu-result.ok { color: var(--green); }
+  .menu-result.warn { color: var(--amber); }
+  .menu-result.err { color: var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AI Button</h1>
+  <span id="state" class="badge">…</span>
+  <span id="meta"></span>
+</header>
+<p id="last"></p>
+<div id="clockbar" hidden></div>
+
+<section id="virtual" hidden>
+  <h2>Virtual device</h2>
+  <div class="virtual-row">
+    <div id="vled" class="led IDLE"></div>
+    <div>
+      <div id="vstate">IDLE</div>
+      <div id="vsound">no sound yet</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Dev controls</h2>
+  <div class="row">
+    <button data-trigger="short_press">Short press</button>
+    <button data-trigger="long_press">Long press</button>
+    <button data-trigger="double_tap">Double tap</button>
+  </div>
+  <div class="row">
+    <input type="time" id="clock-input" step="60">
+    <button id="clock-set">Set test clock</button>
+    <button id="clock-clear">Real time</button>
+  </div>
+  <p class="hint">The test clock shifts what time the device thinks it is -
+  set 06:30 to try a 5-7am window mode, or 06:59 to watch a 07:00 alarm fire.
+  It keeps ticking, never persists across restarts, and doesn't change
+  event-log timestamps.</p>
+</section>
+
+<section>
+  <h2>Configure</h2>
+  <div id="config-menu">Loading…</div>
+</section>
+
+<section>
+  <h2>Recent events</h2>
+  <div id="events"></div>
+</section>
+
+<!-- Config menu: structured editor, built from ES modules (no build step). -->
+<script type="module" src="/static/menu.js"></script>
+
+<!-- Dashboard: status, virtual device, dev controls, event log. -->
+<script>
+const $ = s => document.querySelector(s);
+let soundSeq = null;
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data && (data.detail || data.error)) || `HTTP ${res.status}`);
+  return data;
+}
+
+function fmtUptime(s) {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function fmtDuration(s) {
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  return h ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
+           : `${m}:${String(sec).padStart(2,'0')}`;
+}
+
+const GESTURES = { short_press: 'short press', long_press: 'long press', double_tap: 'double tap' };
+
+async function refreshStatus() {
+  try {
+    const d = await api('/api/status');
+    const badge = $('#state');
+    badge.textContent = d.state;
+    badge.className = 'badge ' + d.state;
+    $('#meta').textContent =
+      `${d.device_name} · v${d.version} · up ${fmtUptime(d.uptime_s)} · ${d.mode_count} mode${d.mode_count === 1 ? '' : 's'}` +
+      (d.mock ? ' · MOCK' : '');
+    // last_trigger is null for scheduler-fired alarms - still surface the
+    // outcome (mode + message) so a fired/dismissed alarm shows in the summary.
+    $('#last').textContent = (d.last_trigger || d.last_mode || d.last_message)
+      ? 'Last: ' +
+        (d.last_trigger
+          ? (GESTURES[d.last_trigger] || d.last_trigger) + (d.last_mode ? ` → ${d.last_mode}` : '')
+          : (d.last_mode || '')) +
+        (d.last_message ? ` - ${d.last_ok ? '' : '⚠️ '}${d.last_message}` : '')
+      : '';
+
+    // test clock banner
+    const bar = $('#clockbar');
+    bar.hidden = !d.clock_override;
+    if (d.clock_override) {
+      bar.textContent = `⏱ TEST CLOCK ACTIVE - the device thinks it is ${d.now.replace('T', ' ')}`;
+    }
+
+    // virtual device panel (mock mode only)
+    $('#virtual').hidden = !d.mock;
+    if (d.mock) {
+      $('#vled').className = 'led ' + d.led_state;
+      $('#vstate').textContent = d.led_state;
+      if (soundSeq !== null && d.sound_seq !== soundSeq && d.last_sound) {
+        new Audio('/api/dev/sound/' + d.last_sound).play().catch(() => {});
+      }
+      if (d.last_sound) $('#vsound').textContent = `last sound: ${d.last_sound}`;
+    }
+    soundSeq = d.sound_seq;
+  } catch {
+    const badge = $('#state');
+    badge.textContent = 'OFFLINE';
+    badge.className = 'badge OFFLINE';
+  }
+}
+
+async function refreshEvents() {
+  try {
+    const rows = await api('/api/events?limit=30');
+    $('#events').innerHTML = rows.length
+      ? `<table><tr><th>When</th><th>Kind</th><th>Name</th><th>Duration</th></tr>` +
+        rows.map(r => `<tr>
+          <td>${new Date(r.ts).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</td>
+          <td class="kind-${r.kind}">${r.kind.replace('_', ' ')}</td>
+          <td>${r.name}</td>
+          <td>${r.duration_s != null ? fmtDuration(r.duration_s) : ''}</td>
+        </tr>`).join('') + '</table>'
+      : '<p class="empty">No events yet - log and timer actions will show up here.</p>';
+  } catch { /* server briefly away; keep last view */ }
+}
+
+$('#clock-set').addEventListener('click', async () => {
+  const value = $('#clock-input').value;
+  if (!value) return;
+  try { await api('/api/dev/clock', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ time: value }),
+  }); refreshStatus(); }
+  catch (e) { console.warn(e); }
+});
+
+$('#clock-clear').addEventListener('click', async () => {
+  try { await api('/api/dev/clock', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clear: true }),
+  }); refreshStatus(); }
+  catch (e) { console.warn(e); }
+});
+
+document.querySelectorAll('[data-trigger]').forEach(btn =>
+  btn.addEventListener('click', async () => {
+    try { await api('/api/trigger/' + btn.dataset.trigger, { method: 'POST' }); }
+    catch (e) { console.warn(e); }
+    setTimeout(refreshStatus, 250);
+    setTimeout(refreshEvents, 2500);
+  }));
+
+refreshStatus(); refreshEvents();
+setInterval(refreshStatus, 1000);
+setInterval(refreshEvents, 5000);
+</script>
+</body>
+</html>
