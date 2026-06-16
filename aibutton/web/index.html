@@ -40,6 +40,11 @@
      (magenta), distinct from the alarm's red so each reads at a glance. */
   .badge.TIMING { background: #0c4a4a; color: #8ff0ee; }
   .badge.COUNTING { background: #4a1d52; color: #f0b6ff; }
+  /* Pomodoro: amber "work" focus and green "break" rest. */
+  .badge.POMODORO_WORK { background: #5c3a13; color: #ffcf8a; }
+  .badge.POMODORO_BREAK { background: #14452e; color: #8fe6bb; }
+  /* Device toggled off (5-tap): muted/grey. */
+  .badge.OFF { background: #2a313b; color: #8a94a3; }
   button { background: #232a34; color: var(--text); border: 1px solid var(--line);
            border-radius: 8px; padding: 7px 14px; font: inherit; cursor: pointer; }
   button:hover { background: #2c3542; }
@@ -61,6 +66,11 @@
   .led.TIMING { background: #18c8c0; animation: timingPulse 1.4s ease-in-out infinite; }
   /* Counter open: a magenta breathe, distinct from the idle blue breathe. */
   .led.COUNTING { background: #c850e0; animation: countingBreathe 2.2s ease-in-out infinite; }
+  /* Pomodoro: amber "work" focus breathe, green "break" rest breathe. */
+  .led.POMODORO_WORK { background: #ffa033; animation: breathe 2s ease-in-out infinite; }
+  .led.POMODORO_BREAK { background: #43b97f; animation: breathe 3.2s ease-in-out infinite; }
+  /* Device off (5-tap): dark and still. */
+  .led.OFF { background: #20262e; opacity: .25; animation: none; box-shadow: none; }
   @keyframes breathe { 0%, 100% { opacity: .12; } 50% { opacity: 1; } }
   @keyframes timingPulse { 0%, 100% { box-shadow: 0 0 8px #18c8c066; opacity: .85; }
                            50% { box-shadow: 0 0 24px #18c8c0; opacity: 1; } }
@@ -121,6 +131,8 @@
   .tpl-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
   .mini { padding: 4px 9px; line-height: 1; }
   .mini.danger { color: #ffb3b0; border-color: #58201f; }
+  .mode-lock-tag { font-size: 11px; color: var(--dim); border: 1px solid var(--line);
+                   border-radius: 99px; padding: 2px 8px; white-space: nowrap; }
   .scope-box { border-left: 2px solid var(--line); margin: 10px 0;
                padding: 4px 0 4px 12px; display: flex; flex-direction: column; gap: 8px; }
   .scope-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -195,6 +207,7 @@
     <button data-trigger="short_press">Short press</button>
     <button data-trigger="long_press">Long press</button>
     <button data-trigger="double_tap">Double tap</button>
+    <button data-trigger="quintuple_tap" title="The global escape: exits a takeover, or toggles the device off/on">5-tap (on/off)</button>
   </div>
   <div class="row">
     <input type="time" id="clock-input" step="60">
@@ -244,7 +257,8 @@ function fmtDuration(s) {
            : `${m}:${String(sec).padStart(2,'0')}`;
 }
 
-const GESTURES = { short_press: 'short press', long_press: 'long press', double_tap: 'double tap' };
+const GESTURES = { short_press: 'short press', long_press: 'long press',
+                   double_tap: 'double tap', quintuple_tap: '5-tap' };
 
 async function refreshStatus() {
   try {

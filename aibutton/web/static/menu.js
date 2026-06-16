@@ -23,6 +23,7 @@ export class ConfigMenu {
       const data = await this.api.get();
       this.model = structuredClone(data.effective);
       if (!Array.isArray(this.model.modes)) this.model.modes = [];
+      this._normalizeDefault();
       this.dirty = false;
       this._render(data.warnings || []);
     } catch (err) {
@@ -43,8 +44,12 @@ export class ConfigMenu {
     this._renderModes();
     const addBtn = el('button', { type: 'button', className: 'add-mode', textContent: '+ Add mode' });
     addBtn.addEventListener('click', () => {
-      this.model.modes.push(this._defaultMode());
-      this._renderModes(this.model.modes.length - 1); // expand the newcomer
+      // Insert above the permanent Default floor so the newcomer (checked
+      // first) can override it; fall back to the end if there is no floor.
+      const floor = this._defaultIndex();
+      const at = floor === -1 ? this.model.modes.length : floor;
+      this.model.modes.splice(at, 0, this._defaultMode());
+      this._renderModes(at); // expand the newcomer
       this._markDirty();
     });
 
@@ -64,7 +69,7 @@ export class ConfigMenu {
 
     this.root.append(
       el('h3', { className: 'menu-h', textContent: 'Modes' }),
-      el('p', { className: 'menu-hint', textContent: 'Ambient modes are checked top to bottom; the first that matches the time and defines the pressed gesture wins. Takeover modes (Alarm, Stopwatch, Counter) own the button until you exit them: an Alarm fires on its own schedule, a Stopwatch or Counter is started by an Enter a mode gesture.' }),
+      el('p', { className: 'menu-hint', textContent: 'Ambient modes are checked top to bottom; the first that matches the time and defines the pressed gesture wins, so modes higher in the list override the permanent Default floor at the bottom. Takeover modes (Alarm, Stopwatch, Counter, Pomodoro) own the button until you exit them: an Alarm fires on its own schedule; a Stopwatch, Counter or Pomodoro is started by an Enter a mode gesture and exited with 5 quick taps (which also toggles the device off/on from the Default).' }),
       this.modesWrap,
       addBtn,
       this._renderSettingsDrawer(),
@@ -86,11 +91,40 @@ export class ConfigMenu {
     };
   }
 
+  // The permanent Default floor is the last always-on Actions mode. It is
+  // locked (no delete / move, activation fixed to Always) and is the
+  // lowest-priority fallback every other mode overrides.
+  _defaultIndex() {
+    for (let i = this.model.modes.length - 1; i >= 0; i--) {
+      const m = this.model.modes[i];
+      if (m && m.template === 'actions' && m.activation && m.activation.type === 'always') {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // Guarantee a permanent Default exists and sits last (the floor); add one if
+  // none, otherwise pin the existing floor to the end.
+  _normalizeDefault() {
+    const idx = this._defaultIndex();
+    if (idx === -1) {
+      this.model.modes.push({
+        name: 'Default', template: 'actions', activation: { type: 'always' },
+        ...TEMPLATE_BY_TYPE.actions.defaults(),
+      });
+    } else if (idx !== this.model.modes.length - 1) {
+      this.model.modes.push(this.model.modes.splice(idx, 1)[0]);
+    }
+  }
+
   _renderModes(expandIndex = -1) {
     clear(this.modesWrap);
     this.editors = [];
+    const defaultIdx = this._defaultIndex();
     this.model.modes.forEach((mode, index) => {
       const editor = new ModeEditor(mode, {
+        locked: index === defaultIdx, // the permanent Default floor
         onChange: () => this._markDirty(),
         onRemove: () => { this.model.modes.splice(index, 1); this._renderModes(); this._markDirty(); },
         onMoveUp: () => this._move(index, -1),
@@ -176,6 +210,7 @@ export class ConfigMenu {
       // what was stored (per-key fallbacks included).
       this.model = structuredClone(res.effective);
       if (!Array.isArray(this.model.modes)) this.model.modes = [];
+      this._normalizeDefault();
       this.dirty = false;
       this._render();
       this._showResult(

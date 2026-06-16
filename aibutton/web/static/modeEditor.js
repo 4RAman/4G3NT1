@@ -109,12 +109,22 @@ export class ModeEditor {
       b.addEventListener('click', fn);
       return b;
     };
+    // The permanent Default floor can't be moved or deleted (TODO: it is the
+    // always-on, lowest-priority fallback every other mode overrides).
+    const controls = this.handlers.locked
+      ? [el('span', {
+          className: 'mode-lock-tag', title: 'The always-on fallback mode',
+          textContent: 'Permanent',
+        })]
+      : [
+          btn('↑', 'Move up', '', () => this.handlers.onMoveUp?.()),
+          btn('↓', 'Move down', '', () => this.handlers.onMoveDown?.()),
+          btn('✕', 'Delete mode', 'danger', () => this.handlers.onRemove?.()),
+        ];
     return el('div', { className: 'mode-edit-head' }, [
       el('span', { className: 'fld-label', textContent: 'Name' }),
       name,
-      btn('↑', 'Move up', '', () => this.handlers.onMoveUp?.()),
-      btn('↓', 'Move down', '', () => this.handlers.onMoveDown?.()),
-      btn('✕', 'Delete mode', 'danger', () => this.handlers.onRemove?.()),
+      ...controls,
     ]);
   }
 
@@ -128,6 +138,8 @@ export class ModeEditor {
     this.templateBody = el('div', { className: 'tpl-body' });
     this._buildTemplateBody();
 
+    // The permanent Default stays an Actions floor - its template is fixed.
+    select.disabled = !!this.handlers.locked;
     select.addEventListener('change', () => {
       this._switchTemplate(select.value);
     });
@@ -150,7 +162,9 @@ export class ModeEditor {
     if (!descriptor) return;
     // Strip old template-specific flat fields off the mode, keep core keys.
     for (const key of [...GESTURES.map((g) => g.key), 'unless_logged_today',
-      'message', 'label', 'snooze_minutes', 'dismiss_event', 'log_as', 'event']) {
+      'message', 'label', 'snooze_minutes', 'dismiss_event', 'log_as', 'event',
+      'tap_increment', 'long_increment', 'double_increment',
+      'work_minutes', 'break_minutes', 'extend_minutes']) {
       delete this.mode[key];
     }
     this.mode.template = type;
@@ -187,10 +201,14 @@ export class ModeEditor {
   _activationPicker() {
     const tplDescriptor = TEMPLATE_BY_TYPE[this.mode.template] || TEMPLATES[0];
     const allowed = new Set(tplDescriptor.allowedActivations);
+    // The permanent Default is locked to Always (the floor); offer only that.
+    const choices = this.handlers.locked
+      ? ACTIVATIONS.filter((a) => a.type === 'always')
+      : ACTIVATIONS.filter((a) => allowed.has(a.type));
     const select = el('select', { className: 'inp' },
-      ACTIVATIONS.filter((a) => allowed.has(a.type))
-        .map((a) => el('option', { value: a.type, textContent: a.label })));
+      choices.map((a) => el('option', { value: a.type, textContent: a.label })));
     select.value = this.mode.activation?.type || tplDescriptor.allowedActivations[0];
+    select.disabled = !!this.handlers.locked;
 
     this.activationBody = el('div', { className: 'act-body' });
     this._buildActivationBody();

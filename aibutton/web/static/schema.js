@@ -28,7 +28,16 @@ export const DAYS = [
 
 // Names of the templates whose modes are takeovers - the only valid targets
 // for an `enter_mode` action. Mirrors each template's `nature: 'takeover'`.
-const TAKEOVER_TEMPLATES = new Set(['alarm', 'stopwatch', 'counter']);
+const TAKEOVER_TEMPLATES = new Set(['alarm', 'stopwatch', 'counter', 'pomodoro']);
+
+// The assignable Pomodoro gesture commands (mirrors POMODORO_COMMANDS in
+// config.py). The empty value leaves a gesture unmapped (does nothing).
+const POMODORO_COMMAND_OPTIONS = [
+  { value: 'start_pause', label: 'Start / Pause' },
+  { value: 'restart', label: 'Restart' },
+  { value: 'extend', label: 'Extend (+ minutes)' },
+  { value: '', label: '— do nothing —' },
+];
 
 // Action primitives - the body of the `actions` template. The standalone
 // `alarm` action is gone (alarms are now a template); `enter_mode` is the
@@ -262,11 +271,44 @@ export const TEMPLATES = [
     body: 'fields',
     fields: [
       { key: 'event', label: 'Event name', kind: 'text', required: true,
-        placeholder: 'water',
-        hint: 'Logged once per increment (short press / double tap); long press exits.' },
+        placeholder: 'gratitude',
+        hint: 'Logged by each press’s increment; the 5-tap escape exits.' },
+      { key: 'tap_increment', label: 'Short press +', kind: 'number', step: 1,
+        hint: 'Amount a short press adds (default +1).' },
+      { key: 'long_increment', label: 'Long press +', kind: 'number', step: 1,
+        hint: 'Amount a long press adds (default +10).' },
+      { key: 'double_increment', label: 'Double tap +', kind: 'number', step: 1,
+        hint: 'Amount a double tap adds (default +20).' },
     ],
-    defaults: () => ({ event: '' }),
-    describe: (mode) => `Counter “${mode.event || '…'}”`,
+    defaults: () => ({ event: '', tap_increment: 1, long_increment: 10, double_increment: 20 }),
+    describe: (mode) =>
+      `Counter “${mode.event || '…'}” (+${mode.tap_increment ?? 1}/+${mode.long_increment ?? 10}/+${mode.double_increment ?? 20})`,
+  },
+  {
+    type: 'pomodoro',
+    label: 'Pomodoro',
+    nature: 'takeover',
+    allowedActivations: ['manual'], // started by an enter_mode gesture only
+    body: 'fields',
+    fields: [
+      { key: 'work_minutes', label: 'Work minutes', kind: 'number', min: 1, step: 1,
+        hint: 'Length of a focus interval (default 25). The 5-tap escape exits.' },
+      { key: 'break_minutes', label: 'Break minutes', kind: 'number', min: 1, step: 1,
+        hint: 'Length of a break interval (default 5). Work and break auto-repeat.' },
+      { key: 'extend_minutes', label: 'Extend minutes', kind: 'number', min: 1, step: 1,
+        hint: 'How much the “extend” command adds (default 10).' },
+      { key: 'log_as', label: 'Log work as', kind: 'text', placeholder: 'pomodoro',
+        hint: 'Each completed work block is logged under this name for daily totals.' },
+      { key: 'short_press', label: 'Short press', kind: 'select', options: POMODORO_COMMAND_OPTIONS,
+        hint: 'Assignable: what a short press does.' },
+      { key: 'long_press', label: 'Long press', kind: 'select', options: POMODORO_COMMAND_OPTIONS },
+      { key: 'double_tap', label: 'Double tap', kind: 'select', options: POMODORO_COMMAND_OPTIONS },
+    ],
+    defaults: () => ({
+      work_minutes: 25, break_minutes: 5, extend_minutes: 10, log_as: 'pomodoro',
+      short_press: 'start_pause', long_press: 'restart', double_tap: 'extend',
+    }),
+    describe: (mode) => `Pomodoro ${mode.work_minutes ?? 25}/${mode.break_minutes ?? 5} min`,
   },
 ];
 
