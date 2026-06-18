@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 data/
 node_modules/
+firmware/build/
+.pio/

@@ -26,12 +26,18 @@ the ESP32 refactor is intentionally deferred). Design notes and rationale in
    musical-interval semantics + round-robin micro-variation on the Pi now; the
    full generative ESP32-C3 DSP synth (wavetable/ADSR/portamento/MIDI) is
    documented in DESIGN.md as the ESP32 work.
-8. ⏳ **Hardware Validation (ESP32)**: feasibility assessed and documented
-   (DESIGN.md — yes, an ESP32-C3 + I²S DAC/amp can run this). Actual firmware
-   port is the deferred future refactor; the mode machine, store, and config
-   schema are platform-agnostic and carry over.
+8. 🚧 **Hardware Validation (ESP32)**: feasibility assessed (DESIGN.md — yes,
+   an ESP32-C3 + I²S DAC/amp can run this) **and the port started** in
+   [firmware/](firmware/): the portable cores — the tap-chord gesture detector
+   and the full generative synth (wavetable morph, exponential ADSR, IIR
+   portamento, soft-clip, micro-variation, cue bank) — are implemented and pass
+   host-native tests (`cd firmware && make test`); the I²S/LEDC/GPIO glue and a
+   PlatformIO project are scaffolded (not yet compiled/flashed).
 
 ## Remaining / future
 
-- ESP32-C3 firmware port: reimplement the GPIO/LED/audio/BLE I/O layers and the
-  generative audio synth; reuse the mode machine, store, and config schema.
+- ESP32 firmware: compile/flash the hardware glue on-device, then port the mode
+  machine (config.py + main.py — ambient resolution, scheduler, takeovers, the
+  contextual 5-tap) and storage (NVS) behind the same interfaces. The config
+  schema (config.json) and the mode logic are platform-agnostic and carry over.
+  See [firmware/README.md](firmware/README.md) for the full port plan.

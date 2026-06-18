@@ -350,6 +350,14 @@ Three open questions from the Phase 3 review, resolved:
 
 ### ESP32 audio + hardware assessment (TODO 8)
 
+The port has now been **started** under [firmware/](firmware/): the
+platform-independent cores — the tap-chord gesture detector and the generative
+synth (wavetable morph, exponential ADSR, IIR portamento, cubic soft-clip,
+per-trigger micro-variation, and the cue bank from the doc's table) — are
+implemented in portable C++ and pass host-native unit tests (`make test`), with
+the I²S/LEDC/GPIO glue and a PlatformIO project scaffolded around them. The full
+mode machine port is the next step (see [firmware/README.md](firmware/README.md)).
+
 Deferred per the project direction ("Python on the Pi is fine for now"), but the
 research answers the feasibility question: **yes**, an ESP32-C3 can drive these
 features. The synth runs as a FreeRTOS task feeding I²S DMA buffers into a

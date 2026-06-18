@@ -52,6 +52,8 @@ that a future phone app can reuse.
 | `device_tests/` | standalone hardware test scripts (run on the Pi) |
 | `central_test/ble_central.py` | BLE subscriber test (run on a laptop, needs `bleak`) |
 | `tests/` | pytest suite — runs anywhere, no hardware needed |
+| `tests_js/` | web UI ES-module tests (`npm test`, node:test + jsdom) |
+| `firmware/` | ESP32-C3 port (in progress): host-tested gesture + generative-synth cores, scaffolded hardware glue — see [firmware/README.md](firmware/README.md) |
 
 ## Architecture
 
