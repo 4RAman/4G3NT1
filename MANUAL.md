@@ -300,6 +300,7 @@ The RGB LED shows device state; short feedback sounds confirm what happened.
 | **Counting** | magenta breathe | a counter is open |
 | **Pomodoro work** | amber breathe | a Pomodoro work interval |
 | **Pomodoro break** | green breathe | a Pomodoro break interval |
+| **Pomodoro paused** | dim amber, slow | a Pomodoro countdown is paused |
 | **Off** | dark | the device is toggled off (5 taps) |
 
 Feedback sounds are designed so the *interval* matches the meaning — a rising

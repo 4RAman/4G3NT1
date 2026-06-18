@@ -473,16 +473,26 @@ async def run(args: argparse.Namespace) -> None:
             paused = "" if running else " (paused)"
             status.last_message = f"{tag} {_fmt_elapsed(max(0, remaining))}{paused}"
 
+        def set_phase_led() -> None:
+            """Reflect the live phase *and* paused state on the LED: a dim
+            POMODORO_PAUSED while frozen, otherwise the work/break colour."""
+            if not running:
+                state = LEDState.POMODORO_PAUSED
+            elif phase == "work":
+                state = LEDState.POMODORO_WORK
+            else:
+                state = LEDState.POMODORO_BREAK
+            set_led(state)
+            set_status(state.value)
+
         def enter_phase(new_phase: str) -> None:
             nonlocal phase, remaining
             phase = new_phase
             remaining = work_s if new_phase == "work" else break_s
-            set_led(LEDState.POMODORO_WORK if new_phase == "work" else LEDState.POMODORO_BREAK)
-            set_status("POMODORO_WORK" if new_phase == "work" else "POMODORO_BREAK")
+            set_phase_led()
             show()
 
-        set_led(LEDState.POMODORO_WORK)
-        set_status("POMODORO_WORK")
+        set_phase_led()
         show()
         if args.demo:
             # --demo is unattended: show the work phase briefly, then exit.
@@ -534,6 +544,7 @@ async def run(args: argparse.Namespace) -> None:
             elif command == "extend":
                 remaining += extend_s
             play_sound(Sound.ACK)
+            set_phase_led()  # pause/resume changes the LED
             show()
 
     async def enter_takeover(mode) -> None:

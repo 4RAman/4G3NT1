@@ -155,6 +155,27 @@ async def test_pomodoro_break_breathes_green(mock_pins):
     led.close()
 
 
+async def test_pomodoro_paused_is_dim_amber(mock_pins):
+    led = LEDController()
+    led.set_state(LEDState.POMODORO_PAUSED)
+    await asyncio.sleep(0.15)
+    assert not led._task.done()
+    seen_lit = False
+    peak = 0.0
+    for _ in range(10):
+        r, g, b = led._led.color
+        assert b == 0  # amber: no blue
+        if r > 0.01:
+            seen_lit = True
+        peak = max(peak, r)
+        await asyncio.sleep(0.05)
+    assert seen_lit
+    assert peak < 0.5  # clearly dimmer than the active work breathe (~1.0)
+    led.set_state(LEDState.IDLE)
+    await asyncio.sleep(0.05)
+    led.close()
+
+
 async def test_counting_breathes_magenta_until_state_changes(mock_pins):
     led = LEDController()
     led.set_state(LEDState.COUNTING)

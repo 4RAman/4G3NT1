@@ -110,6 +110,14 @@ python -m venv .venv
 .venv\Scripts\python -m aibutton.main --mock --demo --no-ble   # one-shot smoke test
 ```
 
+The web UI ES modules have their own test suite (Node's built-in runner +
+jsdom — no browser needed):
+
+```
+npm install      # one-time: pulls jsdom
+npm test         # runs tests_js/*.test.mjs
+```
+
 The dev environment mocks the GPIO pins and (by default) the AI, then
 lets you drive everything from the browser:
 

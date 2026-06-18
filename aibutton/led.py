@@ -41,6 +41,7 @@ class LEDState(Enum):
     OFF = "OFF"  # device toggled off (5-tap) - dark until woken
     POMODORO_WORK = "POMODORO_WORK"  # a Pomodoro work interval
     POMODORO_BREAK = "POMODORO_BREAK"  # a Pomodoro break interval
+    POMODORO_PAUSED = "POMODORO_PAUSED"  # a Pomodoro countdown paused
 
 
 def _log_task_failure(task: asyncio.Task) -> None:
@@ -70,6 +71,7 @@ class LEDController:
             LEDState.OFF: self._off,
             LEDState.POMODORO_WORK: self._pomodoro_work,
             LEDState.POMODORO_BREAK: self._pomodoro_break,
+            LEDState.POMODORO_PAUSED: self._pomodoro_paused,
         }
 
     def set_state(self, state: LEDState) -> None:
@@ -170,3 +172,9 @@ class LEDController:
         """A Pomodoro break interval: a calm green breathe - "rest". A breathe
         (not SUCCESS's solid green), held until the phase changes or exits."""
         await self._breathe((0, 1, 0), period_s=3.2)  # green breathe
+
+    async def _pomodoro_paused(self):
+        """A paused Pomodoro: a dim, slow amber pulse - "frozen". Dimmer and
+        slower than the active work breathe so "paused" reads at a glance. Held
+        until the countdown resumes or the mode exits."""
+        await self._breathe((0.18, 0.07, 0), period_s=4.0)  # dim amber, slow

@@ -40,9 +40,10 @@
      (magenta), distinct from the alarm's red so each reads at a glance. */
   .badge.TIMING { background: #0c4a4a; color: #8ff0ee; }
   .badge.COUNTING { background: #4a1d52; color: #f0b6ff; }
-  /* Pomodoro: amber "work" focus and green "break" rest. */
+  /* Pomodoro: amber "work" focus and green "break" rest; dim "paused". */
   .badge.POMODORO_WORK { background: #5c3a13; color: #ffcf8a; }
   .badge.POMODORO_BREAK { background: #14452e; color: #8fe6bb; }
+  .badge.POMODORO_PAUSED { background: #2a313b; color: #c8a06a; }
   /* Device toggled off (5-tap): muted/grey. */
   .badge.OFF { background: #2a313b; color: #8a94a3; }
   button { background: #232a34; color: var(--text); border: 1px solid var(--line);
@@ -66,9 +67,12 @@
   .led.TIMING { background: #18c8c0; animation: timingPulse 1.4s ease-in-out infinite; }
   /* Counter open: a magenta breathe, distinct from the idle blue breathe. */
   .led.COUNTING { background: #c850e0; animation: countingBreathe 2.2s ease-in-out infinite; }
-  /* Pomodoro: amber "work" focus breathe, green "break" rest breathe. */
+  /* Pomodoro: amber "work" focus breathe, green "break" rest breathe,
+     dim amber "paused" (slower + dimmer so it reads as frozen). */
   .led.POMODORO_WORK { background: #ffa033; animation: breathe 2s ease-in-out infinite; }
   .led.POMODORO_BREAK { background: #43b97f; animation: breathe 3.2s ease-in-out infinite; }
+  .led.POMODORO_PAUSED { background: #8a5a1e; animation: pausedBreathe 4s ease-in-out infinite; }
+  @keyframes pausedBreathe { 0%, 100% { opacity: .1; } 50% { opacity: .45; } }
   /* Device off (5-tap): dark and still. */
   .led.OFF { background: #20262e; opacity: .25; animation: none; box-shadow: none; }
   @keyframes breathe { 0%, 100% { opacity: .12; } 50% { opacity: 1; } }

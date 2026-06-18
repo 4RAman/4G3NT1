@@ -1,0 +1,13 @@
+{
+  "name": "aibutton-web",
+  "private": true,
+  "type": "module",
+  "version": "0.3.0",
+  "description": "Web UI ES modules for the AI Button and their tests (node:test + jsdom).",
+  "scripts": {
+    "test": "node --test --import ./tests_js/setup.mjs tests_js/*.test.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
+  }
+}

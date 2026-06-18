@@ -329,6 +329,25 @@ round-robin bank of jittered renders (the sample-based stand-in for live
 generative variation) to dodge the "machine-gun" fatigue effect. The full DSP
 engine is captured below as future ESP32 work.
 
+### Phase 3 hardening
+
+Three open questions from the Phase 3 review, resolved:
+
+- **Does "off" silence scheduled alarms? No (deliberate).** Turning the device
+  off is do-not-disturb for *gestures*, not for the clock — a wake alarm is the
+  one thing that must still fire while off, otherwise the alarm is useless. The
+  loop runs the scheduler regardless of the asleep flag; after the alarm is
+  dismissed, `settle()` returns the device to OFF (not IDLE), so a stray press
+  right after dismissal is still ignored. Covered by
+  `test_scheduled_alarm_fires_while_off_then_returns_off`.
+- **Paused Pomodoro has its own LED** (`POMODORO_PAUSED`): a dim, slow amber
+  pulse, distinct from the brighter active-work breathe, so "frozen" reads at a
+  glance. `set_phase_led()` picks paused vs work vs break from the live state.
+- **The web ES modules have a test suite** (`tests_js/`, Node's built-in
+  `node:test` + jsdom, run with `npm test`): schema registries, the widget
+  factory, ModeEditor's template/activation switching + locked-Default, and the
+  menu's Default normalization/locking.
+
 ### ESP32 audio + hardware assessment (TODO 8)
 
 Deferred per the project direction ("Python on the Pi is fine for now"), but the
