@@ -343,7 +343,8 @@ def test_alarm_mode_parses(tmp_path):
 def test_alarm_mode_defaults(tmp_path):
     cfg = load_config(write(tmp_path, {
         "modes": [
-            {"name": "Bare", "template": "alarm", "activation": {"type": "schedule", "at": "06:00"}},
+            {"name": "Bare", "template": "alarm",
+             "activation": {"type": "schedule", "at": "06:00"}},
         ],
     }))
     mode = cfg.modes[0]
@@ -354,7 +355,8 @@ def test_alarm_mode_defaults(tmp_path):
 def test_alarm_mode_bad_at_is_skipped(tmp_path):
     cfg = load_config(write(tmp_path, {
         "modes": [
-            {"name": "Broken", "template": "alarm", "activation": {"type": "schedule", "at": "7am"}},
+            {"name": "Broken", "template": "alarm",
+             "activation": {"type": "schedule", "at": "7am"}},
             {"name": "Good", "template": "actions", "activation": {"type": "always"},
              "short_press": {"action": "log", "event": "y"}},
         ],
@@ -579,7 +581,6 @@ def test_pomodoro_defaults_and_unassign(tmp_path):
 
 
 def test_pomodoro_invalid_command_keeps_default(tmp_path):
-    from aibutton.config import PomodoroBehavior
     cfg = load_config(write(tmp_path, {
         "modes": [
             {"name": "P", "template": "pomodoro", "activation": {"type": "manual"},

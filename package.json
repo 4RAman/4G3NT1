@@ -5,9 +5,12 @@
   "version": "0.3.0",
   "description": "Web UI ES modules for the AI Button and their tests (node:test + jsdom).",
   "scripts": {
-    "test": "node --test --import ./tests_js/setup.mjs tests_js/*.test.mjs"
+    "test": "node --test --import ./tests_js/setup.mjs tests_js/*.test.mjs",
+    "lint": "eslint aibutton/web/static tests_js"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
     "jsdom": "^26.1.0"
   }
 }

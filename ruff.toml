@@ -1,0 +1,9 @@
+# Ruff config for the AI Button Python code. Matches the project's ~100-col
+# style. B008 is ignored because FastAPI's `param = Body(...)` / `Depends(...)`
+# defaults are idiomatic, not the bug bugbear flags.
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["B008"]

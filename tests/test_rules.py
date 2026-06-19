@@ -85,8 +85,9 @@ def test_overnight_window():
 
 
 def test_day_filter():
-    assert resolve((WEEKDAYS, DEFAULT), "short_press", at(10, day=15))[0].name == "Weekdays"  # Monday
-    assert resolve((WEEKDAYS, DEFAULT), "short_press", at(10, day=20))[0].name == "Default"  # Saturday
+    # day=15 is a Monday (in Mon-Fri), day=20 is a Saturday (out).
+    assert resolve((WEEKDAYS, DEFAULT), "short_press", at(10, day=15))[0].name == "Weekdays"
+    assert resolve((WEEKDAYS, DEFAULT), "short_press", at(10, day=20))[0].name == "Default"
 
 
 def test_first_match_wins_order():
@@ -129,7 +130,9 @@ def test_unless_logged_today_skips_when_already_logged():
 
 
 def test_unless_logged_today_matches_when_not_logged():
-    mode, action = resolve((REMINDER, DEFAULT), "short_press", at(7, 30), logged_today=lambda name: False)
+    mode, action = resolve(
+        (REMINDER, DEFAULT), "short_press", at(7, 30), logged_today=lambda name: False
+    )
     assert mode.name == "Meds reminder"
     assert action == LogAction(event="meds_taken")
 

@@ -330,7 +330,7 @@ async def run(args: argparse.Namespace) -> None:
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=behavior.snooze_minutes * 60)
                     return ActionResult(True, message)  # shutting down mid-snooze
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue  # snooze elapsed; ring again
             if behavior.dismiss_event:
                 store.log_event(behavior.dismiss_event)

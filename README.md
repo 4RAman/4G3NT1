@@ -107,18 +107,24 @@ surfaces those same warnings so the editor shows what was actually accepted.
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-dev.txt
 .venv\Scripts\python -m pytest
+.venv\Scripts\ruff check .      # lint
 .\dev.ps1            # dev environment: web UI at http://localhost:8080
 .\dev.ps1 -RealAI    # same, but real Ollama backends for prompt testing
 .venv\Scripts\python -m aibutton.main --mock --demo --no-ble   # one-shot smoke test
 ```
 
 The web UI ES modules have their own test suite (Node's built-in runner +
-jsdom — no browser needed):
+jsdom — no browser needed), and the firmware cores have native tests:
 
 ```
-npm install      # one-time: pulls jsdom
+npm install      # one-time: pulls jsdom + eslint
 npm test         # runs tests_js/*.test.mjs
+npm run lint     # eslint the web modules
+make -C firmware test   # native tests for the gesture + synth cores
 ```
+
+All three suites (plus `ruff` and `eslint`) run in CI on every push and PR —
+see [.github/workflows/ci.yml](.github/workflows/ci.yml).
 
 The dev environment mocks the GPIO pins and (by default) the AI, then
 lets you drive everything from the browser:

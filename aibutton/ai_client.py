@@ -66,7 +66,9 @@ class AIClient:
         if cfg.prefer_remote:
             attempts.append(("remote", cfg.ollama_host, cfg.remote_model, cfg.remote_timeout_s))
             if cfg.fallback_to_local:
-                attempts.append(("local", cfg.local_ollama_host, cfg.local_model, cfg.local_timeout_s))
+                attempts.append(
+                    ("local", cfg.local_ollama_host, cfg.local_model, cfg.local_timeout_s)
+                )
         else:
             attempts.append(("local", cfg.local_ollama_host, cfg.local_model, cfg.local_timeout_s))
 

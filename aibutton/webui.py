@@ -154,7 +154,7 @@ def create_app(ctx: WebContext) -> FastAPI:
             tmp.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
             os.replace(tmp, path)
         except OSError as exc:
-            raise HTTPException(500, f"cannot write {path}: {exc}")
+            raise HTTPException(500, f"cannot write {path}: {exc}") from exc
         ctx.cm.reload()
         return {
             "path": ctx.cm.path,
@@ -191,7 +191,7 @@ def create_app(ctx: WebContext) -> FastAPI:
         try:
             kind = TriggerType(trigger)  # accepts quintuple_tap (the 5-tap toggle) too
         except ValueError:
-            raise HTTPException(404, f"unknown trigger {trigger!r}")
+            raise HTTPException(404, f"unknown trigger {trigger!r}") from None
         ctx.trigger_queue.put_nowait(kind)
         return {"queued": trigger}
 
@@ -212,7 +212,7 @@ def create_app(ctx: WebContext) -> FastAPI:
                 try:
                     target = datetime.combine(date.today(), time_of_day.fromisoformat(raw))
                 except ValueError:
-                    raise HTTPException(422, f"cannot parse time {raw!r}")
+                    raise HTTPException(422, f"cannot parse time {raw!r}") from None
             ctx.clock.set(target)
             log.info("test clock set to %s", ctx.clock.now().isoformat(timespec="seconds"))
         return {
@@ -227,7 +227,7 @@ def create_app(ctx: WebContext) -> FastAPI:
         try:
             sound = Sound(name)
         except ValueError:
-            raise HTTPException(404, f"unknown sound {name!r}")
+            raise HTTPException(404, f"unknown sound {name!r}") from None
         path = ctx.sounds.path_for(sound)
         if path is None or not path.exists():
             raise HTTPException(404, "sound files unavailable")

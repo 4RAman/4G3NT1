@@ -637,7 +637,10 @@ def _parse_mode(raw, idx: int) -> Mode | None:
     if not isinstance(raw, dict):
         log.error("config: %s must be an object - skipped", where)
         return None
-    name = raw["name"] if isinstance(raw.get("name"), str) and raw.get("name") else f"mode {idx + 1}"
+    name = (
+        raw["name"] if isinstance(raw.get("name"), str) and raw.get("name")
+        else f"mode {idx + 1}"
+    )
 
     activation = _parse_activation(raw.get("activation", {"type": "always"}), where)
     if activation is None:
@@ -683,7 +686,10 @@ def _migrate_rule(raw, idx: int) -> Mode | None:
     if not isinstance(raw, dict):
         log.error("config: %s must be an object - skipped", where)
         return None
-    name = raw["name"] if isinstance(raw.get("name"), str) and raw.get("name") else f"rule {idx + 1}"
+    name = (
+        raw["name"] if isinstance(raw.get("name"), str) and raw.get("name")
+        else f"rule {idx + 1}"
+    )
 
     between = None
     if "between" in raw:
@@ -709,7 +715,9 @@ def _migrate_rule(raw, idx: int) -> Mode | None:
         if isinstance(value, str) and value:
             unless_logged_today = value
         else:
-            log.error("config: %s.unless_logged_today must be a non-empty string - rule skipped", where)
+            log.error(
+                "config: %s.unless_logged_today must be a non-empty string - rule skipped", where
+            )
             return None
 
     actions: dict[str, Action] = {}

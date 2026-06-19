@@ -1,7 +1,7 @@
 import asyncio
 import wave
 
-from aibutton.audio import _VARIANTS, _TONES, Sound, SoundPlayer, write_tone_wav
+from aibutton.audio import _TONES, _VARIANTS, Sound, SoundPlayer, write_tone_wav
 
 
 def test_every_sound_has_a_tone():

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from aibutton.store import EventStore
 
@@ -10,7 +10,7 @@ def _insert(store, kind, name, days_ago=0, duration_s=None):
         datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
         - timedelta(days=days_ago)
     )
-    ts = local_point.astimezone(timezone.utc).isoformat()
+    ts = local_point.astimezone(UTC).isoformat()
     store._conn.execute(
         "INSERT INTO events (ts, kind, name, duration_s) VALUES (?, ?, ?, ?)",
         (ts, kind, name, duration_s),
@@ -106,7 +106,7 @@ def test_count_column_migrated_onto_old_db(tmp_path):
     )
     conn.execute(
         "INSERT INTO events (ts, kind, name) VALUES (?, 'log', 'water')",
-        (datetime.now(timezone.utc).isoformat(),),
+        (datetime.now(UTC).isoformat(),),
     )
     conn.commit()
     conn.close()

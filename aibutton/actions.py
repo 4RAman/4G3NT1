@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -99,7 +99,7 @@ async def execute(
         payload = {
             "trigger": trigger,
             "mode": mode_name,
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
             **action.payload,  # user payload wins on key collisions
         }
         try:

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS events (
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _local_day_bounds_utc() -> tuple[str, str]:
@@ -40,8 +40,8 @@ def _local_day_bounds_utc() -> tuple[str, str]:
     local_midnight = datetime.now().astimezone().replace(
         hour=0, minute=0, second=0, microsecond=0
     )
-    start = local_midnight.astimezone(timezone.utc)
-    end = (local_midnight + timedelta(days=1)).astimezone(timezone.utc)
+    start = local_midnight.astimezone(UTC)
+    end = (local_midnight + timedelta(days=1)).astimezone(UTC)
     return start.isoformat(), end.isoformat()
 
 
