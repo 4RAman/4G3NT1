@@ -50,6 +50,9 @@
            border-radius: 8px; padding: 7px 14px; font: inherit; cursor: pointer; }
   button:hover { background: #2c3542; }
   button.primary { background: #1d3a6e; border-color: #2c4f8f; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  /* Visible keyboard focus on the dark theme (the UA default is too faint). */
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
   input[type=time] { background: #0d1014; color: var(--text); font: inherit;
                      border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
   .virtual-row { display: flex; align-items: center; gap: 18px; }
@@ -182,17 +185,26 @@
   .menu-result.ok { color: var(--green); }
   .menu-result.warn { color: var(--amber); }
   .menu-result.err { color: var(--red); }
+
+  /* Respect users who ask for less motion: drop the looping LED/badge
+     animations and fall back to static, still-informative colours. */
+  @media (prefers-reduced-motion: reduce) {
+    .led, .badge { animation: none !important; }
+    .led { opacity: 1 !important; }
+    .led.THINKING { background: #b06cf0; }            /* static violet stand-in */
+    .led.ALARMING, .led.ALERT { background: var(--red); }
+  }
 </style>
 </head>
 <body>
 
 <header>
   <h1>AI Button</h1>
-  <span id="state" class="badge">…</span>
+  <span id="state" class="badge" role="status" aria-live="polite" aria-label="Device state">…</span>
   <span id="meta"></span>
 </header>
-<p id="last"></p>
-<div id="clockbar" hidden></div>
+<p id="last" aria-live="polite"></p>
+<div id="clockbar" role="status" aria-live="polite" hidden></div>
 
 <section id="virtual" hidden>
   <h2>Virtual device</h2>
@@ -242,6 +254,11 @@
 const $ = s => document.querySelector(s);
 let soundSeq = null;
 
+// Escape user-supplied strings (event/timer names from the config) before they
+// go into innerHTML - they are echoed into the event table on a no-auth page.
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
 async function api(path, opts) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => null);
@@ -270,6 +287,14 @@ async function refreshStatus() {
     const badge = $('#state');
     badge.textContent = d.state;
     badge.className = 'badge ' + d.state;
+    // While the device is off, the mode gestures are ignored - disable their
+    // sim buttons (but not the 5-tap, which wakes it) so clicks aren't no-ops.
+    const off = d.state === 'OFF';
+    document.querySelectorAll('[data-trigger]').forEach(b => {
+      if (b.dataset.trigger === 'quintuple_tap') return;
+      b.disabled = off;
+      b.title = off ? 'Device is off - 5-tap to wake' : '';
+    });
     $('#meta').textContent =
       `${d.device_name} · v${d.version} · up ${fmtUptime(d.uptime_s)} · ${d.mode_count} mode${d.mode_count === 1 ? '' : 's'}` +
       (d.mock ? ' · MOCK' : '');
@@ -315,8 +340,8 @@ async function refreshEvents() {
       ? `<table><tr><th>When</th><th>Kind</th><th>Name</th><th>Duration</th></tr>` +
         rows.map(r => `<tr>
           <td>${new Date(r.ts).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</td>
-          <td class="kind-${r.kind}">${r.kind.replace('_', ' ')}</td>
-          <td>${r.name}</td>
+          <td class="kind-${esc(r.kind)}">${esc(r.kind.replace('_', ' '))}</td>
+          <td>${esc(r.name)}</td>
           <td>${r.duration_s != null ? fmtDuration(r.duration_s) : ''}</td>
         </tr>`).join('') + '</table>'
       : '<p class="empty">No events yet - log and timer actions will show up here.</p>';

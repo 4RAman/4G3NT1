@@ -104,9 +104,12 @@ const WIDGETS = {
   // how the enter_mode picker lists the current takeover modes. Same
   // { el, validate } contract.
   select(spec, obj, onInput, ctx) {
-    const options = typeof spec.options === 'function' ? (spec.options(ctx) || []) : (spec.options || []);
+    // Recomputed each call so dynamic options (e.g. the enter_mode target list)
+    // reflect the current siblings at validate time, not just at render time.
+    const currentOptions = () =>
+      (typeof spec.options === 'function' ? (spec.options(ctx) || []) : (spec.options || []));
     const input = el('select', { className: 'inp' },
-      options.map((o) => el('option', { value: o.value, textContent: o.label })));
+      currentOptions().map((o) => el('option', { value: o.value, textContent: o.label })));
     // Reflect the current value even if it is not (yet) in the list.
     input.value = obj[spec.key] ?? '';
     const err = errLine();
@@ -117,9 +120,21 @@ const WIDGETS = {
     return {
       el: wrap(spec, input, err),
       validate() {
-        const msg = requiredError(spec, obj[spec.key]);
-        err.textContent = msg ? 'Required' : '';
-        return msg;
+        const value = obj[spec.key];
+        const reqMsg = requiredError(spec, value);
+        if (reqMsg) {
+          err.textContent = 'Required';
+          return reqMsg;
+        }
+        // A non-empty value that matches no current option - e.g. an enter_mode
+        // target whose mode was renamed or deleted - is invalid (it would fail
+        // at runtime), so surface it instead of silently saving a dead link.
+        if (value && !currentOptions().some((o) => o.value === value)) {
+          err.textContent = 'Unavailable';
+          return `${spec.label}: “${value}” is no longer available`;
+        }
+        err.textContent = '';
+        return null;
       },
     };
   },

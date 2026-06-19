@@ -49,6 +49,20 @@ test('select widget with static options sets the value', () => {
   assert.equal(obj.cmd, 'start_pause');
 });
 
+test('select flags a value that is no longer an option (stale enter_mode target)', () => {
+  const obj = { target: 'Focus' };
+  let modes = [{ value: 'Focus', label: 'Focus' }];
+  const field = createField({
+    key: 'target', label: 'Mode to enter', kind: 'select', required: true,
+    options: () => modes,
+  }, obj, () => {});
+  assert.equal(field.validate(), null);             // Focus is a current option
+  modes = [{ value: 'Water', label: 'Water' }];     // Focus renamed/deleted
+  assert.match(field.validate(), /no longer available/);
+  obj.target = '';
+  assert.match(field.validate(), /required/i);       // empty required still caught
+});
+
 test('select widget supports dynamic options via ctx', () => {
   const obj = {};
   const field = createField({

@@ -57,6 +57,7 @@ export class ModeEditor {
   _summaryHead() {
     this.toggle = el('button', {
       type: 'button', className: 'mode-toggle', title: 'Expand / collapse',
+      'aria-label': 'Expand or collapse mode',
     });
     this.toggle.addEventListener('click', () => {
       this.expanded = !this.expanded;
@@ -81,7 +82,10 @@ export class ModeEditor {
   }
 
   _applyExpanded() {
-    if (this.toggle) this.toggle.textContent = this.expanded ? '▾' : '▸';
+    if (this.toggle) {
+      this.toggle.textContent = this.expanded ? '▾' : '▸';
+      this.toggle.setAttribute('aria-expanded', String(this.expanded));
+    }
     if (this.bodyEl) this.bodyEl.hidden = !this.expanded;
     this.el.classList.toggle('expanded', this.expanded);
   }
@@ -105,7 +109,10 @@ export class ModeEditor {
     });
 
     const btn = (text, title, cls, fn) => {
-      const b = el('button', { type: 'button', className: `mini ${cls}`, textContent: text, title });
+      const b = el('button', {
+        type: 'button', className: `mini ${cls}`, textContent: text,
+        title, 'aria-label': title,
+      });
       b.addEventListener('click', fn);
       return b;
     };

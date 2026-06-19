@@ -72,3 +72,15 @@ test('load() normalizes, then Add inserts above the floor', async () => {
   assert.equal(menu.model.modes.at(-1).name, 'Default');
   assert.equal(menu.model.modes.at(-2).name, 'New mode');
 });
+
+test('_setBusy disables and re-enables the action bar', async () => {
+  const api = { get: async () => ({ effective: { modes: [] }, warnings: [] }) };
+  const menu = new ConfigMenu(document.createElement('div'), api);
+  await menu.load();  // renders the bar (normalizeDefault adds a Default)
+  const bar = () => [...menu.root.querySelectorAll('.menu-bar button')];
+  assert.ok(bar().length > 0);
+  menu._setBusy(true);
+  assert.ok(bar().every((b) => b.disabled));
+  menu._setBusy(false);
+  assert.ok(bar().every((b) => !b.disabled));
+});

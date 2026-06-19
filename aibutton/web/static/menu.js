@@ -16,6 +16,18 @@ export class ConfigMenu {
     this.api = api;
     this.model = null; // working copy of the effective config
     this.dirty = false;
+    // Warn before leaving with unsaved edits (reload / close / back).
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', (e) => {
+        if (this.dirty) { e.preventDefault(); e.returnValue = ''; }
+      });
+    }
+  }
+
+  // Disable the action bar while a save/check request is in flight (no
+  // double-submit, and a clear "working" affordance).
+  _setBusy(busy) {
+    for (const b of this.root.querySelectorAll('.menu-bar button')) b.disabled = busy;
   }
 
   async load() {
@@ -190,6 +202,7 @@ export class ConfigMenu {
   async check() {
     const errors = this._collectErrors();
     if (errors.length) return this._showResult('err', `Fix these first:\n• ${errors.join('\n• ')}`);
+    this._setBusy(true);
     try {
       const res = await this.api.validate(this.model);
       this._showResult(
@@ -198,12 +211,15 @@ export class ConfigMenu {
       );
     } catch (err) {
       this._showResult('err', `Check failed: ${err.message}`);
+    } finally {
+      this._setBusy(false);
     }
   }
 
   async save() {
     const errors = this._collectErrors();
     if (errors.length) return this._showResult('err', `Fix these first:\n• ${errors.join('\n• ')}`);
+    this._setBusy(true);
     try {
       const res = await this.api.put(this.model);
       // Re-seed from the normalized server result so the form shows exactly
@@ -212,12 +228,13 @@ export class ConfigMenu {
       if (!Array.isArray(this.model.modes)) this.model.modes = [];
       this._normalizeDefault();
       this.dirty = false;
-      this._render();
+      this._render();  // rebuilds the bar (fresh, enabled buttons)
       this._showResult(
         res.warnings.length ? 'warn' : 'ok',
         res.warnings.length ? `Saved with warnings:\n${res.warnings.join('\n')}` : 'Saved & applied.',
       );
     } catch (err) {
+      this._setBusy(false);  // on error the bar is unchanged - re-enable it
       this._showResult('err', `Save failed: ${err.message}`);
     }
   }
