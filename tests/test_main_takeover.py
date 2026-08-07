@@ -1,12 +1,12 @@
-"""End-to-end-ish driving of aibutton.main.run for the Phase 2 takeover
-modes: a Default actions mode whose gestures enter_mode into a stopwatch and
-into a counter, then drive those takeovers and assert the store side effects.
+"""End-to-end-ish driving of aibutton.main.run for the takeover modes: a
+Default actions mode whose gestures enter_mode into a stopwatch and into a
+counter, then drive those takeovers and assert the store side effects.
 
-run() owns the button listener, so we patch ButtonListener with a fake that
-exposes a queue we control. Presses are fed one at a time and we wait for each
-to be consumed before feeding the next, so the run loop and the takeover
-handlers (which read the same queue directly) see them in order without races.
-The AI/BLE/web are all off (--mock --no-ble --no-web), sounds are disabled.
+run() takes the ButtonDevice, so the test injects a MockDevice and presses
+it. Presses are fed one at a time and we wait for each to be consumed before
+feeding the next, so the run loop and the takeover handlers (which read the
+same queue directly) see them in order without races. The web UI is off
+(--no-web) and sounds are disabled.
 """
 
 import asyncio
@@ -15,19 +15,8 @@ import json
 import pytest
 
 import aibutton.main as main
-from aibutton.button import TriggerType
+from aibutton.device import MockDevice, TriggerType
 from aibutton.store import EventStore
-
-
-class _FakeListener:
-    """Stands in for ButtonListener: just a queue + close()."""
-
-    def __init__(self):
-        self.events: asyncio.Queue = asyncio.Queue()
-
-    def close(self):
-        pass
-
 
 CONFIG = {
     "sounds_enabled": False,
@@ -74,22 +63,18 @@ async def test_run_enter_mode_stopwatch_then_counter(tmp_path, monkeypatch):
     CONFIG_DB = dict(CONFIG, database_path=str(db_path))
     cfg_path.write_text(json.dumps(CONFIG_DB), encoding="utf-8")
 
-    listener = _FakeListener()
+    device = MockDevice()
     monkeypatch.setattr(main, "_SUCCESS_DISPLAY_S", 0.05)
     monkeypatch.setattr(main, "_ERROR_DISPLAY_S", 0.05)
 
-    args = main._parse_args(["--mock", "--no-ble", "--no-web", "--config", str(cfg_path)])
+    args = main._parse_args(["--no-web", "--config", str(cfg_path)])
 
-    # Patch ButtonListener (imported inside run()) to our fake.
-    import aibutton.button as button_mod
-    monkeypatch.setattr(button_mod, "ButtonListener", lambda *a, **k: listener)
-
-    run_task = asyncio.create_task(main.run(args))
+    run_task = asyncio.create_task(main.run(args, device=device))
     await asyncio.sleep(0.1)  # let run() reach the main loop
 
     async def feed(trigger: TriggerType):
-        listener.events.put_nowait(trigger)
-        await _drain(listener.events)
+        device.press(trigger)
+        await _drain(device.events)
         await asyncio.sleep(0.05)  # let the consumer act on it
 
     try:
@@ -119,7 +104,7 @@ async def test_run_enter_mode_stopwatch_then_counter(tmp_path, monkeypatch):
     finally:
         store.close()
 
-    kinds_names = [(kind, name) for (_ts, kind, name, _dur) in rows]
+    kinds_names = [(kind, name) for (_ts, kind, name, _dur, _mode) in rows]
 
     # Stopwatch: exactly one timer_start + one timer_stop for "focus", plus a
     # lap log row.
@@ -129,3 +114,16 @@ async def test_run_enter_mode_stopwatch_then_counter(tmp_path, monkeypatch):
 
     # Counter: two "water" log rows (one per increment).
     assert kinds_names.count(("log", "water")) == 2
+
+    # Every row fired while a takeover mode owned the button is attributed to
+    # that mode, not left blank.
+    modes_by_name = {name: mode for (_ts, _kind, name, _dur, mode) in rows}
+    assert modes_by_name["focus"] == "Focus"
+    assert modes_by_name["focus_lap"] == "Focus"
+    assert modes_by_name["water"] == "Water"
+
+    # Each takeover session logs its own enter/exit lifecycle.
+    assert kinds_names.count(("mode_enter", "Focus")) == 1
+    assert kinds_names.count(("mode_exit", "Focus")) == 1
+    assert kinds_names.count(("mode_enter", "Water")) == 1
+    assert kinds_names.count(("mode_exit", "Water")) == 1

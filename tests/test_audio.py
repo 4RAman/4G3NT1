@@ -1,7 +1,7 @@
-import asyncio
 import wave
 
-from aibutton.audio import _TONES, Sound, SoundPlayer, write_tone_wav
+from aibutton.audio import _TONES, ToneLibrary, write_tone_wav
+from aibutton.device import Sound
 
 
 def test_all_tones_produce_valid_wavs(tmp_path):
@@ -17,92 +17,16 @@ def test_all_tones_produce_valid_wavs(tmp_path):
             assert abs(actual_ms - expected_ms) < 5
 
 
-async def test_player_noops_without_aplay_or_when_disabled(monkeypatch):
-    monkeypatch.setattr("aibutton.audio.shutil.which", lambda _: None)
-    player = SoundPlayer(enabled=True)
-    player.play(Sound.ACK)  # must not raise
-    player.close()
-
-    disabled = SoundPlayer(enabled=False)
-    disabled.play(Sound.ERROR)
-    disabled.close()
+def test_every_sound_command_has_a_tone():
+    # The web UI serves one WAV per Sound; a new command without a tone
+    # would 404 the virtual device panel instead of failing loudly here.
+    assert set(_TONES) == set(Sound)
 
 
-def test_wavs_synthesized_even_without_aplay(monkeypatch):
-    # the web UI serves these for browser playback, aplay or not
-    monkeypatch.setattr("aibutton.audio.shutil.which", lambda _: None)
-    player = SoundPlayer(enabled=True)
-    for sound in Sound:
-        path = player.path_for(sound)
-        assert path is not None and path.exists()
-    player.close()
-    assert not player.path_for(Sound.ACK).exists()  # cleaned up
-
-
-async def test_start_loop_noop_when_disabled(monkeypatch):
-    monkeypatch.setattr("aibutton.audio.shutil.which", lambda _: None)
-    player = SoundPlayer(enabled=True)  # aplay missing -> disabled
-    player.start_loop(Sound.ALARM)
-    assert player._loop_task is None
-    player.close()
-
-
-async def test_start_loop_repeats_until_stopped(monkeypatch):
-    monkeypatch.setattr("aibutton.audio._ALARM_LOOP_GAP_S", 0.001)
-    player = SoundPlayer(enabled=True)
-    player._enabled = True  # force on regardless of aplay availability
-
-    played = []
-
-    async def fake_play(sound):
-        played.append(sound)
-
-    monkeypatch.setattr(player, "_play", fake_play)
-
-    player.start_loop(Sound.ALARM)
-    await asyncio.sleep(0.05)
-    assert len(played) > 1
-    assert all(s == Sound.ALARM for s in played)
-
-    player.stop_loop()
-    count = len(played)
-    await asyncio.sleep(0.05)
-    assert len(played) == count  # no more plays once stopped
-
-    player.close()
-
-
-async def test_start_loop_replaces_running_loop(monkeypatch):
-    monkeypatch.setattr("aibutton.audio._ALARM_LOOP_GAP_S", 0.001)
-    player = SoundPlayer(enabled=True)
-    player._enabled = True
-
-    played = []
-
-    async def fake_play(sound):
-        played.append(sound)
-
-    monkeypatch.setattr(player, "_play", fake_play)
-
-    player.start_loop(Sound.ALARM)
-    await asyncio.sleep(0.02)
-    first_task = player._loop_task
-
-    player.start_loop(Sound.ACK)
-    assert player._loop_task is not first_task
-    await asyncio.sleep(0.02)
-    assert Sound.ACK in played
-
-    player.close()
-
-
-async def test_close_stops_loop(monkeypatch):
-    monkeypatch.setattr("aibutton.audio._ALARM_LOOP_GAP_S", 0.001)
-    player = SoundPlayer(enabled=True)
-    player._enabled = True
-    monkeypatch.setattr(player, "_play", lambda sound: asyncio.sleep(0))
-
-    player.start_loop(Sound.ALARM)
-    await asyncio.sleep(0.01)
-    player.close()
-    assert player._loop_task is None
+def test_library_writes_and_cleans_up_every_wav():
+    tones = ToneLibrary()
+    paths = [tones.path_for(sound) for sound in Sound]
+    assert all(p is not None and p.exists() for p in paths)
+    tones.close()
+    assert not any(p.exists() for p in paths)
+    tones.close()  # idempotent

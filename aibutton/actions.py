@@ -1,12 +1,12 @@
-"""Executors for the prompt/log/timer_toggle/webhook action primitives.
+"""Executors for the log/timer_toggle/webhook action primitives.
 
 execute() returns an ActionResult instead of raising for expected
-failures (AI backends down, webhook 5xx/unreachable) - main.py maps
-ok/not-ok onto LED, sound, and BLE without caring which primitive ran.
+failures (a webhook 5xx or unreachable host) - main.py maps ok/not-ok
+onto the LED and sound without caring which primitive ran.
 
 The webhook primitive is the entire IFTTT/Make/n8n/Home Assistant
 integration surface: anything smarter than these primitives should live
-on the receiving end of a webhook, not in the button.
+on the receiving end of a webhook, not in the button - AI included.
 
 Alarm modes are *not* handled here: ringing until dismissed/snoozed needs
 the LED/sound/button-event loop that only main.py's run() owns (its
@@ -21,14 +21,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from .ai_client import AIUnavailableError
-from .config import (
-    Action,
-    LogAction,
-    PromptAction,
-    TimerToggleAction,
-    WebhookAction,
-)
+from .config import Action, LogAction, TimerToggleAction, WebhookAction
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +31,7 @@ WEBHOOK_TIMEOUT_S = 5.0
 @dataclass(frozen=True)
 class ActionResult:
     ok: bool
-    message: str  # human-readable; sent to BLE RESPONSE_CHAR on success
+    message: str  # human-readable; shown in the web UI / REST status
 
 
 def _fmt_elapsed(seconds: float) -> str:
@@ -61,18 +54,11 @@ async def execute(
     *,
     trigger: str,
     mode_name: str,
-    ai,
     store,
     webhook_transport: httpx.AsyncBaseTransport | None = None,
 ) -> ActionResult:
-    if isinstance(action, PromptAction):
-        try:
-            return ActionResult(True, await ai.query(action.prompt))
-        except AIUnavailableError as exc:
-            return ActionResult(False, f"AI unavailable: {exc}")
-
     if isinstance(action, LogAction):
-        ts = store.log_event(action.event)
+        ts = store.log_event(action.event, mode=mode_name)
         message = f"Logged {action.event} at {ts.astimezone():%H:%M}"
         count = store.count_today(action.event)
         streak = store.current_streak(action.event)
@@ -86,7 +72,7 @@ async def execute(
         return ActionResult(True, message)
 
     if isinstance(action, TimerToggleAction):
-        state, elapsed = store.toggle_timer(action.log_as)
+        state, elapsed = store.toggle_timer(action.log_as, mode=mode_name)
         if state == "started":
             return ActionResult(True, f"{action.log_as} timer started")
         message = f"{action.log_as} stopped after {_fmt_elapsed(elapsed)}"

@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from aibutton.store import EventStore
@@ -137,4 +138,79 @@ def test_total_today(tmp_path):
     _insert(store, "timer_stop", "focus", days_ago=1, duration_s=1200)
     assert store.total_today("focus") == 1500
     assert store.total_today("break") == 0
+    store.close()
+
+
+# --- the mode column -----------------------------------------------------
+
+def test_log_event_records_mode(tmp_path):
+    store = EventStore(str(tmp_path / "events.db"))
+    store.log_event("meds_taken", mode="Default")
+    row = store.recent()[0]
+    assert row == (row[0], "log", "meds_taken", None, "Default")
+    store.close()
+
+
+def test_log_event_mode_defaults_to_none(tmp_path):
+    store = EventStore(str(tmp_path / "events.db"))
+    store.log_event("meds_taken")
+    assert store.recent()[0][4] is None
+    store.close()
+
+
+def test_toggle_timer_records_mode_on_both_rows(tmp_path):
+    store = EventStore(str(tmp_path / "events.db"))
+    store.toggle_timer("focus", mode="Default")
+    store.toggle_timer("focus", mode="Default")
+    rows = store.recent()
+    assert [r[4] for r in rows] == ["Default", "Default"]
+    store.close()
+
+
+def test_migration_adds_mode_column_to_an_existing_db(tmp_path):
+    """A DB written by the pre-`mode` schema must open cleanly and keep its
+    old rows readable, with `mode` coming back as NULL for them."""
+    path = tmp_path / "events.db"
+    old_schema = """
+    CREATE TABLE events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        duration_s REAL
+    )
+    """
+    conn = sqlite3.connect(path)
+    conn.execute(old_schema)
+    conn.execute(
+        "INSERT INTO events (ts, kind, name) VALUES (?, 'log', 'legacy')",
+        (datetime.now(timezone.utc).isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+    store = EventStore(str(path))
+    try:
+        rows = store.recent()
+        assert rows[0][2] == "legacy"
+        assert rows[0][4] is None  # no mode recorded before the migration
+        store.log_event("fresh", mode="Default")  # new inserts still work
+        assert store.recent()[0][4] == "Default"
+    finally:
+        store.close()
+
+
+# --- takeover mode lifecycle ----------------------------------------------
+
+def test_mode_enter_then_exit_records_duration(tmp_path):
+    store = EventStore(str(tmp_path / "events.db"))
+    entered_at = store.log_mode_enter("Focus")
+    elapsed = store.log_mode_exit("Focus", entered_at)
+    assert elapsed >= 0
+    rows = store.recent()
+    exit_row, enter_row = rows[0], rows[1]
+    assert (enter_row[1], enter_row[2], enter_row[4]) == ("mode_enter", "Focus", "Focus")
+    assert enter_row[3] is None  # no duration on entry
+    assert (exit_row[1], exit_row[2], exit_row[4]) == ("mode_exit", "Focus", "Focus")
+    assert exit_row[3] == elapsed
     store.close()

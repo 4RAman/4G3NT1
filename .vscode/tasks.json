@@ -1,0 +1,88 @@
+{
+  // The mpremote workflow, one keystroke each - this is what replaces
+  // PlatformIO's upload button (PlatformIO builds C/C++ and has no
+  // MicroPython framework, see firmware/README.md).
+  //
+  // No COM port is given anywhere: mpremote uses the only attached board.
+  // With more than one plugged in, add `connect COM5` right after
+  // `-m mpremote` in the task you are running, or run `mpremote devs` to
+  // see what is there.
+  "version": "2.0.0",
+  "options": {
+    "env": {
+      "PY": "${workspaceFolder}\\.venv\\Scripts\\python.exe"
+    }
+  },
+  "tasks": [
+    {
+      "label": "MicroPython: list devices",
+      "type": "shell",
+      "command": "${env:PY} -m mpremote devs",
+      "problemMatcher": [],
+      "detail": "Which boards are attached, with USB VID:PID (Espressif is 303a)."
+    },
+    {
+      "label": "MicroPython: install aioble on device",
+      "type": "shell",
+      "command": "${env:PY} -m mpremote mip install aioble",
+      "problemMatcher": [],
+      "detail": "One-time, after flashing MicroPython itself. Needs the board online."
+    },
+    {
+      "label": "MicroPython: upload firmware",
+      "type": "shell",
+      // Every module goes to the filesystem root (they import each other by
+      // bare name) and the board is reset so main.py runs the new code.
+      "command": "${env:PY} -m mpremote cp firmware/protocol.py firmware/trigger.py firmware/clock.py firmware/hardware.py firmware/tones.py firmware/led.py firmware/buzzer.py firmware/main.py : + reset",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": [],
+      "detail": "Copy all firmware modules to the device and restart it."
+    },
+    {
+      "label": "MicroPython: REPL",
+      "type": "shell",
+      "command": "${env:PY} -m mpremote repl",
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "focus": true },
+      "detail": "Live REPL and print() output. Ctrl-C stops main.py, Ctrl-D restarts it, Ctrl-] exits."
+    },
+    {
+      "label": "MicroPython: refresh stubs",
+      "type": "shell",
+      "command": "${env:PY} -m pip install -U --target typings --no-user micropython-esp32-stubs",
+      "problemMatcher": [],
+      "detail": "IntelliSense for machine/bluetooth/neopixel. Type-checking only - never imported at runtime."
+    },
+    {
+      "label": "BLE probe",
+      "type": "shell",
+      "command": "${env:PY} tools/ble_probe.py",
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "focus": true },
+      "detail": "Connect over BLE: gestures print as you press; type `idle`, `play ack`, `loop`, `stop`."
+    },
+    {
+      "label": "BLE probe: cycle everything",
+      "type": "shell",
+      "command": "${env:PY} tools/ble_probe.py --cycle",
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated" },
+      "detail": "Phase 2 acceptance: play every LED animation and every tone, then exit."
+    },
+    {
+      "label": "Run the app (web UI)",
+      "type": "shell",
+      "command": "${env:PY} -m aibutton.main --config config.json",
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated" },
+      "detail": "The host app against MockDevice - http://localhost:8080."
+    },
+    {
+      "label": "Tests",
+      "type": "shell",
+      "command": "${env:PY} -m pytest -q",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    }
+  ]
+}

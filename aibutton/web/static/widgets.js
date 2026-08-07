@@ -13,11 +13,14 @@ function errLine() {
 }
 
 // Standard layout: label text above the control, optional hint + error below.
+// The hint carries `data-help`: it's tutorial copy, hidden unless the page's
+// Tips toggle (see help.js) is on, so a form full of fields reads as short
+// labels by default rather than a paragraph per field.
 function wrap(spec, control, errEl) {
   return el('label', { className: 'fld' }, [
     el('span', { className: 'fld-label', textContent: spec.label }),
     control,
-    spec.hint ? el('span', { className: 'fld-hint', textContent: spec.hint }) : null,
+    spec.hint ? el('span', { className: 'fld-hint', 'data-help': true, textContent: spec.hint }) : null,
     errEl,
   ]);
 }
@@ -124,6 +127,30 @@ const WIDGETS = {
     };
   },
 
+  // A colour swatch you can click to open the OS picker, with the hex value
+  // beside it - the hex is what lands in config.json, so it should be
+  // visible and copyable rather than hidden behind a colour well.
+  color(spec, obj, onInput) {
+    const current = obj[spec.key] || '#000000';
+    const input = el('input', { type: 'color', className: 'inp inp-color', value: current });
+    const hex = el('span', { className: 'fld-hex', textContent: current });
+    const err = errLine();
+    input.addEventListener('input', () => {
+      obj[spec.key] = input.value;
+      hex.textContent = input.value;
+      onInput();
+    });
+    return {
+      el: wrap(spec, el('span', { className: 'color-row' }, [input, hex]), err),
+      validate() {
+        const msg = /^#[0-9a-fA-F]{6}$/.test(obj[spec.key] || '')
+          ? null : `${spec.label} must be a colour`;
+        err.textContent = msg ? 'Invalid' : '';
+        return msg;
+      },
+    };
+  },
+
   checkbox(spec, obj, onInput) {
     const input = el('input', { type: 'checkbox', checked: !!obj[spec.key] });
     input.addEventListener('change', () => {
@@ -133,7 +160,7 @@ const WIDGETS = {
     const node = el('label', { className: 'fld fld-check' }, [
       input,
       el('span', { className: 'fld-label', textContent: spec.label }),
-      spec.hint ? el('span', { className: 'fld-hint', textContent: spec.hint }) : null,
+      spec.hint ? el('span', { className: 'fld-hint', 'data-help': true, textContent: spec.hint }) : null,
     ]);
     return { el: node, validate: () => null };
   },

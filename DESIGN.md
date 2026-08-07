@@ -1,9 +1,21 @@
 # Design: the mode machine
 
-Status: **planned** (not yet built). This is the cross-phase reference for
-reworking the button from a flat *rules + actions* model into a **mode
-machine**. Until Phase 1 lands, the shipped behaviour is the one described in
-[README.md](README.md) and [config.py](aibutton/config.py).
+Status: **shipped — this document is history** (Phases 1 and 2 both landed).
+It is retained as the design reference for the mode machine: the rationale,
+the config schema, and the file-by-file shape of the change. The hardware
+split that followed is [DESIGN-ESP32.md](DESIGN-ESP32.md), also done. The
+forward-looking plan is [ROADMAP.md](ROADMAP.md), where "mode" starts being
+called "app" and templates stop being a core concern.
+
+> Two templates have been added since: **pomodoro** and **metronome**, both
+> takeovers. The registry absorbed them exactly as this document predicted —
+> which is the evidence the abstraction was the right one, and also why the
+> next step is making a template cost less than six files.
+
+> One thing here has since been removed: the **`prompt` action**. It went
+> with the on-device AI in Phase 1 of the ESP32 split, so the examples below
+> that use it are historical. Everything else still describes the shipped
+> system.
 
 ## The idea in one line
 
@@ -119,8 +131,8 @@ The menu offers only the valid activations for the chosen template
 
 ### Action primitives (the `actions` template body)
 
-The existing primitives are unchanged — `prompt`, `log`, `timer_toggle`,
-`webhook` — **plus one new primitive**:
+The existing primitives are unchanged — `prompt` (since removed), `log`,
+`timer_toggle`, `webhook` — **plus one new primitive**:
 
 - **`enter_mode`** `{ target }` — switch into the named takeover mode. This is
   how a gesture starts a stopwatch/counter, so "entered by a gesture" needs no
@@ -255,7 +267,7 @@ will be rewritten to a `schedule`d alarm mode plus a Default actions mode.
 - A scheduled alarm firing during another takeover **preempts** it.
 - Old `alarm`-action configs are **dropped with a warning** on load.
 
-## Phasing
+## Phasing (both shipped)
 
 | Phase | Scope |
 |---|---|

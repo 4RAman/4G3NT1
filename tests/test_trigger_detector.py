@@ -1,9 +1,12 @@
 """Timing matrix for the pure TriggerDetector state machine.
 
-Timestamps are plain floats (seconds); no GPIO or event loop involved.
+Timestamps are plain floats (seconds); no hardware or event loop involved.
+These cases are the spec the MicroPython port has to satisfy too - see
+[button.py](../aibutton/button.py).
 """
 
-from aibutton.button import DOUBLE_WINDOW_S, TriggerDetector, TriggerType
+from aibutton.button import DOUBLE_WINDOW_S, TriggerDetector
+from aibutton.device import TriggerType
 
 
 def test_short_press_emits_after_window():

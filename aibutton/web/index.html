@@ -6,110 +6,188 @@
 <title>AI Button</title>
 <style>
   :root {
-    --bg: #111418; --panel: #1a1f26; --line: #2a313b;
+    /* Deep, flat canvas + a slightly raised chrome tone for header/nav/bars -
+       content panes sit directly on --bg so nothing reads as a box nested in
+       a box. --radius is one variable so "not rounded" is one edit, not a
+       hunt: 0 everywhere except the two things that depict a physical round
+       LED (the virtual device disc, a palette swatch) and the small "this is
+       live" status dot, which borrows the same round-light language. */
+    --bg: #0b0d10; --panel: #12151a; --line: #1e242c;
     --text: #d8dee6; --dim: #8a94a3;
     --blue: #4f8ef7; --amber: #e0a93e; --green: #43b97f; --red: #e05c5c;
+    --radius: 0px;
   }
   * { box-sizing: border-box; }
-  body { margin: 0 auto; max-width: 880px; padding: 16px;
-         background: var(--bg); color: var(--text);
-         font: 15px/1.5 system-ui, sans-serif; }
-  h1 { font-size: 20px; margin: 0; }
-  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em;
-       color: var(--dim); margin: 0 0 10px; }
-  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-           margin-bottom: 6px; }
-  #meta, #last { color: var(--dim); font-size: 13px; }
-  #last { margin: 0 0 16px; min-height: 1.4em; overflow-wrap: anywhere; }
-  #clockbar { background: #5c4413; color: #ffd98a; border-radius: 8px;
-              padding: 8px 14px; margin-bottom: 16px; font-size: 14px; }
-  section { background: var(--panel); border: 1px solid var(--line);
-            border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
-  .badge { padding: 2px 10px; border-radius: 99px; font-size: 12px;
-           font-weight: 600; background: var(--line); }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, sans-serif; font-variant-numeric: tabular-nums;
+         overflow: hidden; } /* the app shell owns scrolling; the page itself never does */
+
+  button:focus, input:focus, select:focus, textarea:focus, a:focus { outline: none; }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+  h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+       color: var(--dim); margin: 0 0 10px; font-weight: 600; }
+
+  button { background: #171b21; color: var(--text); border: 1px solid var(--line);
+           border-radius: var(--radius); padding: 7px 14px; font: inherit; cursor: pointer; }
+  button:hover { background: #1c2129; border-color: #333c48; }
+  /* The one accent colour is spent on focus rings and the primary action's
+     border - never as a filled background competing with badge/state hues. */
+  button.primary { border-color: var(--blue); color: #cfe0ff; }
+  button.primary:hover { background: #16202f; }
+  input[type=time], input[type=text], input[type=number], .inp {
+    background: #0d1014; color: var(--text); font: inherit;
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px;
+  }
+  input[type=checkbox] { width: auto; accent-color: var(--blue); }
+
+  /* --- app shell: one fixed-height frame, everything else scrolls inside it --- */
+  .app { height: 100dvh; display: flex; flex-direction: column; }
+
+  .app-header { flex-shrink: 0; background: var(--panel); border-bottom: 1px solid var(--line);
+                padding: 10px 20px; }
+  .header-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #meta { color: var(--dim); font-size: 12px; }
+  #last { color: var(--dim); font-size: 12px; margin: 4px 0 0; min-height: 1.2em;
+          overflow-wrap: anywhere; }
+  /* A test clock is a mode, not an event: a small always-visible chip beside
+     the status line, so turning it on never reflows the page under you. */
+  #clockbar { background: #3a2c10; color: #ffd98a; border: 1px solid #5c4413;
+              border-radius: var(--radius); padding: 3px 10px; font-size: 12px; }
+  /* One switch for every [data-help] node in the page - see help.js. */
+  .help-toggle { margin-left: auto; padding: 3px 10px; font-size: 12px; color: var(--dim); }
+  .help-toggle[aria-pressed="true"] { color: var(--text); border-color: var(--blue); }
+
+  .badge { padding: 2px 10px; border-radius: var(--radius); font-size: 12px; font-weight: 600;
+           background: var(--line); }
   .badge.IDLE { background: #1d3a6e; color: #9ec2ff; }
   .badge.THINKING { background: #5c4413; color: #ffd98a; }
   .badge.SUCCESS { background: #14452e; color: #8fe6bb; }
   .badge.ERROR, .badge.OFFLINE { background: #58201f; color: #ffb3b0; }
-  /* A ringing alarm: urgent, animated so it reads as "act now". */
-  .badge.ALARMING { background: #6e1d1d; color: #ffdede;
-                    animation: alarmPulse .7s steps(1) infinite; }
+  .badge.ALARMING { background: #6e1d1d; color: #ffdede; animation: alarmPulse .7s steps(1) infinite; }
   @keyframes alarmPulse { 0%, 100% { background: #6e1d1d; color: #ffdede; }
                           50% { background: #e05c5c; color: #2a0d0d; } }
-  /* Takeover modes: a running stopwatch (teal/cyan) and an open counter
-     (magenta), distinct from the alarm's red so each reads at a glance. */
   .badge.TIMING { background: #0c4a4a; color: #8ff0ee; }
   .badge.COUNTING { background: #4a1d52; color: #f0b6ff; }
-  button { background: #232a34; color: var(--text); border: 1px solid var(--line);
-           border-radius: 8px; padding: 7px 14px; font: inherit; cursor: pointer; }
-  button:hover { background: #2c3542; }
-  button.primary { background: #1d3a6e; border-color: #2c4f8f; }
-  input[type=time] { background: #0d1014; color: var(--text); font: inherit;
-                     border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
-  .virtual-row { display: flex; align-items: center; gap: 18px; }
-  .led { width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
-         background: #20262e; transition: background .15s; }
-  .led.IDLE { background: var(--blue); animation: breathe 3s ease-in-out infinite; }
-  .led.LISTENING { background: #ffd34d; box-shadow: 0 0 22px #ffd34d99; }
-  /* Thinking: fast rainbow fade, rotating colors - mirrors the hardware LED. */
-  .led.THINKING { animation: rainbow 1s linear infinite; }
-  .led.SUCCESS { background: var(--green); box-shadow: 0 0 22px #43b97f99; }
-  .led.ERROR { background: var(--red); animation: flash .4s steps(1) infinite; }
-  /* Ringing alarm: urgent red/white flash. */
-  .led.ALARMING, .led.ALERT { animation: alarmFlash .5s steps(1) infinite; }
-  /* Stopwatch running: a steady teal/cyan pulse - calm but clearly "live". */
-  .led.TIMING { background: #18c8c0; animation: timingPulse 1.4s ease-in-out infinite; }
-  /* Counter open: a magenta breathe, distinct from the idle blue breathe. */
-  .led.COUNTING { background: #c850e0; animation: countingBreathe 2.2s ease-in-out infinite; }
-  @keyframes breathe { 0%, 100% { opacity: .12; } 50% { opacity: 1; } }
-  @keyframes timingPulse { 0%, 100% { box-shadow: 0 0 8px #18c8c066; opacity: .85; }
-                           50% { box-shadow: 0 0 24px #18c8c0; opacity: 1; } }
-  @keyframes countingBreathe { 0%, 100% { opacity: .3; } 50% { opacity: 1; box-shadow: 0 0 22px #c850e0aa; } }
-  @keyframes flash { 0%, 100% { opacity: 1; } 50% { opacity: .08; } }
-  @keyframes alarmFlash { 0%, 100% { background: var(--red); box-shadow: 0 0 26px #e05c5c; }
-                          50% { background: #ffffff; box-shadow: 0 0 26px #ffffff; } }
-  @keyframes rainbow {
-    0%   { background: hsl(0,   90%, 60%); }
-    17%  { background: hsl(60,  90%, 60%); }
-    33%  { background: hsl(120, 90%, 60%); }
-    50%  { background: hsl(180, 90%, 60%); }
-    67%  { background: hsl(240, 90%, 60%); }
-    83%  { background: hsl(300, 90%, 60%); }
-    100% { background: hsl(360, 90%, 60%); }
+
+  /* --- the two-pane body: device on the left, tabbed work surface on the right --- */
+  .app-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr; }
+  @media (max-width: 900px) {
+    .app-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   }
+
+  .side-pane { background: var(--panel); border-right: 1px solid var(--line);
+               padding: 16px 18px; overflow-y: auto; min-height: 0; }
+  @media (max-width: 900px) {
+    .side-pane { border-right: none; border-bottom: 1px solid var(--line); max-height: 38vh; }
+  }
+  .side-block + .side-block { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .hint { color: var(--dim); font-size: 12px; margin: 8px 0 0; }
+  .virtual-row { display: flex; align-items: center; gap: 18px; }
+  /* static/ledPreview.js paints this from the configured palette, frame by
+     frame, with the same maths the firmware uses - one definition of "what
+     SUCCESS looks like", not two. Stays round: it depicts the physical LED. */
+  .led { width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0; background: #20262e; }
   #vstate { font-weight: 600; }
   #vsound { color: var(--dim); font-size: 13px; }
+
+  .main-pane { min-height: 0; display: flex; flex-direction: column; }
+  .tab-bar { flex-shrink: 0; display: flex; gap: 2px; padding: 0 20px;
+             border-bottom: 1px solid var(--line); background: var(--bg); }
+  .tab-btn { background: none; border: none; color: var(--dim); padding: 12px 14px;
+             font: inherit; font-size: 13px; cursor: pointer;
+             border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn[aria-selected="true"] { color: var(--text); border-bottom-color: var(--blue); }
+
+  .tab-panels { flex: 1; min-height: 0; position: relative; }
+  .tab-panel { position: absolute; inset: 0; overflow-y: auto; padding: 18px 20px; }
+  .tab-panel[hidden] { display: none; }
+  /* Scrollbar hidden, replaced by a fade that only shows where there is more
+     to see in that direction (background-attachment: local clips the fade
+     to the scrolled-past content, so it disappears at the true start/end). */
+  .scroll-fade {
+    scrollbar-width: none; background-color: var(--bg);
+    background-image:
+      linear-gradient(var(--bg) 30%, rgba(0,0,0,0)),
+      linear-gradient(rgba(0,0,0,0), var(--bg) 70%),
+      linear-gradient(to bottom, rgba(0,0,0,.5), rgba(0,0,0,0)),
+      linear-gradient(to top, rgba(0,0,0,.5), rgba(0,0,0,0));
+    background-repeat: no-repeat;
+    background-size: 100% 28px, 100% 28px, 100% 12px, 100% 12px;
+    background-position: top, bottom, top, bottom;
+    background-attachment: local, local, scroll, scroll;
+  }
+  .side-pane.scroll-fade { background-color: var(--panel); }
+  .scroll-fade::-webkit-scrollbar { width: 0; height: 0; }
+
+  .menu-bar { flex-shrink: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+              padding: 12px 20px; background: var(--panel); border-top: 1px solid var(--line); }
+  .menu-status { color: var(--dim); font-size: 12px; }
+  .menu-result { flex-basis: 100%; font-size: 13px; white-space: pre-wrap; margin: 0;
+                 overflow-wrap: anywhere; }
+  .menu-result.ok { color: var(--green); }
+  .menu-result.warn { color: var(--amber); }
+  .menu-result.err { color: var(--red); }
+
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
   th { color: var(--dim); font-weight: 500; }
   .kind-log { color: var(--green); }
   .kind-timer_start { color: var(--amber); }
-  .kind-timer_stop { color: var(--blue); }
+  .kind-mode_enter { color: var(--blue); }
+  .kind-mode_exit { color: var(--dim); }
   .empty { color: var(--dim); font-size: 13px; }
-  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
-  .hint { color: var(--dim); font-size: 12px; margin: 8px 0 0; }
 
   /* --- config menu ------------------------------------------------- */
-  .menu-h { font-size: 15px; margin: 18px 0 2px; }
-  .menu-h:first-child { margin-top: 0; }
+  .menu-h { font-size: 15px; margin: 0 0 2px; }
   .menu-hint { color: var(--dim); font-size: 12px; margin: 0 0 10px; }
-  /* --- collapsible mode cards --- */
-  .mode-card { border: 1px solid var(--line); border-radius: 8px;
-               margin-bottom: 8px; background: #161b22; }
-  .mode-card.expanded { background: #181d25; }
-  .mode-head { display: flex; gap: 8px; align-items: baseline;
-               padding: 9px 12px; cursor: default; }
-  .mode-toggle { background: none; border: none; color: var(--dim);
-                 padding: 0 2px; font-size: 13px; cursor: pointer; line-height: 1; }
-  .mode-toggle:hover { background: none; color: var(--text); }
-  .mode-summary { flex: 1; font-size: 13px; overflow-wrap: anywhere; }
-  .mode-sum-name { font-weight: 600; color: var(--text); }
-  .mode-sum-sep { color: var(--line); }
-  .mode-sum-act { color: var(--amber); }
-  .mode-sum-tpl { color: var(--dim); }
-  .mode-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; }
-  .mode-body[hidden] { display: none; }
-  .mode-edit-head { display: flex; gap: 6px; align-items: center; }
+  .primer { border-left: 2px solid var(--blue); padding: 2px 0 2px 12px; margin: 0 0 18px; }
+  .primer-lead { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+  .primer-list { margin: 0; padding-left: 18px; color: var(--dim); font-size: 12px; line-height: 1.55; }
+  .primer-line { margin-bottom: 3px; }
+
+  /* --- modes: master/detail, not a stack of accordions --- */
+  .mode-layout { display: flex; gap: 20px; align-items: flex-start; }
+  /* The tab panel is the scroll container (nav + detail scroll together);
+     pinning the nav keeps the mode list and "+ Add mode" reachable while a
+     long detail form scrolls underneath, the way a real master/detail split
+     behaves. */
+  .mode-nav-col { flex-shrink: 0; width: 250px; display: flex; flex-direction: column; gap: 12px;
+                  position: sticky; top: 0; background: var(--bg); }
+  .mode-nav-group { margin-bottom: 16px; }
+  .mode-nav-group-title { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+                           color: var(--text); margin: 0 0 3px; }
+  .mode-nav-group-hint { font-size: 11px; color: var(--dim); line-height: 1.5; margin: 0 0 8px; }
+  .mode-nav-empty { font-size: 12px; padding: 2px 0; }
+  .mode-nav-item { display: flex; align-items: center; gap: 8px; width: 100%;
+                   text-align: left; background: none; border: none;
+                   border-left: 2px solid transparent; border-radius: 0;
+                   padding: 7px 8px; margin: 0 0 2px -2px; cursor: pointer; }
+  .mode-nav-item:hover { background: #1a1f26; }
+  .mode-nav-item.selected { background: #161b22; border-left-color: var(--blue); }
+  .mode-nav-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis;
+                   white-space: nowrap; max-width: 100px; }
+  .mode-nav-summary { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis;
+                      white-space: nowrap; flex: 1; min-width: 0; }
+  /* A live "this is the one answering presses right now" light - round, like
+     the physical LED it is standing in for. */
+  .mode-active-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+                      background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+  .mode-detail { flex: 1; min-width: 0; }
+  .mode-detail-empty { color: var(--dim); font-size: 13px; padding: 8px 0; }
+  .mode-active { font-size: 11px; font-weight: 600; color: var(--green); white-space: nowrap; }
+  .howto { border-left: 2px solid var(--line); margin-left: 4px; padding: 2px 0 2px 12px; }
+  .howto[hidden] { display: none; }
+  .howto-line { margin: 0 0 3px; color: var(--dim); font-size: 12px; }
+  .howto-line:last-child { margin-bottom: 0; }
+  .howto-warn { color: var(--amber); }
+  .mode-body { display: flex; flex-direction: column; gap: 12px; }
+  .mode-edit-head { display: flex; gap: 8px; align-items: center; }
   .mode-name { flex: 1; font-weight: 600; }
   .pick-row { display: flex; flex-direction: column; gap: 8px; }
   .pick-head { display: flex; gap: 10px; align-items: center; }
@@ -121,33 +199,38 @@
   .tpl-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
   .mini { padding: 4px 9px; line-height: 1; }
   .mini.danger { color: #ffb3b0; border-color: #58201f; }
-  .scope-box { border-left: 2px solid var(--line); margin: 10px 0;
-               padding: 4px 0 4px 12px; display: flex; flex-direction: column; gap: 8px; }
   .scope-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .scope-lbl { color: var(--dim); font-size: 12px; min-width: 200px; }
   .sep { color: var(--dim); }
   .days-row { gap: 6px; }
-  .day-pill { display: inline-flex; align-items: center; gap: 4px;
-              font-size: 12px; color: var(--dim); }
-  .gestures { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+  .day-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--dim); }
+  .gestures { display: flex; flex-direction: column; gap: 10px; margin-top: 2px; }
   .gesture-row { border-top: 1px solid var(--line); padding-top: 10px; }
   .gesture-head { display: flex; gap: 10px; align-items: center; }
-  .gesture-name { color: var(--blue); min-width: 96px; font-size: 13px; }
-  .gesture-fields { display: flex; flex-direction: column; gap: 8px;
-                    margin: 8px 0 0 96px; }
+  .gesture-name { min-width: 96px; font-size: 13px; font-weight: 600; }
+  .gesture-fields { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 0 96px; }
   .add-mode { margin-top: 2px; }
-  /* Device settings live in a collapsed drawer so they stay out of the way. */
-  .settings-drawer { margin-top: 18px; border: 1px solid var(--line);
-                     border-radius: 8px; background: #161b22; }
-  .settings-summary { cursor: pointer; padding: 10px 12px; font-size: 14px;
-                      font-weight: 600; color: var(--text); list-style: none; }
-  .settings-summary::-webkit-details-marker { display: none; }
-  .settings-summary::before { content: '▸ '; color: var(--dim); }
-  .settings-drawer[open] .settings-summary::before { content: '▾ '; }
-  .settings-drawer[open] .settings-summary { border-bottom: 1px solid var(--line); }
-  .settings-drawer .settings-wrap { padding: 12px; }
-  .settings-wrap { display: flex; flex-direction: column; gap: 14px; }
-  .settings-title { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+  .add-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .builtin-wrap { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .builtin-pick { max-width: 100%; }
+  .builtin-blurb { color: var(--dim); font-size: 12px; }
+
+  /* --- lights: one flat divided list, no nested boxes --- */
+  .palette-row { border-bottom: 1px solid var(--line); padding: 12px 0; }
+  .palette-row:first-child { padding-top: 0; }
+  .palette-row:last-child { border-bottom: none; padding-bottom: 0; }
+  .palette-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  /* Stays round: it depicts the physical LED. */
+  .palette-swatch { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; background: #20262e; }
+  .palette-name { font-weight: 600; }
+  .palette-meaning { color: var(--dim); font-size: 12px; }
+  .palette-summary { color: var(--dim); font-size: 12px; margin-left: auto; }
+  .color-row { display: flex; align-items: center; gap: 8px; }
+  .inp-color { width: 46px; height: 30px; padding: 2px; cursor: pointer; }
+  .fld-hex { color: var(--dim); font-size: 12px; font-family: ui-monospace, monospace; }
+
+  .settings-wrap { display: flex; flex-direction: column; gap: 18px; }
+  .settings-title { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
                     color: var(--dim); margin: 0 0 8px; }
   .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
   .fld { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
@@ -155,73 +238,105 @@
   .fld-label { color: var(--dim); font-size: 12px; }
   .fld-hint { color: var(--dim); font-size: 11px; }
   .fld-err { color: var(--red); font-size: 11px; min-height: 0; }
-  .inp { width: 100%; background: #0d1014; color: var(--text); font: inherit;
-         border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  .inp { width: 100%; }
   .inp.mono { font: 13px/1.45 ui-monospace, monospace; }
   textarea.inp { resize: vertical; }
-  input[type=checkbox] { width: auto; accent-color: var(--blue); }
-  .menu-bar { display: flex; gap: 8px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
-  .menu-status { color: var(--dim); font-size: 12px; }
-  .menu-result { font-size: 13px; white-space: pre-wrap; margin: 10px 0 0; overflow-wrap: anywhere; }
-  .menu-result.ok { color: var(--green); }
-  .menu-result.warn { color: var(--amber); }
-  .menu-result.err { color: var(--red); }
 </style>
 </head>
 <body>
 
-<header>
-  <h1>AI Button</h1>
-  <span id="state" class="badge">…</span>
-  <span id="meta"></span>
-</header>
-<p id="last"></p>
-<div id="clockbar" hidden></div>
-
-<section id="virtual" hidden>
-  <h2>Virtual device</h2>
-  <div class="virtual-row">
-    <div id="vled" class="led IDLE"></div>
-    <div>
-      <div id="vstate">IDLE</div>
-      <div id="vsound">no sound yet</div>
+<div class="app">
+  <header class="app-header">
+    <div class="header-row">
+      <h1>AI Button</h1>
+      <span id="state" class="badge">…</span>
+      <span id="meta"></span>
+      <span id="clockbar" hidden></span>
+      <button type="button" id="help-toggle" class="help-toggle" aria-pressed="false">ⓘ Tips</button>
     </div>
-  </div>
-</section>
+    <p id="last"></p>
+  </header>
 
-<section>
-  <h2>Dev controls</h2>
-  <div class="row">
-    <button data-trigger="short_press">Short press</button>
-    <button data-trigger="long_press">Long press</button>
-    <button data-trigger="double_tap">Double tap</button>
-  </div>
-  <div class="row">
-    <input type="time" id="clock-input" step="60">
-    <button id="clock-set">Set test clock</button>
-    <button id="clock-clear">Real time</button>
-  </div>
-  <p class="hint">The test clock shifts what time the device thinks it is -
-  set 06:30 to try a 5-7am window mode, or 06:59 to watch a 07:00 alarm fire.
-  It keeps ticking, never persists across restarts, and doesn't change
-  event-log timestamps.</p>
-</section>
+  <div class="app-body">
+    <aside class="side-pane scroll-fade">
+      <div id="virtual" class="side-block" hidden>
+        <h2>Virtual device</h2>
+        <div class="virtual-row">
+          <div id="vled" class="led IDLE"></div>
+          <div>
+            <div id="vstate">IDLE</div>
+            <div id="vsound">no sound yet</div>
+          </div>
+        </div>
+      </div>
 
-<section>
-  <h2>Configure</h2>
-  <div id="config-menu">Loading…</div>
-</section>
+      <div class="side-block">
+        <h2>Press</h2>
+        <div class="row">
+          <button data-trigger="short_press">Short press</button>
+          <button data-trigger="long_press">Long press</button>
+          <button data-trigger="double_tap">Double tap</button>
+        </div>
+      </div>
 
-<section>
-  <h2>Recent events</h2>
-  <div id="events"></div>
-</section>
+      <div class="side-block">
+        <h2>Clock</h2>
+        <div class="row">
+          <input type="time" id="clock-input" step="60">
+          <button id="clock-set">Set</button>
+          <button id="clock-clear">Real time</button>
+        </div>
+        <p class="hint" data-help>Shifts what time the device thinks it is - set
+        06:30 to try a 5-7am window mode, or 06:59 to watch a 07:00 alarm fire.
+        Keeps ticking, never persists, doesn't change event timestamps.</p>
+      </div>
+    </aside>
+
+    <main class="main-pane">
+      <nav class="tab-bar" role="tablist">
+        <button type="button" class="tab-btn" data-tab="modes" role="tab" aria-selected="true">Modes</button>
+        <button type="button" class="tab-btn" data-tab="lights" role="tab" aria-selected="false">Lights</button>
+        <button type="button" class="tab-btn" data-tab="events" role="tab" aria-selected="false">Events</button>
+        <button type="button" class="tab-btn" data-tab="device" role="tab" aria-selected="false">Device</button>
+      </nav>
+      <div class="tab-panels">
+        <section class="tab-panel scroll-fade" data-panel="modes" id="panel-modes">Loading…</section>
+        <section class="tab-panel scroll-fade" data-panel="lights" id="panel-lights" hidden>Loading…</section>
+        <section class="tab-panel scroll-fade" data-panel="events" id="panel-events" hidden>
+          <div id="events"></div>
+        </section>
+        <section class="tab-panel scroll-fade" data-panel="device" id="panel-device" hidden>Loading…</section>
+      </div>
+      <div class="menu-bar" id="menu-bar"></div>
+    </main>
+  </div>
+</div>
+
+<script>
+  // Tabs are page-level (they gate content menu.js renders into each panel),
+  // so this stays a plain inline script rather than living inside a module.
+  (function () {
+    const tabs = document.querySelectorAll('.tab-btn');
+    const panels = document.querySelectorAll('.tab-panel');
+    function activate(name) {
+      tabs.forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
+      panels.forEach((p) => { p.hidden = p.dataset.panel !== name; });
+    }
+    tabs.forEach((t) => t.addEventListener('click', () => activate(t.dataset.tab)));
+  })();
+</script>
+
+<!-- The global Tips toggle - loads first so [data-help] content starts hidden
+     before menu.js has anything to render. -->
+<script type="module" src="/static/help.js"></script>
 
 <!-- Config menu: structured editor, built from ES modules (no build step). -->
 <script type="module" src="/static/menu.js"></script>
 
 <!-- Dashboard: status, virtual device, dev controls, event log. -->
-<script>
+<script type="module">
+import { paint } from '/static/ledPreview.js';
+
 const $ = s => document.querySelector(s);
 let soundSeq = null;
 
@@ -254,7 +369,10 @@ async function refreshStatus() {
     badge.className = 'badge ' + d.state;
     $('#meta').textContent =
       `${d.device_name} · v${d.version} · up ${fmtUptime(d.uptime_s)} · ${d.mode_count} mode${d.mode_count === 1 ? '' : 's'}` +
-      (d.mock ? ' · MOCK' : '');
+      // With a real button, say whether it is actually on the air: the app
+      // runs either way, so "nothing happens when I press it" needs an answer
+      // in the UI rather than in the log.
+      (d.mock ? ' · MOCK' : (d.device_connected ? ' · 🔵 BUTTON CONNECTED' : ' · ⚪ BUTTON OFFLINE'));
     // last_trigger is null for scheduler-fired alarms - still surface the
     // outcome (mode + message) so a fired/dismissed alarm shows in the summary.
     $('#last').textContent = (d.last_trigger || d.last_mode || d.last_message)
@@ -265,17 +383,20 @@ async function refreshStatus() {
         (d.last_message ? ` - ${d.last_ok ? '' : '⚠️ '}${d.last_message}` : '')
       : '';
 
-    // test clock banner
+    // test clock chip
     const bar = $('#clockbar');
     bar.hidden = !d.clock_override;
     if (d.clock_override) {
-      bar.textContent = `⏱ TEST CLOCK ACTIVE - the device thinks it is ${d.now.replace('T', ' ')}`;
+      bar.textContent = `⏱ TEST CLOCK - device thinks it is ${d.now.replace('T', ' ')}`;
     }
 
     // virtual device panel (mock mode only)
     $('#virtual').hidden = !d.mock;
     if (d.mock) {
-      $('#vled').className = 'led ' + d.led_state;
+      // Painted from the configured palette, so the browser shows the same
+      // effect the real LED would - including any colour you have edited.
+      const effect = (d.led_palette || {})[d.led_state];
+      if (effect) paint($('#vled'), effect);
       $('#vstate').textContent = d.led_state;
       if (soundSeq !== null && d.sound_seq !== soundSeq && d.last_sound) {
         new Audio('/api/dev/sound/' + d.last_sound).play().catch(() => {});
@@ -294,14 +415,16 @@ async function refreshEvents() {
   try {
     const rows = await api('/api/events?limit=30');
     $('#events').innerHTML = rows.length
-      ? `<table><tr><th>When</th><th>Kind</th><th>Name</th><th>Duration</th></tr>` +
+      ? `<table><tr><th>When</th><th>Kind</th><th>Name</th><th>Mode</th><th>Duration</th></tr>` +
         rows.map(r => `<tr>
           <td>${new Date(r.ts).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</td>
           <td class="kind-${r.kind}">${r.kind.replace('_', ' ')}</td>
           <td>${r.name}</td>
+          <td>${r.mode ?? ''}</td>
           <td>${r.duration_s != null ? fmtDuration(r.duration_s) : ''}</td>
         </tr>`).join('') + '</table>'
-      : '<p class="empty">No events yet - log and timer actions will show up here.</p>';
+      : '<p class="empty">No events yet.'
+        + '<span data-help> Bind a press to Log/Timer in Modes, then press the button.</span></p>';
   } catch { /* server briefly away; keep last view */ }
 }
 

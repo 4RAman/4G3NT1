@@ -28,24 +28,24 @@ export const DAYS = [
 
 // Names of the templates whose modes are takeovers - the only valid targets
 // for an `enter_mode` action. Mirrors each template's `nature: 'takeover'`.
-const TAKEOVER_TEMPLATES = new Set(['alarm', 'stopwatch', 'counter']);
+const TAKEOVER_TEMPLATES = new Set(['alarm', 'stopwatch', 'counter', 'pomodoro', 'metronome']);
 
-// Action primitives - the body of the `actions` template. The standalone
-// `alarm` action is gone (alarms are now a template); `enter_mode` is the
-// Phase 2 primitive that starts a takeover mode from a gesture.
+// What a gesture can be bound to inside a running Pomodoro. Mirrors
+// POMODORO_COMMANDS in config.py; '' means the gesture does nothing.
+const POMODORO_COMMANDS = [
+  { value: '', label: '- do nothing -' },
+  { value: 'toggle', label: 'Start / pause' },
+  { value: 'restart', label: 'Restart the block' },
+  { value: 'extend', label: 'Add more time' },
+  { value: 'skip', label: 'Skip to the next block' },
+  { value: 'exit', label: 'Leave the Pomodoro' },
+];
+
+// Action primitives - the body of the `actions` template. Two are gone:
+// the standalone `alarm` action (alarms are a template now) and `prompt`
+// (the on-device AI went with the Pi build - reach an AI through a webhook).
+// `enter_mode` starts a takeover mode from a gesture.
 export const ACTIONS = [
-  {
-    type: 'prompt',
-    label: 'Ask the AI',
-    fields: [
-      { key: 'prompt', label: 'Prompt', kind: 'textarea', required: true,
-        hint: 'Sent to the model; its reply is read back and shown.' },
-      { key: 'label', label: 'Short label', kind: 'text',
-        hint: 'Optional name shown in the status line and over Bluetooth.' },
-    ],
-    defaults: () => ({ action: 'prompt', prompt: '', label: '' }),
-    describe: (a) => `Ask the AI: “${a.prompt || '…'}”`,
-  },
   {
     type: 'log',
     label: 'Log an event',
@@ -139,7 +139,7 @@ function fmtDays(days) {
 export const ACTIVATIONS = [
   {
     type: 'always',
-    label: 'Always',
+    label: 'Always on',
     custom: false,
     fields: [],
     defaults: () => ({ type: 'always' }),
@@ -147,7 +147,7 @@ export const ACTIVATIONS = [
   },
   {
     type: 'window',
-    label: 'Time window',
+    label: 'Only during certain hours',
     custom: true, // between [HH:MM,HH:MM] + days editor
     defaults: () => ({ type: 'window' }),
     describe: (a) => {
@@ -159,7 +159,7 @@ export const ACTIVATIONS = [
   },
   {
     type: 'schedule',
-    label: 'At a time',
+    label: 'At a set time each day',
     custom: true, // at HH:MM + days editor
     defaults: () => ({ type: 'schedule', at: '07:00' }),
     describe: (a) => {
@@ -169,11 +169,11 @@ export const ACTIVATIONS = [
   },
   {
     type: 'manual',
-    label: 'Entered from another mode',
+    label: 'Only when another mode starts it',
     custom: false, // no scope fields - reached only via an enter_mode action
     fields: [],
     defaults: () => ({ type: 'manual' }),
-    describe: () => 'entered from another mode',
+    describe: () => 'started by another mode',
   },
 ];
 
@@ -192,6 +192,13 @@ export function describeActivation(activation) {
 // gesture×action sub-editor; `fields` means plain widget fields. `defaults()`
 // returns the flat template fields (no name/template/activation).
 // `describe(mode)` returns a one-line summary of the mode's behaviour.
+//
+// Takeover templates also carry the two things a user needs in order not to
+// feel trapped, as data rather than as branches in the editor:
+//   startedBy  'gesture' (an everyday mode's Enter a mode) | 'schedule'
+//   exits(mode) one plain sentence: which press gets you back out
+// These mirror the takeover loops in main.py - run_alarm, run_stopwatch,
+// run_counter, run_pomodoro. Change a loop, change the sentence.
 export const TEMPLATES = [
   {
     type: 'actions',
@@ -199,22 +206,19 @@ export const TEMPLATES = [
     nature: 'ambient',
     allowedActivations: ['always', 'window'],
     body: 'actions', // gesture×ACTIONS sub-editor + unless_logged_today
-    // A non-empty prompt so a freshly added mode is valid by construction -
+    // A filled-in event name so a freshly added mode is valid by construction -
     // it parses, round-trips, and won't be dropped as an empty actions mode.
     defaults: () => ({
-      short_press: { action: 'prompt', prompt: 'Tell me something interesting.', label: '' },
+      short_press: { action: 'log', event: 'button_press' },
     }),
     describe: (mode) => {
       const parts = [];
       for (const g of GESTURES) {
         const action = mode[g.key];
-        if (action && action.action) {
-          const short = g.label.split(' ')[0].toLowerCase();
-          parts.push(`${short}→${describeAction(action)}`);
-        }
+        if (action && action.action) parts.push(`${g.label} → ${describeAction(action)}`);
       }
-      let summary = parts.length ? parts.join(' · ') : 'no gestures';
-      if (mode.unless_logged_today) summary += ` (unless ${mode.unless_logged_today} logged)`;
+      let summary = parts.length ? parts.join(' · ') : 'nothing bound to any press yet';
+      if (mode.unless_logged_today) summary += ` (skipped once ${mode.unless_logged_today} is logged today)`;
       return summary;
     },
   },
@@ -235,6 +239,10 @@ export const TEMPLATES = [
         hint: 'Optional event name logged when the alarm is dismissed.' },
     ],
     defaults: () => ({ message: '', label: '', snooze_minutes: 0, dismiss_event: '' }),
+    startedBy: 'schedule',
+    exits: (mode) => (Number(mode.snooze_minutes) > 0
+      ? `any press; long press snoozes ${mode.snooze_minutes}m`
+      : 'any press'),
     describe: (mode) => {
       const snooze = Number(mode.snooze_minutes) > 0 ? `, snooze ${mode.snooze_minutes} min` : '';
       return `Alarm${mode.message ? ` “${mode.message}”` : ''}${snooze}`;
@@ -252,6 +260,8 @@ export const TEMPLATES = [
         hint: 'What the elapsed time is logged as; short press laps, long press stops.' },
     ],
     defaults: () => ({ log_as: '' }),
+    startedBy: 'gesture',
+    exits: () => 'long press (short/double = lap)',
     describe: (mode) => `Stopwatch “${mode.log_as || '…'}”`,
   },
   {
@@ -266,11 +276,129 @@ export const TEMPLATES = [
         hint: 'Logged once per increment (short press / double tap); long press exits.' },
     ],
     defaults: () => ({ event: '' }),
+    startedBy: 'gesture',
+    exits: () => 'long press (short/double = +1)',
     describe: (mode) => `Counter “${mode.event || '…'}”`,
+  },
+  {
+    type: 'metronome',
+    label: 'Metronome',
+    nature: 'takeover',
+    allowedActivations: ['manual'], // started by an enter_mode gesture only
+    body: 'fields',
+    fields: [], // no config - the tempo is session state, not stored
+    defaults: () => ({}),
+    startedBy: 'gesture',
+    exits: () => 'long press (short/double = tap the tempo)',
+    describe: () => 'Metronome',
   },
 ];
 
+TEMPLATES.push({
+  type: 'pomodoro',
+  label: 'Pomodoro',
+  nature: 'takeover',
+  allowedActivations: ['manual'], // started by an enter_mode gesture only
+  body: 'fields',
+  fields: [
+    { key: 'work_minutes', label: 'Work minutes', kind: 'number', min: 0.1, step: 1,
+      hint: 'How long one focus block lasts.' },
+    { key: 'break_minutes', label: 'Break minutes', kind: 'number', min: 0.1, step: 1,
+      hint: 'The short break after each work block.' },
+    { key: 'long_break_minutes', label: 'Long break minutes', kind: 'number', min: 0.1, step: 1,
+      hint: 'The longer break you get after the number of blocks set below.' },
+    { key: 'blocks_before_long_break', label: 'Blocks before a long break', kind: 'number', min: 1, step: 1,
+      hint: 'How many work blocks to finish before the long break.' },
+    { key: 'advance', label: 'Between blocks', kind: 'select',
+      hint: 'How much the button asks of you when a block ends.',
+      options: [
+        { value: 'auto', label: 'Start the next block automatically' },
+        { value: 'manual', label: 'Wait for a press every time' },
+        { value: 'break_only', label: 'Breaks start themselves, work waits for a press' },
+      ] },
+    { key: 'extend_minutes', label: 'Minutes added by "Add more time"', kind: 'number', min: 0.1, step: 1,
+      hint: 'How much time the "Add more time" gesture puts back on the clock.' },
+    { key: 'log_as', label: 'Log each finished block as', kind: 'text', required: true,
+      placeholder: 'pomodoro',
+      hint: 'Counted and streak-tracked like any other event.' },
+    { key: 'short_press', label: 'Short press does', kind: 'select', options: POMODORO_COMMANDS,
+      hint: 'What this press does while the Pomodoro is running.' },
+    { key: 'long_press', label: 'Long press does', kind: 'select', options: POMODORO_COMMANDS,
+      hint: 'Leave at least one gesture on "Leave the Pomodoro" or you cannot get out.' },
+    { key: 'double_tap', label: 'Double tap does', kind: 'select', options: POMODORO_COMMANDS,
+      hint: 'What this press does while the Pomodoro is running.' },
+  ],
+  defaults: () => ({
+    work_minutes: 25, break_minutes: 5, long_break_minutes: 15,
+    blocks_before_long_break: 4, extend_minutes: 10, advance: 'auto',
+    log_as: 'pomodoro',
+    short_press: 'toggle', long_press: 'exit', double_tap: 'extend',
+  }),
+  startedBy: 'gesture',
+  exits: (mode) => {
+    const leaving = GESTURES.filter((g) => mode[g.key] === 'exit');
+    if (!leaving.length) return 'nothing set - pick a gesture below';
+    return leaving.map((g) => g.label).join(' or ');
+  },
+  describe: (mode) => {
+    const advance = { auto: 'auto', manual: 'press to advance', break_only: 'auto breaks' };
+    return `Pomodoro ${mode.work_minutes}/${mode.break_minutes}`
+      + ` (${advance[mode.advance] || mode.advance})`;
+  },
+});
+
 export const TEMPLATE_BY_TYPE = Object.fromEntries(TEMPLATES.map((t) => [t.type, t]));
+
+// Ready-made modes, offered next to "+ Add mode". Each is a complete mode
+// object the parser accepts as-is - a starting point to edit, not a special
+// kind of mode. Names are checked for collisions when one is added.
+export const BUILTIN_MODES = [
+  {
+    id: 'pomodoro',
+    label: 'Pomodoro',
+    blurb: '25/5, long break every 4th. Tap = pause, double = +10.',
+    mode: () => ({
+      name: 'Pomodoro', template: 'pomodoro', activation: { type: 'manual' },
+      ...TEMPLATE_BY_TYPE.pomodoro.defaults(),
+    }),
+  },
+  {
+    id: 'gratitude',
+    label: 'Gratitude counter',
+    blurb: 'Tap once per thing you’re grateful for.',
+    mode: () => ({
+      name: 'Gratitude', template: 'counter', activation: { type: 'manual' },
+      event: 'gratitude',
+    }),
+  },
+  {
+    id: 'stopwatch',
+    label: 'Stopwatch',
+    blurb: 'Short press = lap, long press = stop & log.',
+    mode: () => ({
+      name: 'Stopwatch', template: 'stopwatch', activation: { type: 'manual' },
+      log_as: 'stopwatch',
+    }),
+  },
+  {
+    id: 'alarm5am',
+    label: '5AM alarm',
+    blurb: 'Rings 05:00 daily. Long press snoozes 9m.',
+    mode: () => ({
+      name: 'Wake up', template: 'alarm',
+      activation: { type: 'schedule', at: '05:00' },
+      message: 'Wake up', label: '', snooze_minutes: 9, dismiss_event: 'woke_up',
+    }),
+  },
+  {
+    id: 'metronome',
+    label: 'Metronome',
+    blurb: 'Tap out a beat to set the tempo; the LED pulses along with it.',
+    mode: () => ({
+      name: 'Metronome', template: 'metronome', activation: { type: 'manual' },
+    }),
+  },
+];
 
 /** One-line human summary of a mode's behaviour, used by the modes list. */
 export function describeTemplate(mode) {
@@ -278,28 +406,126 @@ export function describeTemplate(mode) {
   return descriptor ? descriptor.describe(mode) : (mode?.template || 'unknown');
 }
 
+// --- explaining the two ways a mode comes on -------------------------------
+// The single most confusing thing about this config is that "switching modes"
+// means two unrelated mechanisms. The editor groups by `nature` and prints
+// these blurbs above each group, so the distinction is stated rather than
+// left to be inferred from which activations a template happens to allow.
+
+export const MODE_GROUPS = [
+  {
+    nature: 'ambient',
+    title: 'Everyday',
+    blurb: 'What a press does normally. The button reads these top to bottom and '
+      + 'uses the first one that is switched on right now and has something set for '
+      + 'the press you made. Order is priority: move a mode up to let it win. A mode '
+      + 'that does not set a gesture passes it down to the next one.',
+    emptyText: 'None yet.',
+  },
+  {
+    nature: 'takeover',
+    title: 'Takeover',
+    blurb: 'While one of these is running it owns every press and your everyday modes '
+      + 'are ignored until you leave it. An alarm starts itself at its set time; the '
+      + 'others are started by an everyday mode with an “Enter a mode” gesture.',
+    emptyText: 'None yet.',
+  },
+];
+
+/** How you leave a takeover mode, in one sentence. Null for everyday modes,
+ *  which are never entered and so never need leaving. */
+export function describeExit(mode) {
+  const descriptor = mode && TEMPLATE_BY_TYPE[mode.template];
+  return descriptor && descriptor.exits ? descriptor.exits(mode) : null;
+}
+
+/** Every gesture, in any other mode, that starts `mode` — the answer to "how
+ *  do I get into this?". An empty list means nothing can start it, which is a
+ *  mode you can configure but never reach. */
+export function findEntryPoints(mode, allModes) {
+  const entries = [];
+  if (!mode || !mode.name) return entries;
+  for (const other of allModes || []) {
+    if (!other || other === mode) continue;
+    for (const gesture of GESTURES) {
+      const action = other[gesture.key];
+      if (action && action.action === 'enter_mode' && action.target === mode.name) {
+        entries.push(`${gesture.label} → ${other.name || '(unnamed)'}`);
+      }
+    }
+  }
+  return entries;
+}
+
+// --- LED palette -----------------------------------------------------------
+// What each device state looks like. Mirrors LedEffect + _default_palette in
+// config.py and the style codes in device.py/firmware/protocol.py; the host
+// pushes any edit to the ESP32, so these are the real LED, not a preview.
+//
+// `uses` says which fields a style actually reads, so the editor can hide the
+// ones that would do nothing (a rainbow has no colour; a solid has no period)
+// rather than inviting edits with no effect. index.html renders the virtual
+// device from these same definitions.
+
+export const LED_STYLES = [
+  { type: 'solid', label: 'Solid', uses: ['color'],
+    describe: () => 'held' },
+  { type: 'breathe', label: 'Breathe', uses: ['color', 'period_s'],
+    describe: (e) => `fading every ${e.period_s}s` },
+  { type: 'flash', label: 'Flash', uses: ['color', 'period_s'],
+    describe: (e) => `blinking every ${e.period_s}s` },
+  { type: 'alternate', label: 'Alternate two colours', uses: ['color', 'color2', 'period_s'],
+    describe: (e) => `swapping every ${e.period_s}s` },
+  { type: 'fade', label: 'Fade between two colours', uses: ['color', 'color2', 'period_s'],
+    describe: (e) => `crossfading every ${e.period_s}s` },
+  { type: 'rainbow', label: 'Rainbow', uses: ['period_s'],
+    describe: (e) => `cycling every ${e.period_s}s` },
+];
+
+export const LED_STYLE_BY_TYPE = Object.fromEntries(LED_STYLES.map((s) => [s.type, s]));
+
+// The states the device can be in, in the order they happen to a press, with
+// what each one means - the editor doubles as the reference for "what is my
+// button telling me?".
+export const LED_STATES = [
+  { key: 'IDLE', label: 'Idle', meaning: 'waiting, nothing going on' },
+  { key: 'LISTENING', label: 'Listening', meaning: 'your press registered' },
+  { key: 'THINKING', label: 'Thinking', meaning: 'running the action' },
+  { key: 'SUCCESS', label: 'Success', meaning: 'the action worked' },
+  { key: 'ERROR', label: 'Error', meaning: 'it failed, or no mode matched' },
+  { key: 'ALERT', label: 'Alarm ringing', meaning: 'an alarm is going off' },
+  { key: 'TIMING', label: 'Stopwatch running', meaning: 'a stopwatch is open' },
+  { key: 'COUNTING', label: 'Counter open', meaning: 'a counter is open' },
+  { key: 'WORKING', label: 'Pomodoro working', meaning: 'a work block is running' },
+  { key: 'RESTING', label: 'Pomodoro resting', meaning: 'a break is running' },
+  { key: 'METRONOME', label: 'Metronome running', meaning: 'pulses at the tapped tempo' },
+];
+
+export const LED_FIELDS = [
+  { key: 'style', label: 'Style', kind: 'select',
+    options: LED_STYLES.map((s) => ({ value: s.type, label: s.label })) },
+  { key: 'color', label: 'Colour', kind: 'color' },
+  { key: 'color2', label: 'Second colour', kind: 'color' },
+  { key: 'period_s', label: 'Seconds per cycle', kind: 'number', min: 0.1, max: 600, step: 0.1 },
+];
+
+/** One-line summary of an effect, e.g. "Breathe #0000ff, fading every 3s". */
+export function describeEffect(effect) {
+  const style = effect && LED_STYLE_BY_TYPE[effect.style];
+  if (!style) return 'unknown';
+  const swatch = style.uses.includes('color') ? ` ${effect.color}` : '';
+  return `${style.label}${swatch}, ${style.describe(effect)}`;
+}
+
 // Top-level device settings, grouped only for layout. Keys and types mirror
 // AppConfig in config.py (ble_device_name is intentionally editable but only
 // takes effect on restart - the parser hot-reloads everything else).
 export const SETTINGS_GROUPS = [
   {
-    title: 'AI backends',
-    fields: [
-      { key: 'ollama_host', label: 'Remote Ollama host', kind: 'text' },
-      { key: 'remote_model', label: 'Remote model', kind: 'text' },
-      { key: 'local_ollama_host', label: 'Local Ollama host', kind: 'text' },
-      { key: 'local_model', label: 'Local model', kind: 'text' },
-      { key: 'prefer_remote', label: 'Prefer the remote backend', kind: 'checkbox' },
-      { key: 'fallback_to_local', label: 'Fall back to local', kind: 'checkbox' },
-      { key: 'remote_timeout_s', label: 'Remote timeout (s)', kind: 'number', min: 0, step: 0.5 },
-      { key: 'local_timeout_s', label: 'Local timeout (s)', kind: 'number', min: 0, step: 1 },
-    ],
-  },
-  {
     title: 'Device',
     fields: [
       { key: 'ble_device_name', label: 'Bluetooth name', kind: 'text',
-        hint: 'Applied on restart (the BLE advertisement registers once at startup).' },
+        hint: 'The name the button advertises; the host connects to it by name.' },
       { key: 'sounds_enabled', label: 'Feedback sounds', kind: 'checkbox' },
       { key: 'database_path', label: 'Event database path', kind: 'text' },
     ],

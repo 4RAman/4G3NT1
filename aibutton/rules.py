@@ -1,9 +1,9 @@
 """Ambient mode resolution: (gesture, wall-clock time) -> action.
 
 The button is always in some mode. Takeover modes (alarm, stopwatch,
-counter) own the button while active and are handled by the scheduler +
-main loop, not here; this module covers the *ambient* layer: the
-`actions`-template modes that sit quietly and answer gestures.
+counter, pomodoro) own the button while active and are handled by the
+scheduler + main loop, not here; this module covers the *ambient* layer:
+the `actions`-template modes that sit quietly and answer gestures.
 
 Ambient modes are evaluated top-to-bottom in config order. A mode is a
 candidate when its activation is in scope - `always` always, `window` when
@@ -12,13 +12,12 @@ the wall-clock is inside `between` (windows may cross midnight, e.g.
 has `unless_logged_today`, that event hasn't already been logged today. The
 first candidate that defines the gesture wins; candidates lacking it fall
 through, so a time-scoped mode can override just one gesture while Default
-keeps handling the rest. This is exactly v0.2's first-match-wins rule
-resolution, filtered to ambient modes.
+keeps handling the rest.
 
-Pure module - no GPIO, no I/O. `logged_today` is injected (typically
+Pure module - no I/O. `logged_today` is injected (typically
 EventStore.logged_today) rather than queried here, so this stays unit
 testable without a database. Local wall-clock time is intentional:
-"between 5 and 7 am" means the Pi's timezone (set it in SETUP.md section 2).
+"between 5 and 7 am" means the host computer's timezone.
 """
 
 from __future__ import annotations

@@ -38,4 +38,11 @@ export class ConfigApi {
   validate(body) {
     return this._send('/api/config/validate', 'POST', body);
   }
+
+  /** Live device state. The menu reads `active_modes` from it to mark which
+   *  mode would answer a press right now - resolved by the host, never
+   *  recomputed here. */
+  status() {
+    return this._json('/api/status');
+  }
 }

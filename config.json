@@ -1,12 +1,4 @@
 {
-  "ollama_host": "http://192.168.1.10:11434",
-  "local_ollama_host": "http://127.0.0.1:11434",
-  "local_model": "smollm2:135m",
-  "remote_model": "llama3.2:1b",
-  "prefer_remote": true,
-  "fallback_to_local": true,
-  "remote_timeout_s": 5,
-  "local_timeout_s": 60,
   "ble_device_name": "AIButton",
   "sounds_enabled": true,
   "database_path": "data/events.db",
@@ -18,50 +10,20 @@
       "name": "Default",
       "template": "actions",
       "activation": {
-        "type": "window",
-        "days": [
-          "mon",
-          "tue",
-          "wed",
-          "thu",
-          "fri",
-          "sat",
-          "sun"
-        ],
-        "between": [
-          "05:00",
-          "06:20"
-        ]
+        "type": "always"
       },
       "short_press": {
         "action": "log",
-        "event": "Medicine"
+        "event": "click"
       },
       "long_press": {
-        "action": "log",
-        "event": "Food"
-      }
-    },
-    {
-      "name": "Wake up",
-      "template": "alarm",
-      "activation": {
-        "type": "schedule",
-        "at": "05:00",
-        "days": [
-          "mon",
-          "tue",
-          "wed",
-          "thu",
-          "fri",
-          "sat",
-          "sun"
-        ]
+        "action": "enter_mode",
+        "target": "Pomodoro"
       },
-      "message": "Wake up",
-      "label": "",
-      "snooze_minutes": 9,
-      "dismiss_event": "woke_up"
+      "double_tap": {
+        "action": "enter_mode",
+        "target": "Stopwatch"
+      }
     },
     {
       "name": "Stopwatch",
@@ -70,6 +32,96 @@
         "type": "manual"
       },
       "log_as": "stopwatch"
+    },
+    {
+      "name": "New mode",
+      "template": "actions",
+      "activation": {
+        "type": "always"
+      },
+      "short_press": {
+        "action": "log",
+        "event": "button_press"
+      }
+    },
+    {
+      "name": "Pomodoro",
+      "template": "pomodoro",
+      "activation": {
+        "type": "manual"
+      },
+      "work_minutes": 25,
+      "break_minutes": 5,
+      "long_break_minutes": 15,
+      "blocks_before_long_break": 4,
+      "extend_minutes": 10,
+      "advance": "auto",
+      "log_as": "pomodoro",
+      "short_press": "toggle",
+      "long_press": "exit",
+      "double_tap": "extend"
     }
-  ]
+  ],
+  "led_palette": {
+    "IDLE": {
+      "style": "breathe",
+      "color": "#ffffff",
+      "color2": "#00fbff",
+      "period_s": 1
+    },
+    "LISTENING": {
+      "style": "solid",
+      "color": "#ffff94",
+      "color2": "#000000",
+      "period_s": 1
+    },
+    "THINKING": {
+      "style": "breathe",
+      "color": "#474747",
+      "color2": "#363636",
+      "period_s": 0.2
+    },
+    "SUCCESS": {
+      "style": "solid",
+      "color": "#00ff00",
+      "color2": "#000000",
+      "period_s": 1
+    },
+    "ERROR": {
+      "style": "flash",
+      "color": "#ff0000",
+      "color2": "#000000",
+      "period_s": 0.2
+    },
+    "ALERT": {
+      "style": "alternate",
+      "color": "#ff0000",
+      "color2": "#1eff00",
+      "period_s": 0.4
+    },
+    "TIMING": {
+      "style": "flash",
+      "color": "#ffffff",
+      "color2": "#000000",
+      "period_s": 0.25
+    },
+    "COUNTING": {
+      "style": "breathe",
+      "color": "#ff00ff",
+      "color2": "#000000",
+      "period_s": 8
+    },
+    "WORKING": {
+      "style": "breathe",
+      "color": "#ff4400",
+      "color2": "#000000",
+      "period_s": 5
+    },
+    "RESTING": {
+      "style": "breathe",
+      "color": "#00ff88",
+      "color2": "#000000",
+      "period_s": 5
+    }
+  }
 }

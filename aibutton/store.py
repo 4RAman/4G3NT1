@@ -22,8 +22,10 @@ CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,
     kind TEXT NOT NULL,          -- 'log' | 'timer_start' | 'timer_stop'
+                                  -- | 'mode_enter' | 'mode_exit'
     name TEXT NOT NULL,
-    duration_s REAL              -- set on 'timer_stop' rows
+    duration_s REAL,             -- set on 'timer_stop' / 'mode_exit' rows
+    mode TEXT                    -- which mode was active when this fired
 )
 """
 
@@ -51,14 +53,23 @@ class EventStore:
             db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(db_path)
         self._conn.execute(_SCHEMA)
+        self._migrate()
         self._conn.commit()
         log.info("event store at %s", db_path)
 
-    def log_event(self, name: str) -> datetime:
+    def _migrate(self) -> None:
+        """`CREATE TABLE IF NOT EXISTS` only helps a brand-new file - an
+        existing events.db predating the `mode` column needs it added by
+        hand, or every insert below fails against the old schema."""
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(events)")}
+        if "mode" not in columns:
+            self._conn.execute("ALTER TABLE events ADD COLUMN mode TEXT")
+
+    def log_event(self, name: str, mode: str | None = None) -> datetime:
         now = _utcnow()
         self._conn.execute(
-            "INSERT INTO events (ts, kind, name) VALUES (?, 'log', ?)",
-            (now.isoformat(), name),
+            "INSERT INTO events (ts, kind, name, mode) VALUES (?, 'log', ?, ?)",
+            (now.isoformat(), name, mode),
         )
         self._conn.commit()
         return now
@@ -112,7 +123,7 @@ class EventStore:
         ).fetchone()
         return row[0]
 
-    def toggle_timer(self, name: str) -> tuple[str, float | None]:
+    def toggle_timer(self, name: str, mode: str | None = None) -> tuple[str, float | None]:
         """Returns ("started", None) or ("stopped", elapsed_seconds)."""
         row = self._conn.execute(
             "SELECT ts, kind FROM events WHERE name = ? AND kind IN "
@@ -123,22 +134,48 @@ class EventStore:
         if row is not None and row[1] == "timer_start":
             elapsed = (now - datetime.fromisoformat(row[0])).total_seconds()
             self._conn.execute(
-                "INSERT INTO events (ts, kind, name, duration_s) VALUES (?, 'timer_stop', ?, ?)",
-                (now.isoformat(), name, elapsed),
+                "INSERT INTO events (ts, kind, name, duration_s, mode) "
+                "VALUES (?, 'timer_stop', ?, ?, ?)",
+                (now.isoformat(), name, elapsed, mode),
             )
             self._conn.commit()
             return "stopped", elapsed
         self._conn.execute(
-            "INSERT INTO events (ts, kind, name) VALUES (?, 'timer_start', ?)",
-            (now.isoformat(), name),
+            "INSERT INTO events (ts, kind, name, mode) VALUES (?, 'timer_start', ?, ?)",
+            (now.isoformat(), name, mode),
         )
         self._conn.commit()
         return "started", None
 
+    def log_mode_enter(self, mode_name: str) -> datetime:
+        """Record a takeover mode taking over the button - pair with
+        `log_mode_exit` (passed the datetime this returns) when it lets go."""
+        now = _utcnow()
+        self._conn.execute(
+            "INSERT INTO events (ts, kind, name, mode) VALUES (?, 'mode_enter', ?, ?)",
+            (now.isoformat(), mode_name, mode_name),
+        )
+        self._conn.commit()
+        return now
+
+    def log_mode_exit(self, mode_name: str, entered_at: datetime) -> float:
+        """Record a takeover mode handing the button back. Returns the
+        session length in seconds."""
+        now = _utcnow()
+        elapsed = (now - entered_at).total_seconds()
+        self._conn.execute(
+            "INSERT INTO events (ts, kind, name, duration_s, mode) "
+            "VALUES (?, 'mode_exit', ?, ?, ?)",
+            (now.isoformat(), mode_name, elapsed, mode_name),
+        )
+        self._conn.commit()
+        return elapsed
+
     def recent(self, limit: int = 50) -> list[tuple]:
-        """Newest-first (ts, kind, name, duration_s) rows - for the future web UI."""
+        """Newest-first (ts, kind, name, duration_s, mode) rows - backs the
+        web UI's Events tab."""
         return self._conn.execute(
-            "SELECT ts, kind, name, duration_s FROM events ORDER BY id DESC LIMIT ?",
+            "SELECT ts, kind, name, duration_s, mode FROM events ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
 

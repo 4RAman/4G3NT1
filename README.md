@@ -1,70 +1,89 @@
 # AI Button
 
-A Raspberry Pi 3B+ device: one physical button, three gestures (short
-press / long press / double tap), routed through **time-aware rules** —
-the same gesture can mean different things at different times of day.
-An RGB LED and feedback sounds show device state; a BLE GATT peripheral
-broadcasts state changes and results to any subscribed phone/laptop.
+One physical button, three gestures (short press / long press / double
+tap), routed through a **mode machine** — the button is always in exactly
+one mode (the Default, a time-windowed override, a ringing alarm, a
+running stopwatch, an open counter), and the mode decides what each
+gesture means. An RGB LED and feedback sounds show device state.
 
-Rules resolve first-match-wins against four action primitives:
+The hardware is an **ESP32** — it detects gestures and shows feedback; this
+Python app is the brain on the PC, connected over BLE. It replaces an
+earlier Raspberry Pi build, preserved at the git tag `pi-legacy`; the
+transition and its rationale are in [DESIGN-ESP32.md](DESIGN-ESP32.md).
+
+> **Working on real hardware.** The transition is complete: press the button
+> and the mode machine on your PC decides what it means, then drives the LED
+> and buzzer back. With no ESP32 attached the app runs on a `MockDevice`
+> instead, fully drivable from the web UI — no hardware needed to develop.
+
+Ambient modes resolve first-match-wins against four action primitives:
 
 | Action | What it does |
 |---|---|
-| `prompt` | ask the AI (remote Ollama, automatic local fallback) |
 | `log` | record a timestamped event in SQLite (meds, habits) |
 | `timer_toggle` | start/stop a named stopwatch, durations logged |
 | `webhook` | POST to any URL — the IFTTT / Make / n8n / Home Assistant hook |
+| `enter_mode` | switch into a takeover mode (alarm / stopwatch / counter) |
 
 Example: between 05:00 and 07:00, a double tap logs `meds_taken`;
-any other time it falls through to the default rule and asks the AI for
-a random fact. See the `rules` section of [config.json](config.json).
+any other time it falls through to the Default mode. See the `modes`
+section of [config.json](config.json).
 
-A built-in **web UI** (http://\<pi\>:8080) shows live device state and the
+Modes are built from six **behaviour templates** — actions, alarm, stopwatch,
+counter, pomodoro and metronome — plus an *activation* saying when each turns
+on (always / time window / at a clock time / entered from another mode).
+
+A built-in **web UI** (http://localhost:8080) shows live device state and the
 event log, and includes a **point-and-click configuration menu**: add,
-reorder, and delete rules; pick each gesture's action from a form (the
-right fields appear per action type); set the time/day scope; and edit
-device settings — no hand-written JSON. **Check** previews what the
+reorder, and delete modes; pick each gesture's action from a form (the
+right fields appear per action type); drop in ready-made modes; set the
+time/day scope; recolour every light the button shows; and edit device
+settings — no hand-written JSON. **Check** previews what the
 server would accept (and which keys fall back) before you **Save**, which
 hot-reloads with no restart. It can also simulate button presses. It runs
 inside the service process and exposes a REST API (`/api/status`,
 `/api/config`, `/api/config/validate`, `/api/events`, `/api/trigger/...`)
 that a future phone app can reuse.
 
-- **Hardware**: momentary button on GPIO17 (active low), RGB LED on
-  GPIO18/23/24 (330R series resistors, common cathode), optional mini
-  speaker + amp on the 3.5 mm jack for feedback sounds.
-- **AI**: remote Ollama server on the LAN (`llama3.2:1b`), automatic
-  fallback to Ollama on the Pi itself (`smollm2:135m`).
-- **Provisioning**: see [SETUP.md](SETUP.md) — wiring, dependencies,
-  Ollama, config, systemd, and the on-device test sequence.
+- **Hardware**: an ESP32 with a momentary button, an RGB LED, and a piezo
+  buzzer, speaking BLE to the host — wiring and flashing in
+  [firmware/README.md](firmware/README.md). Developed against an ESP32-S3
+  Mini; other boards are a line in `hardware.py`.
+- **Lights**: eleven device states, each with a configurable style (solid,
+  breathe, flash, alternate, fade, rainbow), colours and speed. Edited in the
+  web UI and pushed to the button live.
+- **AI**: none on the device, by design. Point the `webhook` action at
+  whatever should do the thinking.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `aibutton/` | the application package (config, rules, actions, store, audio, led, button, ai_client, ble_peripheral, webui, main) |
+| `aibutton/` | the application package (config, rules, actions, store, device, audio, button, webui, main) |
+| `aibutton/device.py` | the hardware seam: `ButtonDevice` + the wire protocol (gestures, LED states, sound commands, palette, UUIDs) |
+| `aibutton/ble_device.py` | the bleak central: scan, connect, subscribe, auto-reconnect |
+| `aibutton/button.py` | `TriggerDetector` — no longer runtime code, kept as the spec the firmware port follows |
+| `firmware/` | the ESP32 half: MicroPython + `aioble` peripheral, gesture detection, LED animations, buzzer tones |
+| `tools/ble_probe.py` | drive the firmware by hand over BLE (`--cycle` runs every animation and tone) |
 | `aibutton/web/index.html` | the web UI dashboard — one static page, no build step |
 | `aibutton/web/static/` | the configuration menu, as small ES modules (no build step) — `schema.js` is the single place to add an action type or setting |
-| `config.json` | sample config → deploy to `/etc/aibutton/config.json` |
-| `aibutton.service` | systemd unit |
-| `device_tests/` | standalone hardware test scripts (run on the Pi) |
-| `central_test/ble_central.py` | BLE subscriber test (run on a laptop, needs `bleak`) |
-| `tests/` | pytest suite — runs anywhere, no hardware needed |
+| `config.json` | the config the app runs on (override with `--config` or `$AIBUTTON_CONFIG`) |
+| `tests/` | pytest suite — runs anywhere, no hardware needed; covers the firmware's hardware-free modules too |
 
 ## Architecture
 
-One **single asyncio process** (started by systemd) owns everything: the
-button event loop, the LED/sound feedback, the BLE peripheral, and an
-embedded uvicorn server for the web UI + REST API — no second service, no
-IPC. They share one live `ConfigManager`, `EventStore`, and press queue.
+One **single asyncio process** owns everything: the button event loop, the
+LED/sound feedback, and an embedded uvicorn server for the web UI + REST
+API — no second service, no IPC. They share one live `ConfigManager`,
+`EventStore`, and `ButtonDevice`.
 
 The pipeline per press is a one-way flow:
 
 ```
-button.py ──gesture──▶ rules.py ──(rule, action)──▶ actions.py ──result──▶ main.py
- (GPIO/                (resolve,                     (prompt/log/             (LED +
-  debounce)             time-aware,                   timer/webhook)           sound +
-                        first-match)                                           BLE + web)
+device.py ──gesture──▶ rules.py ──(mode, action)──▶ actions.py ──result──▶ main.py
+ (BLE or               (resolve,                     (log/timer/            (LED + sound
+  MockDevice)           time-aware,                   webhook)               back out through
+                        first-match)                                         the device + web)
 ```
 
 Two design choices keep it extensible:
@@ -74,36 +93,49 @@ Two design choices keep it extensible:
   mirrored by the parser in [config.py](aibutton/config.py) (Python); the
   rule editor, summaries, and form widgets are all data-driven from those
   tables, so adding a capability is adding a descriptor, not rewiring the UI.
+  The wire protocol is mirrored the same way, between
+  [device.py](aibutton/device.py) and
+  [firmware/protocol.py](firmware/protocol.py) — in both cases a test fails
+  if the two halves drift.
 - **Pure core, injected I/O.** Rule resolution ([rules.py](aibutton/rules.py))
-  and config parsing are side-effect-free and unit-testable; GPIO, the AI
-  client, and the database are injected, which is what lets the whole thing
-  run mocked on a laptop (`--mock`).
+  and config parsing are side-effect-free and unit-testable; the hardware
+  ([device.py](aibutton/device.py)) and the database are injected, which is
+  what lets the whole thing run with no hardware attached.
 
 Config errors never crash the service — a missing file, bad JSON, or a
 wrongly-typed key falls back per-key with a logged warning, and the web API
 surfaces those same warnings so the editor shows what was actually accepted.
 
-> **Roadmap — the mode machine.** The rules + actions model is evolving into
-> a **mode machine**: the button is always in one *mode* (built from a
-> *behaviour template* — actions, alarm, stopwatch, counter) activated by a
-> *trigger* (always / time-window / scheduled time / entered from another
-> mode). This subsumes today's rules, adds scheduled alarms the button stops,
-> and keeps the config surface small as capability grows. Full plan and
-> phasing in [DESIGN.md](DESIGN.md).
+Where this is going — swappable apps, an untethered button, the decisions
+that get expensive if deferred: [ROADMAP.md](ROADMAP.md), and the target
+design it builds toward, [ARCHITECTURE.md](ARCHITECTURE.md). Design rationale
+and the config schema reference: [DESIGN.md](DESIGN.md). Usage:
+[MANUAL.md](MANUAL.md). Contributing (and the principles the code is shaped
+around): [CLAUDE.md](CLAUDE.md).
 
-## Dev quickstart (no Pi needed)
+> **Stage 2 of six.** The concept is proven and the hardware works; the
+> current push is loading it with apps and making the whole thing smooth
+> enough to demo. Beyond that the button grows its own brain — it runs the
+> apps itself, with a phone holding preferences and doing the heavy lifting,
+> so it keeps working when you walk away from the computer.
+
+## Quickstart
 
 ```
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-dev.txt
 .venv\Scripts\python -m pytest
-.\dev.ps1            # dev environment: web UI at http://localhost:8080
-.\dev.ps1 -RealAI    # same, but real Ollama backends for prompt testing
-.venv\Scripts\python -m aibutton.main --mock --demo --no-ble   # one-shot smoke test
+.\dev.ps1                                                      # MockDevice, web UI at :8080
+.venv\Scripts\python -m aibutton.main --ble --config config.json   # the real button
+.venv\Scripts\python -m aibutton.main --demo --no-web          # one-shot smoke test
 ```
 
-The dev environment mocks the GPIO pins and (by default) the AI, then
-lets you drive everything from the browser:
+Flashing the ESP32 is in [firmware/README.md](firmware/README.md). Only one
+instance can run at a time — BLE allows a single central, so two copies
+steal the connection from each other.
+
+With `MockDevice` behind the seam, the browser *is* the button — you drive
+everything from the page:
 
 - **Simulate buttons** fire short press / long press / double tap
   through the real rules → actions → status pipeline.

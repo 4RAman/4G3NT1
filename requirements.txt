@@ -1,11 +1,6 @@
-# Runtime dependencies for the Pi.
-# Prefer creating the venv with --system-site-packages and installing
-# python3-gpiozero + python3-lgpio via apt (see SETUP.md); pip versions
-# below work too (piwheels provides ARM wheels).
-gpiozero>=2.0
-lgpio; sys_platform == "linux"
+# Runtime dependencies for the PC host. Pure desktop Python - the hardware
+# half now lives in ESP32 firmware, so nothing here is platform-specific.
+# Phase 3 adds `bleak` here for the BLE central.
 httpx>=0.27
-ollama>=0.4
-bluez-peripheral; sys_platform == "linux"
 fastapi>=0.110
 uvicorn>=0.29

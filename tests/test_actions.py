@@ -4,21 +4,8 @@ import httpx
 import pytest
 
 from aibutton.actions import execute
-from aibutton.ai_client import AIUnavailableError
-from aibutton.config import LogAction, PromptAction, TimerToggleAction, WebhookAction
+from aibutton.config import LogAction, TimerToggleAction, WebhookAction
 from aibutton.store import EventStore
-
-
-class FakeAI:
-    def __init__(self, answer=None, error=None):
-        self.answer, self.error = answer, error
-        self.prompts = []
-
-    async def query(self, prompt):
-        self.prompts.append(prompt)
-        if self.error:
-            raise self.error
-        return self.answer
 
 
 @pytest.fixture
@@ -43,29 +30,14 @@ def _insert(store, kind, name, days_ago=0, duration_s=None):
     store._conn.commit()
 
 
-async def run(action, *, ai=None, store=None, transport=None):
+async def run(action, *, store=None, transport=None):
     return await execute(
         action,
         trigger="short_press",
         mode_name="Test",
-        ai=ai or FakeAI(answer="ok"),
         store=store,
         webhook_transport=transport,
     )
-
-
-async def test_prompt_success(store):
-    ai = FakeAI(answer="the answer")
-    result = await run(PromptAction(prompt="ask me", label="L"), ai=ai, store=store)
-    assert result.ok and result.message == "the answer"
-    assert ai.prompts == ["ask me"]
-
-
-async def test_prompt_ai_unavailable(store):
-    ai = FakeAI(error=AIUnavailableError("all down"))
-    result = await run(PromptAction(prompt="ask"), ai=ai, store=store)
-    assert not result.ok
-    assert "AI unavailable" in result.message
 
 
 async def test_log_action_writes_and_reports(store):
@@ -73,6 +45,16 @@ async def test_log_action_writes_and_reports(store):
     assert result.ok
     assert result.message.startswith("Logged meds_taken at ")
     assert store.recent()[0][2] == "meds_taken"
+
+
+async def test_log_action_records_the_mode_it_ran_under(store):
+    await run(LogAction(event="meds_taken"), store=store)
+    assert store.recent()[0][4] == "Test"  # mode_name passed by run()
+
+
+async def test_timer_toggle_records_the_mode_it_ran_under(store):
+    await run(TimerToggleAction(log_as="deep_work"), store=store)
+    assert store.recent()[0][4] == "Test"
 
 
 async def test_log_action_shows_ordinal_when_logged_again_today(store):

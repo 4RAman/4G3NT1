@@ -1,3 +1,3 @@
-"""AI Button - physical button -> Ollama -> LED + BLE feedback (Raspberry Pi 3B+)."""
+"""AI Button - the PC host: gestures in over BLE, modes out to LED + buzzer."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

@@ -1,0 +1,18 @@
+{
+  // Deliberately short. The heavyweight MicroPython extensions (MicroPico,
+  // Pymakr, RT-Thread) each bring their own file-sync and flashing model,
+  // which would sit awkwardly next to the mpremote tasks in tasks.json and
+  // the flashing steps in firmware/README.md. Everything those extensions
+  // are wanted for - upload, REPL, run-on-device - is a task here already.
+  "recommendations": [
+    // Editing: the interpreter, pytest integration, and the IntelliSense
+    // that makes the MicroPython stubs in typings/ useful.
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    // Watching the board: the ESP32-S3 prints to USB serial at 115200, and
+    // this is the least fussy way to keep an eye on it. (For an interactive
+    // REPL use the "MicroPython: REPL" task instead - only one thing can
+    // hold the port at a time.)
+    "ms-vscode.vscode-serial-monitor"
+  ]
+}

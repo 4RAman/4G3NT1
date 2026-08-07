@@ -1,9 +1,9 @@
 """Web UI + REST API for the AI Button.
 
 Runs inside the button service's own asyncio process - main.py starts
-uvicorn as a task sharing the live ConfigManager, EventStore, and the
-button's trigger queue. No second service, no IPC. The page at / is a
-single static file (web/index.html), no build step.
+uvicorn as a task sharing the live ConfigManager, EventStore, and
+ButtonDevice. No second service, no IPC. The page at / is a single
+static file (web/index.html), no build step.
 
 Endpoints (a future phone app should use these same routes):
     GET  /api/status              device state, uptime, last action
@@ -24,7 +24,6 @@ reverse proxy if it ever needs to face an untrusted network.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import mimetypes
@@ -41,8 +40,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
-from .audio import Sound
+from .audio import ToneLibrary
 from .config import TRIGGER_TYPES, ConfigManager, as_dict, parse_config
+from .device import ButtonDevice, MockDevice, Sound, TriggerType
+from .rules import resolve
 from .store import EventStore
 
 log = logging.getLogger(__name__)
@@ -58,15 +59,14 @@ _STATIC = _WEB / "static"
 
 @dataclass
 class WebContext:
-    # status, clock, sounds are main.DeviceStatus / main.Clock /
-    # audio.SoundPlayer - duck-typed to avoid an import cycle with main.
+    # status and clock are main.DeviceStatus / main.Clock - duck-typed to
+    # avoid an import cycle with main.
     cm: ConfigManager
     store: EventStore
     status: object
-    trigger_queue: asyncio.Queue
+    device: ButtonDevice
     clock: object
-    sounds: object
-    mock: bool = False
+    tones: ToneLibrary
 
 
 class _WarningCollector(logging.Handler):
@@ -101,6 +101,23 @@ def _read_raw(path: str):
         return None
 
 
+def _active_modes(ctx: WebContext) -> dict[str, str | None]:
+    """Which mode would answer each gesture if you pressed right now.
+
+    Uses the loop's own `resolve()` rather than a second copy of the rules in
+    JavaScript: which mode wins is a host decision, and the editor's "active
+    now" mark is only allowed to report it. Takeover modes never appear here -
+    they own the button through main.py, not through ambient resolution.
+    """
+    cfg = ctx.cm.config
+    now = ctx.clock.now()
+    resolved = {}
+    for trigger in TRIGGER_TYPES:
+        match = resolve(cfg.modes, trigger, now, ctx.store.logged_today)
+        resolved[trigger] = match[0].name if match else None
+    return resolved
+
+
 def create_app(ctx: WebContext) -> FastAPI:
     app = FastAPI(title="AI Button", version=__version__)
 
@@ -118,17 +135,41 @@ def create_app(ctx: WebContext) -> FastAPI:
             "uptime_s": int(time.time() - s.started_at),
             "config_path": ctx.cm.path,
             "mode_count": len(cfg.modes),
+            # Which mode would answer each gesture if you pressed right now.
+            # Resolved with the loop's own resolve(), not a second copy of the
+            # rules in JavaScript: "who handles this press" is a host decision,
+            # and the editor only marks what the host reports.
+            "active_modes": _active_modes(ctx),
             "last_trigger": s.last_trigger,
             "last_mode": s.last_mode,
             "last_ok": s.last_ok,
             "last_message": s.last_message,
             "version": __version__,
-            "mock": ctx.mock,
+            # Drives the virtual device panel: with no real hardware behind
+            # the seam, the browser *is* the LED and the buzzer.
+            "mock": isinstance(ctx.device, MockDevice),
+            # False while a real button is out of range or unplugged - the
+            # app keeps running, so the UI has to say why nothing lights up.
+            "device_connected": ctx.device.connected,
             "now": ctx.clock.now().isoformat(timespec="seconds"),
             "clock_override": ctx.clock.overridden,
             "led_state": s.led_state,
             "last_sound": s.last_sound,
             "sound_seq": s.sound_seq,
+            # Small enough to ride along on the status poll, and doing so is
+            # what keeps the virtual device honest: it renders the palette the
+            # hardware was actually sent (ctx.device.palette), not the config
+            # snapshot - the two briefly disagree while e.g. a metronome
+            # session is pushing a live tempo override.
+            "led_palette": {
+                name: {
+                    "style": e.style,
+                    "color": e.color,
+                    "color2": e.color2,
+                    "period_s": e.period_s,
+                }
+                for name, e in ctx.device.palette.items()
+            },
         }
 
     @app.get("/api/config")
@@ -180,17 +221,15 @@ def create_app(ctx: WebContext) -> FastAPI:
     async def events(limit: int = 50):
         rows = ctx.store.recent(min(max(limit, 1), 500))
         return [
-            {"ts": ts, "kind": kind, "name": name, "duration_s": duration}
-            for ts, kind, name, duration in rows
+            {"ts": ts, "kind": kind, "name": name, "duration_s": duration, "mode": mode}
+            for ts, kind, name, duration, mode in rows
         ]
 
     @app.post("/api/trigger/{trigger}")
     async def trigger(trigger: str):
         if trigger not in TRIGGER_TYPES:
             raise HTTPException(404, f"unknown trigger {trigger!r}")
-        from .button import TriggerType  # deferred: pulls in gpiozero
-
-        ctx.trigger_queue.put_nowait(TriggerType(trigger))
+        ctx.device.press(TriggerType(trigger))
         return {"queued": trigger}
 
     @app.post("/api/dev/clock")
@@ -221,12 +260,12 @@ def create_app(ctx: WebContext) -> FastAPI:
     @app.get("/api/dev/sound/{name}")
     async def dev_sound(name: str):
         """The actual synthesized WAVs, so the browser plays exactly what
-        the device speaker would."""
+        the device buzzer would."""
         try:
             sound = Sound(name)
         except ValueError:
             raise HTTPException(404, f"unknown sound {name!r}")
-        path = ctx.sounds.path_for(sound)
+        path = ctx.tones.path_for(sound)
         if path is None or not path.exists():
             raise HTTPException(404, "sound files unavailable")
         return FileResponse(path, media_type="audio/wav")

@@ -1,0 +1,210 @@
+# AI Button firmware - the ESP32 half of the split.
+#
+# MicroPython runs this on boot. It does exactly three things:
+#
+#   1. debounce the button and turn edges into gestures (trigger.py),
+#   2. notify each gesture to the connected host as one byte,
+#   3. run the LED animation and buzzer tone the host writes back.
+#
+# Everything else - modes, schedules, the event log, the web UI - is the
+# Python app on the PC (see ../DESIGN-ESP32.md). Gesture timing lives here
+# because a 0.4 s double-tap window would not survive BLE notification
+# jitter; the wire carries finished gestures, never raw edges.
+#
+# Flashing and testing: see README.md in this directory.
+
+import asyncio
+
+import aioble
+import bluetooth
+import hardware
+import protocol
+from buzzer import Buzzer
+from clock import now_s
+from led import LEDController
+from trigger import DEBOUNCE_S, HOLD_S, TriggerDetector
+
+# 10 ms is far finer than the 50 ms debounce and the 0.4 s window it feeds,
+# and costs nothing on a 240 MHz MCU.
+_POLL_S = 0.01
+_ADV_INTERVAL_US = 250_000
+
+_service = aioble.Service(bluetooth.UUID(protocol.SERVICE_UUID))
+_button_char = aioble.Characteristic(
+    _service, bluetooth.UUID(protocol.BUTTON_EVENT_UUID), read=True, notify=True
+)
+_led_char = aioble.Characteristic(
+    _service, bluetooth.UUID(protocol.LED_STATE_UUID), write=True, capture=True
+)
+_sound_char = aioble.Characteristic(
+    _service, bluetooth.UUID(protocol.SOUND_CMD_UUID), write=True, capture=True
+)
+_palette_char = aioble.Characteristic(
+    _service, bluetooth.UUID(protocol.LED_PALETTE_UUID), write=True, capture=True
+)
+aioble.register_services(_service)
+
+
+async def _next_write(characteristic):
+    """One write payload. aioble returns (connection, data) when the
+    characteristic was declared with capture=True and just the connection
+    on older builds - accept both rather than pinning an aioble version."""
+    result = await characteristic.written()
+    if isinstance(result, tuple):
+        return result[1]
+    return characteristic.read()
+
+
+class ButtonPeripheral:
+    def __init__(self):
+        self.led = LEDController()
+        self.buzzer = Buzzer()
+        self._detector = TriggerDetector()
+        self._connection = None
+
+    # --- BLE ----------------------------------------------------------
+
+    async def advertise_forever(self):
+        """Accept one central at a time, forever. Power-cycling the host (or
+        the ESP32) recovers on its own: the connection ends, we re-advertise,
+        and the host's BLEDevice reconnects."""
+        while True:
+            try:
+                connection = await aioble.advertise(
+                    _ADV_INTERVAL_US,
+                    name=hardware.DEVICE_NAME,
+                    services=[bluetooth.UUID(protocol.SERVICE_UUID)],
+                )
+                print("connected:", connection.device)
+                self._connection = connection
+                await connection.disconnected()
+                print("disconnected")
+            except Exception as exc:  # noqa: BLE001 - keep trying to be findable
+                print("advertise failed:", exc)
+                await asyncio.sleep(1)
+            finally:
+                self._connection = None
+                # Nobody is listening for a press now, so nothing can dismiss
+                # a ringing alarm: go quiet rather than buzz until the battery
+                # dies.
+                self.buzzer.stop()
+                self.led.set_state(protocol.LED_IDLE)
+
+    async def serve_led(self):
+        while True:
+            try:
+                data = await _next_write(_led_char)
+                if data:
+                    self.led.set_state(data[0])
+            except Exception as exc:  # noqa: BLE001 - one bad write must not end the task
+                print("led write failed:", exc)
+
+    async def serve_sound(self):
+        while True:
+            try:
+                data = await _next_write(_sound_char)
+                if data:
+                    self.buzzer.play(data[0])
+            except Exception as exc:  # noqa: BLE001
+                print("sound write failed:", exc)
+
+    async def serve_palette(self):
+        """One write per LED state: what that state should look like. The
+        host sends all of them on connect and re-sends one when you edit it."""
+        while True:
+            try:
+                entry = protocol.decode_palette_entry(await _next_write(_palette_char))
+                if entry is None:
+                    print("palette: short write - ignored")
+                    continue
+                self.led.set_effect(*entry)
+            except Exception as exc:  # noqa: BLE001
+                print("palette write failed:", exc)
+
+    def _emit(self, event):
+        if event is None:
+            return
+        code = protocol.GESTURE_CODES.get(event)
+        if code is None:  # a gesture with no wire code - a bug, not a press
+            print("no code for gesture", event)
+            return
+        print("button:", event)
+        if self._connection is None:
+            # Presses while disconnected are dropped, not buffered: replaying
+            # them later would fire modes against the wrong time of day, and
+            # buffering needs a time sync the device does not have.
+            return
+        try:
+            _button_char.notify(self._connection, bytes([code]))
+        except Exception as exc:  # noqa: BLE001 - e.g. the central vanished mid-notify
+            print("notify failed:", exc)
+
+    # --- button -------------------------------------------------------
+
+    async def read_button_forever(self):
+        """Debounce the pin, feed the detector, emit what comes out.
+
+        Debounce is "the raw level has to hold for DEBOUNCE_S before it
+        counts", which rejects contact bounce without adding latency to a
+        clean press. on_timeout() is called every tick instead of scheduling
+        a timer - the detector no-ops until the double-tap window closes, so
+        polling it is both simpler and exactly as accurate.
+        """
+        from machine import Pin
+
+        pull = Pin.PULL_UP if hardware.BUTTON_PULL_UP else None
+        pin = Pin(hardware.BUTTON_PIN, Pin.IN, pull)
+
+        def is_pressed():
+            return (pin.value() == 0) if hardware.BUTTON_ACTIVE_LOW else bool(pin.value())
+
+        stable = is_pressed()
+        candidate = stable
+        candidate_since = now_s()
+        press_t = None
+        hold_fired = False
+
+        while True:
+            now = now_s()
+            raw = is_pressed()
+
+            if raw != candidate:
+                candidate = raw
+                candidate_since = now
+            elif raw != stable and (now - candidate_since) >= DEBOUNCE_S:
+                stable = raw
+                if stable:
+                    press_t = now
+                    hold_fired = False
+                    self._emit(self._detector.on_press(now))
+                else:
+                    press_t = None
+                    event, _deadline = self._detector.on_release(now)
+                    self._emit(event)
+
+            # Long press fires while still held, not on release.
+            if stable and not hold_fired and press_t is not None:
+                if (now - press_t) >= HOLD_S:
+                    hold_fired = True
+                    self._emit(self._detector.on_hold(now))
+
+            self._emit(self._detector.on_timeout(now))
+            await asyncio.sleep(_POLL_S)
+
+
+async def main():
+    peripheral = ButtonPeripheral()
+    peripheral.led.set_state(protocol.LED_IDLE)
+    print("AI Button firmware ready - advertising as", hardware.DEVICE_NAME)
+    # Three background tasks; the button poll is the one we stay in. (Not
+    # gather(): its coverage across MicroPython builds is patchier than
+    # create_task, and there is nothing here to collect results from.)
+    asyncio.create_task(peripheral.advertise_forever())
+    asyncio.create_task(peripheral.serve_led())
+    asyncio.create_task(peripheral.serve_sound())
+    asyncio.create_task(peripheral.serve_palette())
+    await peripheral.read_button_forever()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

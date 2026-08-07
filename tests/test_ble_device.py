@@ -1,0 +1,286 @@
+"""BLEDevice against a fake bleak - the reconnect behaviour especially.
+
+A radio link is the one part of the system that is *expected* to fail at
+runtime, so what matters here is not the happy path (real hardware proves
+that) but everything around it: writes while disconnected, a link dropping
+mid-session, and whether reconnecting leaves the device showing what the
+host actually believes.
+
+BleakScanner/BleakClient are replaced module-side, so no radio and no board
+is involved and the tests run in milliseconds.
+"""
+
+import asyncio
+
+import pytest
+
+from aibutton import ble_device
+from aibutton.device import (
+    BUTTON_EVENT_UUID,
+    LED_CODES,
+    LED_STATE_UUID,
+    SOUND_CMD_UUID,
+    STOP_LOOP_CMD,
+    LEDState,
+    Sound,
+    TriggerType,
+    sound_command,
+)
+
+
+class FakeBleakDevice:
+    address = "AA:BB:CC:DD:EE:FF"
+
+
+class FakeClient:
+    """One BLE session. `instances` records every session so a test can see
+    what happened across a reconnect."""
+
+    instances: list["FakeClient"] = []
+
+    def __init__(self, device, disconnected_callback=None, **kwargs):
+        self.device = device
+        self._disconnected_callback = disconnected_callback
+        self.writes: list[tuple[str, bytes]] = []
+        self.notify_handler = None
+        self.write_fails = False
+        FakeClient.instances.append(self)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def start_notify(self, uuid, handler):
+        assert uuid == BUTTON_EVENT_UUID
+        self.notify_handler = handler
+
+    async def write_gatt_char(self, uuid, data, response=True):
+        if self.write_fails:
+            raise RuntimeError("link died")
+        self.writes.append((uuid, bytes(data)))
+
+    def drop(self):
+        """Simulate the link going away."""
+        if self._disconnected_callback:
+            self._disconnected_callback(self)
+
+    @property
+    def payloads(self):
+        return [data for _uuid, data in self.writes]
+
+
+@pytest.fixture(autouse=True)
+def fake_bleak(monkeypatch):
+    FakeClient.instances = []
+    found = {"device": FakeBleakDevice()}
+
+    async def find_device_by_name(name, timeout=None):
+        return found["device"]
+
+    monkeypatch.setattr(
+        ble_device.BleakScanner, "find_device_by_name", staticmethod(find_device_by_name)
+    )
+    monkeypatch.setattr(ble_device, "BleakClient", FakeClient)
+    return found
+
+
+async def _connected_device(**kwargs):
+    device = ble_device.BLEDevice("AIButton", retry_s=0.01, **kwargs)
+    await device.start()
+    for _ in range(200):  # let the connect loop get there
+        if device.connected:
+            break
+        await asyncio.sleep(0.005)
+    assert device.connected, "never connected"
+    return device
+
+
+async def _settle():
+    """Give the pump a few turns to drain the outbox."""
+    for _ in range(20):
+        await asyncio.sleep(0.005)
+
+
+# --- connecting --------------------------------------------------------
+
+async def test_connects_subscribes_and_asserts_the_led():
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        assert client.notify_handler is not None  # subscribed to gestures
+        # The first write is the current LED state, so the device is never
+        # left showing an animation from a previous session.
+        assert client.writes[0] == (LED_STATE_UUID, bytes([LED_CODES[LEDState.IDLE]]))
+    finally:
+        await device.close()
+
+
+async def test_not_connected_until_the_link_is_up(fake_bleak):
+    fake_bleak["device"] = None  # nothing in range
+    device = ble_device.BLEDevice("AIButton", retry_s=0.01)
+    await device.start()
+    await _settle()
+    assert device.connected is False
+    await device.close()
+
+
+# --- gestures in -------------------------------------------------------
+
+async def test_notification_becomes_a_press():
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        client.notify_handler(None, bytearray([0x03]))  # double_tap
+        assert device.events.get_nowait() is TriggerType.DOUBLE_TAP
+    finally:
+        await device.close()
+
+
+async def test_unknown_and_empty_notifications_are_ignored():
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        client.notify_handler(None, bytearray([0x7F]))
+        client.notify_handler(None, bytearray())
+        assert device.events.empty()
+    finally:
+        await device.close()
+
+
+# --- feedback out ------------------------------------------------------
+
+async def test_feedback_reaches_the_device():
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        device.set_led(LEDState.THINKING)
+        device.play_sound(Sound.ACK)
+        device.start_loop(Sound.ALARM)
+        device.stop_loop()
+        await _settle()
+        assert client.writes[1:] == [
+            (LED_STATE_UUID, bytes([LED_CODES[LEDState.THINKING]])),
+            (SOUND_CMD_UUID, sound_command(Sound.ACK)),
+            (SOUND_CMD_UUID, sound_command(Sound.ALARM, loop=True)),
+            (SOUND_CMD_UUID, bytes([STOP_LOOP_CMD])),
+        ]
+    finally:
+        await device.close()
+
+
+async def test_writes_while_disconnected_are_dropped_not_queued(fake_bleak):
+    # Feedback that arrives seconds late is worse than feedback that never
+    # arrives: a SUCCESS flash replayed on reconnect would be a lie.
+    fake_bleak["device"] = None
+    device = ble_device.BLEDevice("AIButton", retry_s=0.01)
+    await device.start()
+    await _settle()
+
+    device.play_sound(Sound.ACK)
+    device.play_sound(Sound.ERROR)
+
+    fake_bleak["device"] = FakeBleakDevice()
+    for _ in range(200):
+        if device.connected:
+            break
+        await asyncio.sleep(0.005)
+    await _settle()
+    try:
+        client = FakeClient.instances[-1]
+        # Only the LED re-assert; no stale sounds.
+        assert client.payloads == [bytes([LED_CODES[LEDState.IDLE]])]
+    finally:
+        await device.close()
+
+
+async def test_outbox_cannot_grow_without_bound():
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        client.write_fails = True  # stall the pump's writes
+        for _ in range(ble_device.OUTBOX_MAX * 3):
+            device.play_sound(Sound.ACK)
+        assert device._outbox.qsize() <= ble_device.OUTBOX_MAX
+    finally:
+        await device.close()
+
+
+# --- losing the link ---------------------------------------------------
+
+async def test_reconnects_after_the_link_drops():
+    device = await _connected_device()
+    try:
+        first = FakeClient.instances[0]
+        assert device.connected
+        first.drop()
+        for _ in range(200):  # a second session appears on its own
+            if len(FakeClient.instances) > 1 and device.connected:
+                break
+            await asyncio.sleep(0.005)
+        assert len(FakeClient.instances) > 1, "did not reconnect"
+        assert device.connected
+    finally:
+        await device.close()
+
+
+async def test_reconnect_restores_the_current_led_state():
+    device = await _connected_device()
+    try:
+        device.set_led(LEDState.TIMING)  # a stopwatch is running
+        await _settle()
+        FakeClient.instances[0].drop()
+        for _ in range(200):
+            if len(FakeClient.instances) > 1 and device.connected:
+                break
+            await asyncio.sleep(0.005)
+        # The new session opens on TIMING, not on IDLE: the host still
+        # believes a stopwatch is running, and the LED should say so.
+        second = FakeClient.instances[-1]
+        assert second.writes[0] == (
+            LED_STATE_UUID, bytes([LED_CODES[LEDState.TIMING]])
+        )
+    finally:
+        await device.close()
+
+
+async def test_a_failing_write_does_not_kill_the_loop():
+    device = await _connected_device()
+    try:
+        FakeClient.instances[0].write_fails = True
+        device.play_sound(Sound.ACK)
+        for _ in range(200):
+            if len(FakeClient.instances) > 1:
+                break
+            await asyncio.sleep(0.005)
+        assert len(FakeClient.instances) > 1, "a dead write ended the session for good"
+    finally:
+        await device.close()
+
+
+# --- shutdown ----------------------------------------------------------
+
+async def test_close_silences_a_ringing_alarm():
+    device = await _connected_device()
+    client = FakeClient.instances[0]
+    device.start_loop(Sound.ALARM)
+    await _settle()
+    await device.close()
+    # The stop goes out directly, not through the outbox the close is about
+    # to cancel - a host exiting mid-alarm must not leave the buzzer ringing.
+    assert client.writes[-1] == (SOUND_CMD_UUID, bytes([STOP_LOOP_CMD]))
+    assert device._task is None
+
+
+async def test_close_is_safe_when_never_connected(fake_bleak):
+    fake_bleak["device"] = None
+    device = ble_device.BLEDevice("AIButton", retry_s=0.01)
+    await device.start()
+    await _settle()
+    await device.close()  # must not raise
+
+
+async def test_close_before_start_is_safe():
+    device = ble_device.BLEDevice("AIButton")
+    await device.close()

@@ -1,19 +1,22 @@
-// Renders and edits a single mode with one uniform, collapsible card:
-//   name → template <select> (swaps the template body) →
-//   activation <select> (swaps the activation body).
-// Collapsed, it shows a one-line summary (template.describe +
-// activation.describe); expand to edit. It composes its fields from the
-// widget factory and its template/activation choices from the schema
-// registries, so it knows nothing about specific template, activation,
-// action, or field kinds (Dependency Inversion). It mutates the mode object
-// in place and reports edits, moves, and removal through injected handlers -
-// it does not own the modes list.
+// Renders and edits a single mode, always fully open: name → template
+// <select> (swaps the template body) → activation <select> (swaps the
+// activation body). menu.js's master/detail Modes tab shows one of these at
+// a time in its detail pane, plus - only for the mode being saved-checked -
+// a throwaway instance built purely to call validate(). Either way there is
+// only ever one on screen, so this component has no collapse state of its
+// own. It composes its fields from the widget factory and its
+// template/activation choices from the schema registries, so it knows
+// nothing about specific template, activation, action, or field kinds
+// (Dependency Inversion). It mutates the mode object in place and reports
+// edits, moves, and removal through injected handlers - it does not own the
+// modes list.
 
 import { el, clear } from './dom.js';
 import {
   GESTURES, DAYS, ACTIONS, ACTION_BY_TYPE,
-  TEMPLATES, TEMPLATE_BY_TYPE, describeTemplate,
+  TEMPLATES, TEMPLATE_BY_TYPE,
   ACTIVATIONS, ACTIVATION_BY_TYPE, describeActivation,
+  describeExit, findEntryPoints,
 } from './schema.js';
 import { createField } from './widgets.js';
 
@@ -21,19 +24,19 @@ export class ModeEditor {
   /**
    * @param {object} mode - the mode object (mutated in place)
    * @param {{onChange?: Function, onRemove?: Function,
-   *          onMoveUp?: Function, onMoveDown?: Function}} handlers
+   *          onMoveUp?: Function, onMoveDown?: Function, canReorder?: boolean,
+   *          getModes?: Function}} handlers
    */
   constructor(mode, handlers = {}) {
     this.mode = mode;
     this.handlers = handlers;
     this._validators = []; // each returns an error string or null
-    this.expanded = false;
     this.el = el('div', { className: 'mode-card' });
     this._build();
   }
 
   _changed() {
-    this._refreshSummary();
+    this.refreshExplainers();
     this.handlers.onChange?.();
   }
 
@@ -48,50 +51,71 @@ export class ModeEditor {
   _build() {
     clear(this.el);
     this._validators = [];
-    this.el.append(this._summaryHead(), this._body());
-    this._applyExpanded();
+    this.el.append(this._body());
   }
 
-  // --- collapsed one-line summary -----------------------------------------
-
-  _summaryHead() {
-    this.toggle = el('button', {
-      type: 'button', className: 'mode-toggle', title: 'Expand / collapse',
-    });
-    this.toggle.addEventListener('click', () => {
-      this.expanded = !this.expanded;
-      this._applyExpanded();
-    });
-    this.summaryEl = el('span', { className: 'mode-summary' });
-    this._refreshSummary();
-    return el('div', { className: 'mode-head' }, [this.toggle, this.summaryEl]);
+  /**
+   * Mark this card as the one answering `gestures` right now.
+   * @param {string[]} gestures - gesture labels, empty for "not in charge".
+   */
+  setActive(gestures) {
+    if (!this.activeEl) return;
+    this.activeEl.hidden = !gestures.length;
+    if (!gestures.length) return;
+    this.activeEl.textContent = '● Active now';
+    this.activeEl.title = `Right now, a ${gestures.join(' or a ')} would be handled by this mode.`;
   }
 
-  _refreshSummary() {
-    if (!this.summaryEl) return;
-    clear(this.summaryEl);
-    const name = this.mode.name || '(unnamed)';
-    this.summaryEl.append(
-      el('span', { className: 'mode-sum-name', textContent: name }),
-      el('span', { className: 'mode-sum-sep', textContent: ' · ' }),
-      el('span', { className: 'mode-sum-act', textContent: describeActivation(this.mode.activation) }),
-      el('span', { className: 'mode-sum-sep', textContent: ' · ' }),
-      el('span', { className: 'mode-sum-tpl', textContent: describeTemplate(this.mode) }),
-    );
-  }
-
-  _applyExpanded() {
-    if (this.toggle) this.toggle.textContent = this.expanded ? '▾' : '▸';
-    if (this.bodyEl) this.bodyEl.hidden = !this.expanded;
-    this.el.classList.toggle('expanded', this.expanded);
-  }
-
-  // --- expandable body -----------------------------------------------------
+  // --- body -----------------------------------------------------------
 
   _body() {
     this.bodyEl = el('div', { className: 'mode-body' });
-    this.bodyEl.append(this._header(), this._templatePicker(), this._activationPicker());
+    // A stable container so refreshExplainers() can rewrite the how-to-get-in
+    // / how-to-get-out lines without rebuilding the fields you are editing.
+    this.howtoEl = el('div', { className: 'howto' });
+    this.bodyEl.append(
+      this._header(), this.howtoEl, this._templatePicker(), this._activationPicker(),
+    );
+    this.refreshExplainers();
     return this.bodyEl;
+  }
+
+  /**
+   * Rewrite the takeover mode's "how do I get in / how do I get out" lines.
+   * Called on every edit - including edits to *other* modes, since what starts
+   * this one lives in their gestures, not in this card.
+   */
+  refreshExplainers() {
+    if (!this.howtoEl) return;
+    clear(this.howtoEl);
+    const descriptor = TEMPLATE_BY_TYPE[this.mode.template];
+    // Everyday modes are never entered or left, so there is nothing to explain.
+    if (!descriptor || descriptor.nature !== 'takeover') {
+      this.howtoEl.hidden = true;
+      return;
+    }
+    this.howtoEl.hidden = false;
+
+    if (descriptor.startedBy === 'schedule') {
+      this.howtoEl.append(el('p', {
+        className: 'howto-line',
+        textContent: `Starts ${describeActivation(this.mode.activation)}`,
+      }));
+    } else {
+      const entries = findEntryPoints(this.mode, this.handlers.getModes?.() || []);
+      this.howtoEl.append(entries.length
+        ? el('p', { className: 'howto-line', textContent: `Start: ${entries.join(', or ')}` })
+        : el('p', { className: 'howto-line howto-warn' }, [
+          '⚠ Not reachable',
+          el('span', {
+            'data-help': true,
+            textContent: ' - give a gesture the "Enter a mode" action, pointing here.',
+          }),
+        ]));
+    }
+
+    const exit = describeExit(this.mode);
+    if (exit) this.howtoEl.append(el('p', { className: 'howto-line', textContent: `Exit: ${exit}` }));
   }
 
   _header() {
@@ -104,16 +128,26 @@ export class ModeEditor {
       this._changed();
     });
 
+    // Filled in by setActive() from the host's own resolution - this is the
+    // one place "which mode is actually in charge right now?" gets answered.
+    this.activeEl = el('span', { className: 'mode-active', hidden: true });
+
     const btn = (text, title, cls, fn) => {
       const b = el('button', { type: 'button', className: `mini ${cls}`, textContent: text, title });
       b.addEventListener('click', fn);
       return b;
     };
+    // Reorder arrows only where order decides anything: everyday modes are
+    // read top to bottom, takeover modes are found by name.
+    const reorder = this.handlers.canReorder === false ? [] : [
+      btn('↑', 'Move up - higher modes win', '', () => this.handlers.onMoveUp?.()),
+      btn('↓', 'Move down - lower modes win', '', () => this.handlers.onMoveDown?.()),
+    ];
     return el('div', { className: 'mode-edit-head' }, [
       el('span', { className: 'fld-label', textContent: 'Name' }),
       name,
-      btn('↑', 'Move up', '', () => this.handlers.onMoveUp?.()),
-      btn('↓', 'Move down', '', () => this.handlers.onMoveDown?.()),
+      this.activeEl,
+      ...reorder,
       btn('✕', 'Delete mode', 'danger', () => this.handlers.onRemove?.()),
     ]);
   }
@@ -134,7 +168,7 @@ export class ModeEditor {
 
     return el('div', { className: 'pick-row' }, [
       el('div', { className: 'pick-head' }, [
-        el('span', { className: 'fld-label', textContent: 'Template' }),
+        el('span', { className: 'fld-label', textContent: 'What it does' }),
         select,
       ]),
       this.templateBody,
@@ -203,7 +237,7 @@ export class ModeEditor {
 
     return el('div', { className: 'pick-row' }, [
       el('div', { className: 'pick-head' }, [
-        el('span', { className: 'fld-label', textContent: 'Activation' }),
+        el('span', { className: 'fld-label', textContent: "When it's on" }),
         select,
       ]),
       this.activationBody,

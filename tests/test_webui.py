@@ -1,13 +1,14 @@
-import asyncio
 import json
+import re
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
 
-from aibutton.audio import SoundPlayer
-from aibutton.button import TriggerType
+from aibutton.audio import ToneLibrary
 from aibutton.config import ConfigManager
+from aibutton.device import LED_STYLES, LEDState, MockDevice, TriggerType
 from aibutton.main import Clock, DeviceStatus
 from aibutton.store import EventStore
 from aibutton.webui import WebContext, create_app
@@ -18,19 +19,18 @@ def ctx(tmp_path):
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps({"ble_device_name": "TestBtn"}), encoding="utf-8")
     store = EventStore(str(tmp_path / "events.db"))
-    sounds = SoundPlayer(enabled=False)
+    tones = ToneLibrary()
     context = WebContext(
         cm=ConfigManager(str(cfg_path)),
         store=store,
         status=DeviceStatus(),
-        trigger_queue=asyncio.Queue(),
+        device=MockDevice(),
         clock=Clock(),
-        sounds=sounds,
-        mock=True,
+        tones=tones,
     )
     yield context
     store.close()
-    sounds.close()
+    tones.close()
 
 
 @pytest.fixture
@@ -62,7 +62,7 @@ async def test_get_config_returns_raw_and_effective(client):
     data = (await client.get("/api/config")).json()
     assert data["raw"] == {"ble_device_name": "TestBtn"}
     assert data["effective"]["ble_device_name"] == "TestBtn"
-    assert data["effective"]["prefer_remote"] is True  # default filled in
+    assert data["effective"]["sounds_enabled"] is True  # default filled in
     assert data["warnings"] == []
 
 
@@ -108,10 +108,10 @@ async def test_put_legacy_rules_body_migrates_to_modes(client, ctx):
 
 
 async def test_put_config_reports_fallback_warnings(client, ctx):
-    res = await client.put("/api/config", json={"prefer_remote": "yes"})
+    res = await client.put("/api/config", json={"sounds_enabled": "yes"})
     data = res.json()
     assert data["warnings"]  # wrong type -> warning returned to the editor
-    assert ctx.cm.config.prefer_remote is True  # fell back to default
+    assert ctx.cm.config.sounds_enabled is True  # fell back to default
 
 
 async def test_put_config_rejects_non_object(client):
@@ -158,6 +158,60 @@ async def test_config_menu_assets_served_as_javascript(client):
     assert "ConfigMenu" in res.text
 
 
+async def test_status_reports_which_mode_answers_each_gesture(client, ctx):
+    # What the editor's "active now" mark reads. It has to be the real
+    # resolution, so this asserts the case that makes resolution non-obvious:
+    # a time-scoped mode overriding one gesture while Default keeps the rest.
+    await client.put("/api/config", json={
+        "modes": [
+            {"name": "Morning", "template": "actions",
+             "activation": {"type": "window", "between": ["05:00", "07:00"]},
+             "short_press": {"action": "log", "event": "morning"}},
+            {"name": "Default", "template": "actions",
+             "activation": {"type": "always"},
+             "short_press": {"action": "log", "event": "ping"},
+             "long_press": {"action": "log", "event": "held"}},
+        ],
+    })
+
+    ctx.clock.set(datetime.now().replace(hour=6, minute=0))
+    active = (await client.get("/api/status")).json()["active_modes"]
+    assert active["short_press"] == "Morning"  # the window wins
+    assert active["long_press"] == "Default"   # which it does not define
+    assert active["double_tap"] is None        # nothing binds it
+
+    ctx.clock.set(datetime.now().replace(hour=12, minute=0))
+    active = (await client.get("/api/status")).json()["active_modes"]
+    assert active["short_press"] == "Default"  # outside the window
+
+
+# --- the editor's tables mirror the device's ---------------------------
+#
+# schema.js declares what the Lights editor offers, and there is no JS test
+# runner here, so these read the source the way test_protocol.py reads the
+# firmware: a state or style the device has but the editor never lists is
+# silently uneditable, which is how the Pomodoro's WORKING and RESTING
+# colours went missing for a release.
+
+_SCHEMA_JS = Path(__file__).resolve().parents[1] / "aibutton/web/static/schema.js"
+
+
+def _descriptor_values(name: str, field: str) -> set[str]:
+    """The `field` of every object literal in `export const <name> = [...]`."""
+    source = _SCHEMA_JS.read_text(encoding="utf-8")
+    block = re.search(rf"export const {name} = \[(.*?)\n\];", source, re.S)
+    assert block, f"{name} is not an exported array literal in schema.js"
+    return set(re.findall(rf"\b{field}: '([^']+)'", block.group(1)))
+
+
+def test_lights_editor_offers_every_led_state():
+    assert _descriptor_values("LED_STATES", "key") == {s.value for s in LEDState}
+
+
+def test_lights_editor_offers_every_led_style():
+    assert _descriptor_values("LED_STYLES", "type") == set(LED_STYLES)
+
+
 async def test_config_reload_endpoint(client, ctx):
     with open(ctx.cm.path, "w", encoding="utf-8") as f:
         json.dump({"ble_device_name": "EditedViaSSH"}, f)
@@ -166,34 +220,51 @@ async def test_config_reload_endpoint(client, ctx):
     assert ctx.cm.config.ble_device_name == "EditedViaSSH"
 
 
-async def test_trigger_queues_event(client, ctx):
+async def test_trigger_presses_the_device(client, ctx):
     res = await client.post("/api/trigger/double_tap")
     assert res.status_code == 200
-    assert ctx.trigger_queue.get_nowait() is TriggerType.DOUBLE_TAP
+    assert ctx.device.events.get_nowait() is TriggerType.DOUBLE_TAP
 
 
 async def test_trigger_unknown_404(client, ctx):
     res = await client.post("/api/trigger/quadruple_tap")
     assert res.status_code == 404
-    assert ctx.trigger_queue.empty()
+    assert ctx.device.events.empty()
 
 
 async def test_events_endpoint(client, ctx):
-    ctx.store.log_event("meds_taken")
+    ctx.store.log_event("meds_taken", mode="Default")
     ctx.store.toggle_timer("focus")
     rows = (await client.get("/api/events")).json()
     assert [r["name"] for r in rows] == ["focus", "meds_taken"]  # newest first
     assert rows[1]["kind"] == "log"
+    assert rows[1]["mode"] == "Default"
+    assert rows[0]["mode"] is None
 
 
 async def test_status_includes_dev_fields(client, ctx):
     ctx.status.led_state = "THINKING"
     data = (await client.get("/api/status")).json()
-    assert data["mock"] is True
+    assert data["mock"] is True  # a MockDevice is behind the seam
     assert data["clock_override"] is False
     assert data["led_state"] == "THINKING"
     assert data["sound_seq"] == 0
     datetime.fromisoformat(data["now"])  # parseable
+
+
+async def test_status_led_palette_reflects_the_device_not_the_config(client, ctx):
+    # A takeover mode (the metronome) can push a live palette override that
+    # briefly disagrees with cfg.led_palette; the virtual device panel has to
+    # render what the device was actually sent, or it lies about the LED.
+    from dataclasses import replace
+
+    live = dict(ctx.cm.config.led_palette)
+    live["IDLE"] = replace(live["IDLE"], period_s=0.123)
+    ctx.device.set_palette(live)
+
+    data = (await client.get("/api/status")).json()
+    assert data["led_palette"]["IDLE"]["period_s"] == 0.123
+    assert ctx.cm.config.led_palette["IDLE"].period_s != 0.123  # config untouched
 
 
 async def test_clock_set_hhmm_and_clear(client, ctx):

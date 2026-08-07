@@ -9,9 +9,9 @@ from aibutton.config import (
     LogAction,
     ManualActivation,
     Mode,
-    PromptAction,
     ScheduleActivation,
     StopwatchBehavior,
+    TimerToggleAction,
     WindowActivation,
 )
 from aibutton.rules import _in_window, resolve
@@ -43,8 +43,8 @@ WEEKDAYS = ambient(
 DEFAULT = ambient(
     "Default",
     {
-        "short_press": PromptAction(prompt="status", label="Status"),
-        "double_tap": PromptAction(prompt="fact", label="Fact"),
+        "short_press": TimerToggleAction(log_as="focus"),
+        "double_tap": LogAction(event="note"),
     },
 )
 
@@ -73,7 +73,7 @@ def test_matching_mode_without_trigger_falls_through():
     # Inside the meds window, a short press isn't defined there -> Default.
     mode, action = resolve((MEDS, DEFAULT), "short_press", at(6))
     assert mode.name == "Default"
-    assert isinstance(action, PromptAction)
+    assert action == TimerToggleAction(log_as="focus")
 
 
 def test_overnight_window():
@@ -151,7 +151,7 @@ def test_unless_logged_today_without_callback_does_not_skip():
     assert mode.name == "Meds reminder"
 
 
-# --- enter_mode + takeover modes (Phase 2) ------------------------------
+# --- enter_mode + takeover modes ----------------------------------------
 
 def test_enter_mode_action_resolves_from_ambient_mode():
     # An ambient actions mode whose gesture is an enter_mode action resolves

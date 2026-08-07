@@ -1,7 +1,7 @@
 """Config loading, validation, and hot-reload for the AI Button.
 
-The config file lives at /etc/aibutton/config.json (override with the
-AIBUTTON_CONFIG environment variable or the --config CLI flag).
+The config file is `config.json` in the working directory (override with
+the AIBUTTON_CONFIG environment variable or the --config CLI flag).
 
 Config errors never crash the service: a missing file, broken JSON, or a
 wrongly-typed key is logged loudly and replaced by its safe default. The
@@ -18,7 +18,7 @@ stored flat on the mode object, mirroring how actions store their fields.
       { "name": "Default",
         "template": "actions",
         "activation": { "type": "always" },
-        "short_press": { "action": "prompt", "prompt": "...", "label": "..." } },
+        "short_press": { "action": "log", "event": "button_press" } },
       { "name": "Morning meds",
         "template": "actions",
         "activation": { "type": "window", "between": ["05:00", "07:00"],
@@ -42,17 +42,18 @@ Two natures of mode (the template picks the nature):
   main.py). The standalone `alarm` *action* of v0.2 is gone - alarms are a
   template now.
 
-Action primitives (the `actions` template body): prompt (Ollama), log
-(SQLite event), timer_toggle (start/stop stopwatch pairs), webhook (POST -
-the IFTTT/Make/n8n hook).
+Action primitives (the `actions` template body): log (SQLite event),
+timer_toggle (start/stop stopwatch pairs), webhook (POST - the
+IFTTT/Make/n8n hook), enter_mode (switch to a takeover mode).
 
 Migration / back-compat: legacy v0.2 "rules" configs load and are converted
 to ambient `actions` modes (window activation from between/days, else
-always); a rule gesture using the removed `alarm` action has no fire time
-to synthesise, so it is dropped with a loud warning. Legacy v0.1 "commands"
-configs still load as a single Default actions mode. Hot reload via SIGHUP
-applies to everything except ble_device_name (BLE advertisement registers
-once at startup).
+always). Two removed actions are dropped with a loud warning rather than
+silently mangled: `alarm` (a template now, and a rule has no fire time to
+synthesise) and `prompt` (the on-device AI is gone - see DESIGN-ESP32.md;
+use a webhook). Legacy v0.1 "commands" configs, which are all prompts,
+therefore no longer carry anything over. Hot reload via SIGHUP re-reads
+every key; the web server's bind address is only read at startup.
 """
 
 from __future__ import annotations
@@ -63,9 +64,11 @@ import os
 from dataclasses import dataclass, field
 from datetime import time
 
+from .device import LED_STYLES, LEDState
+
 log = logging.getLogger(__name__)
 
-DEFAULT_CONFIG_PATH = "/etc/aibutton/config.json"
+DEFAULT_CONFIG_PATH = "config.json"
 
 TRIGGER_TYPES = ("short_press", "long_press", "double_tap")
 
@@ -73,12 +76,6 @@ _DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")  # index = dateti
 
 
 # --- action primitives -------------------------------------------------
-
-@dataclass(frozen=True)
-class PromptAction:
-    prompt: str
-    label: str = ""
-
 
 @dataclass(frozen=True)
 class LogAction:
@@ -109,7 +106,7 @@ class EnterModeAction:
     target: str
 
 
-Action = PromptAction | LogAction | TimerToggleAction | WebhookAction | EnterModeAction
+Action = LogAction | TimerToggleAction | WebhookAction | EnterModeAction
 
 
 # --- activations -------------------------------------------------------
@@ -211,7 +208,63 @@ class CounterBehavior:
         return "counter"
 
 
-Behavior = ActionsBehavior | AlarmBehavior | StopwatchBehavior | CounterBehavior
+@dataclass(frozen=True)
+class PomodoroBehavior:
+    """The takeover Pomodoro template: alternating work and break blocks,
+    with a long break every `blocks_before_long_break`. Handled by main.py's
+    run_pomodoro loop, not actions.execute().
+
+    `advance` is the setting that decides how much the button asks of you:
+
+        auto        both transitions happen on their own
+        manual      every transition waits for a gesture
+        break_only  breaks start themselves; going back to work is deliberate
+
+    `gestures` maps a trigger to a POMODORO_COMMANDS entry, so what each
+    press does is yours to change - the defaults are toggle / exit / extend.
+    """
+
+    work_minutes: float = 25
+    break_minutes: float = 5
+    long_break_minutes: float = 15
+    blocks_before_long_break: int = 4
+    extend_minutes: float = 10  # what `extend` adds
+    advance: str = "auto"
+    log_as: str = "pomodoro"  # a completed work block is logged under this
+    gestures: dict[str, str] = field(
+        default_factory=lambda: {
+            "short_press": "toggle",
+            "long_press": "exit",
+            "double_tap": "extend",
+        }
+    )
+
+    @property
+    def template(self) -> str:
+        return "pomodoro"
+
+
+# What a gesture can be bound to inside a running Pomodoro.
+POMODORO_COMMANDS = ("toggle", "restart", "extend", "skip", "exit")
+POMODORO_ADVANCE = ("auto", "manual", "break_only")
+
+
+@dataclass(frozen=True)
+class MetronomeBehavior:
+    """The takeover metronome template: short_press/double_tap mark a beat,
+    long_press exits. No fields of its own - the tempo is session state, not
+    config, so there is nothing here to parse or round-trip. Handled by
+    main.py's run_metronome loop, not actions.execute()."""
+
+    @property
+    def template(self) -> str:
+        return "metronome"
+
+
+Behavior = (
+    ActionsBehavior | AlarmBehavior | StopwatchBehavior | CounterBehavior
+    | PomodoroBehavior | MetronomeBehavior
+)
 
 # Which activation types each template accepts (per-template allow-list,
 # mirroring schema.js's `allowedActivations`). A mode whose activation type is
@@ -221,6 +274,8 @@ _ALLOWED_ACTIVATIONS = {
     "alarm": (ScheduleActivation,),
     "stopwatch": (ManualActivation,),
     "counter": (ManualActivation,),
+    "pomodoro": (ManualActivation,),
+    "metronome": (ManualActivation,),
 }
 
 
@@ -239,49 +294,132 @@ class Mode:
 
 
 def _default_modes() -> tuple[Mode, ...]:
+    """The fail-soft floor: one always-on mode that maps all three gestures
+    to primitives needing no setup, so a button with no config (or a broken
+    one) still does something legible instead of erroring on every press."""
     return (
         Mode(
             name="Default",
             activation=AlwaysActivation(),
             behavior=ActionsBehavior(
                 actions={
-                    "short_press": PromptAction(
-                        prompt="Summarize the latest system status in one sentence.",
-                        label="Status Check",
-                    ),
-                    "long_press": PromptAction(
-                        prompt="What is the current time and a productivity tip?",
-                        label="Focus Prompt",
-                    ),
-                    "double_tap": PromptAction(
-                        prompt="Tell me something interesting.",
-                        label="Random Fact",
-                    ),
+                    "short_press": LogAction(event="button_press"),
+                    "long_press": TimerToggleAction(log_as="focus"),
+                    "double_tap": LogAction(event="note"),
                 },
             ),
         ),
     )
 
 
+# --- LED palette --------------------------------------------------------
+
+@dataclass(frozen=True)
+class LedEffect:
+    """What one LED state looks like: a style, its colours, and its speed.
+
+    Fields the style ignores are still carried (and edited) so switching
+    style back and forth doesn't lose your colours."""
+
+    style: str = "solid"
+    color: str = "#0000ff"
+    color2: str = "#000000"  # `alternate` and `fade` only
+    period_s: float = 1.0
+
+
+def _default_palette() -> dict[str, LedEffect]:
+    """The starting point for edits, and the one definition of these colours:
+    the firmware's own table is only a fallback for running with no host."""
+    return {
+        LEDState.IDLE.value: LedEffect("breathe", "#0000ff", period_s=3.0),
+        LEDState.LISTENING.value: LedEffect("solid", "#ffff00"),
+        LEDState.THINKING.value: LedEffect("rainbow", "#ffffff", period_s=1.0),
+        LEDState.SUCCESS.value: LedEffect("solid", "#00ff00"),
+        LEDState.ERROR.value: LedEffect("flash", "#ff0000", period_s=0.4),
+        LEDState.ALERT.value: LedEffect("alternate", "#ff0000", "#ffffff", 0.4),
+        LEDState.TIMING.value: LedEffect("breathe", "#00ffff", period_s=1.6),
+        LEDState.COUNTING.value: LedEffect("breathe", "#ff00ff", period_s=2.2),
+        # Slow enough to sit next to you for 25 minutes without nagging.
+        LEDState.WORKING.value: LedEffect("breathe", "#ff4400", period_s=5.0),
+        LEDState.RESTING.value: LedEffect("breathe", "#00ff88", period_s=5.0),
+        # ~120 BPM until a tap sets a real tempo; main.py rewrites period_s live.
+        LEDState.METRONOME.value: LedEffect("flash", "#ffaa00", period_s=0.5),
+    }
+
+
+_HEX_DIGITS = set("0123456789abcdef")
+
+
+def _parse_color(raw, where: str, default: str) -> str:
+    """'#rrggbb' (case-insensitive, '#' optional) normalised to lowercase."""
+    if isinstance(raw, str):
+        text = raw.strip().lstrip("#").lower()
+        if len(text) == 6 and set(text) <= _HEX_DIGITS:
+            return f"#{text}"
+    log.error("config: %s must be a colour like \"#ff8800\" - using %s", where, default)
+    return default
+
+
+def _parse_effect(raw, where: str, default: LedEffect) -> LedEffect:
+    """One palette entry, falling back per field: a bad colour costs you that
+    colour, not the whole state's appearance."""
+    if not isinstance(raw, dict):
+        log.error("config: %s must be an object - using defaults", where)
+        return default
+
+    style = raw.get("style", default.style)
+    if not (isinstance(style, str) and style in LED_STYLES):
+        log.error(
+            "config: %s.style must be one of %s - using %r",
+            where, "/".join(LED_STYLES), default.style,
+        )
+        style = default.style
+
+    period = raw.get("period_s", default.period_s)
+    if not (isinstance(period, (int, float)) and not isinstance(period, bool) and period > 0):
+        log.error("config: %s.period_s must be a number > 0 - using %s", where, default.period_s)
+        period = default.period_s
+
+    return LedEffect(
+        style=style,
+        color=_parse_color(raw.get("color", default.color), f"{where}.color", default.color),
+        color2=_parse_color(raw.get("color2", default.color2), f"{where}.color2", default.color2),
+        period_s=float(period),
+    )
+
+
+def _parse_palette(raw) -> dict[str, LedEffect]:
+    """Merge the configured palette over the defaults. Always returns an
+    entry for every LED state: a state the device can enter but the palette
+    has no colour for would be an invisible button."""
+    palette = _default_palette()
+    if "led_palette" not in raw:
+        return palette
+    entries = raw["led_palette"]
+    if not isinstance(entries, dict):
+        log.error("config: 'led_palette' must be an object - using defaults")
+        return palette
+    for name, entry in entries.items():
+        if name not in palette:
+            log.warning("config: led_palette has unknown LED state %r - ignored", name)
+            continue
+        palette[name] = _parse_effect(entry, f"led_palette.{name}", palette[name])
+    return palette
+
+
 @dataclass(frozen=True)
 class AppConfig:
-    ollama_host: str = "http://192.168.1.10:11434"
-    local_ollama_host: str = "http://127.0.0.1:11434"
-    local_model: str = "smollm2:135m"
-    remote_model: str = "llama3.2:1b"
-    prefer_remote: bool = True
-    fallback_to_local: bool = True
-    # The local fallback runs on the Pi itself at ~2-4 tokens/s, so it
-    # needs a far longer budget than the LAN server.
-    remote_timeout_s: float = 5.0
-    local_timeout_s: float = 60.0
+    # The name the ESP32 advertises; the host scans for it (see DESIGN-ESP32.md).
     ble_device_name: str = "AIButton"
     sounds_enabled: bool = True
-    database_path: str = "data/events.db"  # relative to WorkingDirectory
+    database_path: str = "data/events.db"  # relative to the working directory
     web_enabled: bool = True
     web_host: str = "0.0.0.0"  # LAN-facing; the web UI has no auth (see webui.py)
     web_port: int = 8080
     modes: tuple[Mode, ...] = field(default_factory=_default_modes)
+    # What each LED state looks like. Pushed to the device on connect and on
+    # every edit, so the button and the web UI's virtual device agree.
+    led_palette: dict[str, LedEffect] = field(default_factory=_default_palette)
 
 
 # --- parsing helpers ----------------------------------------------------
@@ -313,11 +451,7 @@ def _parse_action(raw, where: str) -> Action | None:
         return None
     # Legacy v0.1 command entries have no "action" key, just prompt/label.
     kind = raw.get("action", "prompt" if "prompt" in raw else None)
-    if kind == "prompt":
-        prompt, label = raw.get("prompt"), raw.get("label", "")
-        if isinstance(prompt, str) and prompt and isinstance(label, str):
-            return PromptAction(prompt=prompt, label=label)
-    elif kind == "log":
+    if kind == "log":
         event = raw.get("event")
         if isinstance(event, str) and event:
             return LogAction(event=event)
@@ -347,6 +481,15 @@ def _parse_action(raw, where: str) -> Action | None:
         log.error(
             "config: %s uses the removed 'alarm' action - alarms are now an "
             "alarm-template mode; ignored", where,
+        )
+        return None
+    elif kind == "prompt":
+        # The on-device AI is gone with the Pi build (DESIGN-ESP32.md); there
+        # is nothing on the host to send a prompt to. Say so plainly rather
+        # than letting it fall through as a generic "not a valid action".
+        log.error(
+            "config: %s uses the removed 'prompt' action - the on-device AI "
+            "client is gone; POST to an AI via a webhook instead; ignored", where,
         )
         return None
     log.error("config: %s is not a valid action - ignored", where)
@@ -511,6 +654,79 @@ def _parse_counter_body(raw: dict, where: str) -> CounterBehavior | None:
     return CounterBehavior(event=event)
 
 
+def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior | None:
+    """Parse the flat pomodoro-template fields, falling back per key. A bad
+    duration costs you that duration, not the whole mode."""
+    defaults = PomodoroBehavior()
+
+    def minutes(key: str, default: float) -> float:
+        value = raw.get(key, default)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return float(value)
+        log.error("config: %s.%s must be a number > 0 - using %s", where, key, default)
+        return default
+
+    blocks = raw.get("blocks_before_long_break", defaults.blocks_before_long_break)
+    if not (isinstance(blocks, int) and not isinstance(blocks, bool) and blocks > 0):
+        log.error(
+            "config: %s.blocks_before_long_break must be a whole number > 0 - using %s",
+            where, defaults.blocks_before_long_break,
+        )
+        blocks = defaults.blocks_before_long_break
+
+    advance = raw.get("advance", defaults.advance)
+    if not (isinstance(advance, str) and advance in POMODORO_ADVANCE):
+        log.error(
+            "config: %s.advance must be one of %s - using %r",
+            where, "/".join(POMODORO_ADVANCE), defaults.advance,
+        )
+        advance = defaults.advance
+
+    log_as = raw.get("log_as", defaults.log_as)
+    if not (isinstance(log_as, str) and log_as):
+        log.error("config: %s.log_as must be a non-empty string - using %r",
+                  where, defaults.log_as)
+        log_as = defaults.log_as
+
+    gestures = dict(defaults.gestures)
+    for trigger in TRIGGER_TYPES:
+        if trigger not in raw:
+            continue
+        command = raw[trigger]
+        if command in (None, ""):  # explicitly unbound
+            gestures.pop(trigger, None)
+        elif isinstance(command, str) and command in POMODORO_COMMANDS:
+            gestures[trigger] = command
+        else:
+            log.error(
+                "config: %s.%s must be one of %s - keeping %r",
+                where, trigger, "/".join(POMODORO_COMMANDS), gestures.get(trigger),
+            )
+    if "exit" not in gestures.values():
+        # Every other takeover mode can be left with a press. A Pomodoro with
+        # no exit gesture would own the button until the session ended.
+        log.warning(
+            "config: %s has no gesture bound to 'exit' - the only way out is "
+            "finishing the session", where,
+        )
+
+    return PomodoroBehavior(
+        work_minutes=minutes("work_minutes", defaults.work_minutes),
+        break_minutes=minutes("break_minutes", defaults.break_minutes),
+        long_break_minutes=minutes("long_break_minutes", defaults.long_break_minutes),
+        blocks_before_long_break=blocks,
+        extend_minutes=minutes("extend_minutes", defaults.extend_minutes),
+        advance=advance,
+        log_as=log_as,
+        gestures=gestures,
+    )
+
+
+def _parse_metronome_body(raw: dict, where: str) -> MetronomeBehavior:
+    """No fields to parse - a metronome mode is just a template + activation."""
+    return MetronomeBehavior()
+
+
 def _parse_mode(raw, idx: int) -> Mode | None:
     """Parse one mode. A mode with a broken activation, a template<->
     activation nature mismatch, or no usable body is skipped entirely
@@ -545,6 +761,10 @@ def _parse_mode(raw, idx: int) -> Mode | None:
         behavior = _parse_stopwatch_body(raw, where)
     elif template == "counter":
         behavior = _parse_counter_body(raw, where)
+    elif template == "pomodoro":
+        behavior = _parse_pomodoro_body(raw, where)
+    elif template == "metronome":
+        behavior = _parse_metronome_body(raw, where)
     else:  # pragma: no cover - allow-list keys and this dispatch stay in sync
         log.error("config: %s (%r) has unknown template %r - skipped", where, name, template)
         return None
@@ -670,25 +890,15 @@ def parse_config(raw: dict) -> AppConfig:
     configs submitted through the web API."""
     defaults = AppConfig()
     known = {
-        "ollama_host", "local_ollama_host", "local_model", "remote_model",
-        "prefer_remote", "fallback_to_local", "remote_timeout_s",
-        "local_timeout_s", "ble_device_name", "sounds_enabled",
-        "database_path", "web_enabled", "web_host", "web_port",
-        "modes", "rules", "commands",
+        "ble_device_name", "sounds_enabled", "database_path",
+        "web_enabled", "web_host", "web_port",
+        "modes", "rules", "commands", "led_palette",
     }
     for key in raw:
         if key not in known:
             log.warning("config: unknown key %r - ignored", key)
 
     return AppConfig(
-        ollama_host=_take(raw, "ollama_host", str, defaults.ollama_host),
-        local_ollama_host=_take(raw, "local_ollama_host", str, defaults.local_ollama_host),
-        local_model=_take(raw, "local_model", str, defaults.local_model),
-        remote_model=_take(raw, "remote_model", str, defaults.remote_model),
-        prefer_remote=_take(raw, "prefer_remote", bool, defaults.prefer_remote),
-        fallback_to_local=_take(raw, "fallback_to_local", bool, defaults.fallback_to_local),
-        remote_timeout_s=_take(raw, "remote_timeout_s", float, defaults.remote_timeout_s),
-        local_timeout_s=_take(raw, "local_timeout_s", float, defaults.local_timeout_s),
         ble_device_name=_take(raw, "ble_device_name", str, defaults.ble_device_name),
         sounds_enabled=_take(raw, "sounds_enabled", bool, defaults.sounds_enabled),
         database_path=_take(raw, "database_path", str, defaults.database_path),
@@ -696,6 +906,7 @@ def parse_config(raw: dict) -> AppConfig:
         web_host=_take(raw, "web_host", str, defaults.web_host),
         web_port=_take(raw, "web_port", int, defaults.web_port),
         modes=_parse_modes(raw),
+        led_palette=_parse_palette(raw),
     )
 
 
@@ -719,8 +930,6 @@ def load_config(path: str) -> AppConfig:
 
 
 def _action_to_dict(action: Action) -> dict:
-    if isinstance(action, PromptAction):
-        return {"action": "prompt", "prompt": action.prompt, "label": action.label}
     if isinstance(action, LogAction):
         return {"action": "log", "event": action.event}
     if isinstance(action, TimerToggleAction):
@@ -772,6 +981,16 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["log_as"] = mode.behavior.log_as
     elif isinstance(mode.behavior, CounterBehavior):
         entry["event"] = mode.behavior.event
+    elif isinstance(mode.behavior, PomodoroBehavior):
+        entry["work_minutes"] = mode.behavior.work_minutes
+        entry["break_minutes"] = mode.behavior.break_minutes
+        entry["long_break_minutes"] = mode.behavior.long_break_minutes
+        entry["blocks_before_long_break"] = mode.behavior.blocks_before_long_break
+        entry["extend_minutes"] = mode.behavior.extend_minutes
+        entry["advance"] = mode.behavior.advance
+        entry["log_as"] = mode.behavior.log_as
+        for trigger, command in mode.behavior.gestures.items():
+            entry[trigger] = command
     return entry
 
 
@@ -782,14 +1001,6 @@ def as_dict(cfg: AppConfig) -> dict:
     Only activation fields that are set are emitted; a window with neither
     bound is never produced (migration picks `always` instead)."""
     return {
-        "ollama_host": cfg.ollama_host,
-        "local_ollama_host": cfg.local_ollama_host,
-        "local_model": cfg.local_model,
-        "remote_model": cfg.remote_model,
-        "prefer_remote": cfg.prefer_remote,
-        "fallback_to_local": cfg.fallback_to_local,
-        "remote_timeout_s": cfg.remote_timeout_s,
-        "local_timeout_s": cfg.local_timeout_s,
         "ble_device_name": cfg.ble_device_name,
         "sounds_enabled": cfg.sounds_enabled,
         "database_path": cfg.database_path,
@@ -797,6 +1008,15 @@ def as_dict(cfg: AppConfig) -> dict:
         "web_host": cfg.web_host,
         "web_port": cfg.web_port,
         "modes": [_mode_to_dict(mode) for mode in cfg.modes],
+        "led_palette": {
+            name: {
+                "style": effect.style,
+                "color": effect.color,
+                "color2": effect.color2,
+                "period_s": effect.period_s,
+            }
+            for name, effect in cfg.led_palette.items()
+        },
     }
 
 

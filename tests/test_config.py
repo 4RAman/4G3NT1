@@ -11,8 +11,8 @@ from aibutton.config import (
     EnterModeAction,
     LogAction,
     ManualActivation,
+    MetronomeBehavior,
     Mode,
-    PromptAction,
     ScheduleActivation,
     StopwatchBehavior,
     TimerToggleAction,
@@ -47,9 +47,6 @@ def test_non_object_top_level_uses_defaults(tmp_path):
 
 def test_full_valid_v3_config(tmp_path):
     cfg = load_config(write(tmp_path, {
-        "ollama_host": "http://10.0.0.5:11434",
-        "prefer_remote": False,
-        "remote_timeout_s": 10,
         "ble_device_name": "MyButton",
         "sounds_enabled": False,
         "database_path": "/var/lib/aibutton/events.db",
@@ -73,12 +70,11 @@ def test_full_valid_v3_config(tmp_path):
                 "name": "Default",
                 "template": "actions",
                 "activation": {"type": "always"},
-                "short_press": {"action": "prompt", "prompt": "status", "label": "Status"},
+                "short_press": {"action": "enter_mode", "target": "Focus"},
             },
         ],
     }))
-    assert cfg.prefer_remote is False
-    assert cfg.remote_timeout_s == 10.0  # int coerced to float
+    assert cfg.ble_device_name == "MyButton"
     assert cfg.sounds_enabled is False
     assert cfg.database_path == "/var/lib/aibutton/events.db"
 
@@ -94,7 +90,7 @@ def test_full_valid_v3_config(tmp_path):
     )
     assert workday.activation.days is None
     assert isinstance(default.activation, AlwaysActivation)
-    assert default.behavior.actions["short_press"] == PromptAction(prompt="status", label="Status")
+    assert default.behavior.actions["short_press"] == EnterModeAction(target="Focus")
 
 
 def test_default_modes_when_empty(tmp_path):
@@ -118,7 +114,7 @@ def test_legacy_rules_migrate_to_actions_modes(tmp_path):
             },
             {
                 "name": "Default",
-                "short_press": {"action": "prompt", "prompt": "p", "label": "L"},
+                "short_press": {"action": "timer_toggle", "log_as": "focus"},
             },
         ],
     }))
@@ -132,7 +128,7 @@ def test_legacy_rules_migrate_to_actions_modes(tmp_path):
     assert meds.behavior.actions["double_tap"] == LogAction(event="meds_taken")
     # no scope -> always activation
     assert isinstance(default.activation, AlwaysActivation)
-    assert default.behavior.actions["short_press"] == PromptAction(prompt="p", label="L")
+    assert default.behavior.actions["short_press"] == TimerToggleAction(log_as="focus")
 
 
 def test_legacy_rule_with_alarm_action_drops_gesture(tmp_path):
@@ -164,21 +160,47 @@ def test_legacy_rule_only_alarm_action_skipped_falls_back(tmp_path):
     assert cfg.modes == AppConfig().modes
 
 
-def test_legacy_commands_become_single_default_mode(tmp_path):
+def test_mode_with_prompt_action_drops_the_gesture(tmp_path):
+    # The prompt action went with the on-device AI. Like the removed alarm
+    # action it is dropped, not silently mangled; other gestures survive.
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {
+                "name": "Default",
+                "template": "actions",
+                "activation": {"type": "always"},
+                "short_press": {"action": "prompt", "prompt": "tell me a fact"},
+                "double_tap": {"action": "log", "event": "note"},
+            },
+        ],
+    }))
+    mode = cfg.modes[0]
+    assert "short_press" not in mode.behavior.actions
+    assert mode.behavior.actions == {"double_tap": LogAction(event="note")}
+
+
+def test_legacy_commands_are_all_prompts_so_nothing_migrates(tmp_path):
+    # v0.1 "commands" configs only ever held prompts, so with the AI gone
+    # they migrate to nothing and the built-in defaults take over.
     cfg = load_config(write(tmp_path, {
         "commands": {
             "short_press": {"prompt": "p1", "label": "l1"},
             "double_tap": {"prompt": "p3", "label": "l3"},
         },
     }))
+    assert cfg.modes == AppConfig().modes
+
+
+def test_legacy_commands_with_current_actions_still_migrate(tmp_path):
+    cfg = load_config(write(tmp_path, {
+        "commands": {"short_press": {"action": "log", "event": "ping"}},
+    }))
     assert len(cfg.modes) == 1
     mode = cfg.modes[0]
     assert mode.name == "Default"
     assert mode.template == "actions"
     assert isinstance(mode.activation, AlwaysActivation)
-    assert mode.behavior.actions["short_press"] == PromptAction(prompt="p1", label="l1")
-    assert mode.behavior.actions["double_tap"] == PromptAction(prompt="p3", label="l3")
-    assert "long_press" not in mode.behavior.actions
+    assert mode.behavior.actions == {"short_press": LogAction(event="ping")}
 
 
 def test_modes_take_precedence_over_legacy_rules(tmp_path):
@@ -198,12 +220,12 @@ def test_modes_take_precedence_over_legacy_rules(tmp_path):
 
 def test_bad_key_falls_back_others_survive(tmp_path):
     cfg = load_config(write(tmp_path, {
-        "prefer_remote": "yes",          # wrong type -> default True
-        "remote_timeout_s": True,        # bool is not a number -> default
+        "sounds_enabled": "yes",   # wrong type -> default True
+        "web_port": True,          # bool is not an int -> default
         "ble_device_name": "Kept",
     }))
-    assert cfg.prefer_remote is True
-    assert cfg.remote_timeout_s == 5.0
+    assert cfg.sounds_enabled is True
+    assert cfg.web_port == 8080
     assert cfg.ble_device_name == "Kept"
 
 
@@ -214,7 +236,7 @@ def test_mode_with_bad_window_is_skipped_others_survive(tmp_path):
              "activation": {"type": "window", "between": ["5am", "7am"]},
              "double_tap": {"action": "log", "event": "x"}},
             {"name": "Good", "template": "actions", "activation": {"type": "always"},
-             "short_press": {"action": "prompt", "prompt": "p", "label": "L"}},
+             "short_press": {"action": "log", "event": "x"}},
         ],
     }))
     assert [m.name for m in cfg.modes] == ["Good"]
@@ -489,6 +511,30 @@ def test_counter_with_schedule_is_skipped(tmp_path):
     assert [m.name for m in cfg.modes] == ["Good"]
 
 
+def test_metronome_mode_parses(tmp_path):
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {"name": "Tempo", "template": "metronome", "activation": {"type": "manual"}},
+        ],
+    }))
+    mode = cfg.modes[0]
+    assert mode.template == "metronome"
+    assert isinstance(mode.activation, ManualActivation)
+    assert mode.behavior == MetronomeBehavior()
+
+
+def test_metronome_with_schedule_is_skipped(tmp_path):
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {"name": "Wrong", "template": "metronome",
+             "activation": {"type": "schedule", "at": "07:00"}},
+            {"name": "Good", "template": "actions", "activation": {"type": "always"},
+             "short_press": {"action": "log", "event": "y"}},
+        ],
+    }))
+    assert [m.name for m in cfg.modes] == ["Good"]
+
+
 def test_alarm_with_manual_is_skipped(tmp_path):
     cfg = load_config(write(tmp_path, {
         "modes": [
@@ -579,7 +625,7 @@ def test_as_dict_roundtrips_actions_and_alarm(tmp_path):
              "short_press": {"action": "timer_toggle", "log_as": "focus"}},
             {"name": "Meds", "template": "actions", "activation": {"type": "always"},
              "unless_logged_today": "meds_taken",
-             "long_press": {"action": "prompt", "prompt": "p", "label": "L"}},
+             "long_press": {"action": "log", "event": "meds_taken"}},
             {"name": "Wake up", "template": "alarm",
              "activation": {"type": "schedule", "at": "07:00", "days": ["mon", "fri"]},
              "message": "Wake up", "label": "WU", "snooze_minutes": 9, "dismiss_event": "woke_up"},
@@ -639,6 +685,19 @@ def test_all_four_templates_and_enter_mode_roundtrip(tmp_path):
     assert dumped["modes"][3] == {
         "name": "Water", "template": "counter",
         "activation": {"type": "manual"}, "event": "water",
+    }
+    assert parse_config(dumped) == cfg  # exact round-trip
+
+
+def test_metronome_roundtrips(tmp_path):
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {"name": "Tempo", "template": "metronome", "activation": {"type": "manual"}},
+        ],
+    }))
+    dumped = as_dict(cfg)
+    assert dumped["modes"][0] == {
+        "name": "Tempo", "template": "metronome", "activation": {"type": "manual"},
     }
     assert parse_config(dumped) == cfg  # exact round-trip
 

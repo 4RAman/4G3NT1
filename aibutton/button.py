@@ -1,9 +1,13 @@
 """Button trigger detection: short press, long press, double tap.
 
-TriggerDetector is a pure, timestamp-driven state machine with no GPIO
-dependencies (unit-testable off-device). ButtonListener wires it to a
-gpiozero Button and emits TriggerType values on an asyncio.Queue - no
-callbacks into business logic.
+**This is the firmware spec, not host runtime code.** Gesture timing runs
+on the ESP32 - a 0.4 s double-tap window would not survive BLE notification
+jitter - so the host receives finished gestures on a ButtonDevice
+([device.py](device.py)) and never sees raw edges. TriggerDetector stays
+here as the reference implementation the MicroPython port follows, with
+[test_trigger_detector.py](../tests/test_trigger_detector.py) as its spec
+vectors: it is pure and timestamp-driven, so both sides can be checked
+against the same cases.
 
 Timing rules
 ------------
@@ -16,16 +20,15 @@ Timing rules
   upgrade it; if the press itself outlives the window, it emits
   immediately on release. Worst-case added latency: 0.4 s.
 
-Debounce (50 ms) is handled by gpiozero's bounce_time.
+Debounce (50 ms) is the firmware's job, as is calling on_timeout() at the
+deadline on_release() hands back.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from enum import Enum
 
-from gpiozero import Button
+from .device import TriggerType
 
 log = logging.getLogger(__name__)
 
@@ -33,12 +36,6 @@ DEBOUNCE_S = 0.05
 HOLD_S = 1.0
 DOUBLE_WINDOW_S = 0.4
 _EPSILON = 1e-6  # guards float jitter when a timer fires exactly on its deadline
-
-
-class TriggerType(Enum):
-    SHORT_PRESS = "short_press"
-    LONG_PRESS = "long_press"
-    DOUBLE_TAP = "double_tap"
 
 
 class TriggerDetector:
@@ -100,47 +97,3 @@ class TriggerDetector:
             self._pending_press_t = None
             return TriggerType.SHORT_PRESS
         return None
-
-
-class ButtonListener:
-    """Owns the GPIO button; emits TriggerType values on `.events`.
-
-    Must be constructed inside a running event loop. gpiozero callbacks
-    arrive on a background thread and are hopped onto the loop with
-    call_soon_threadsafe, so the detector only ever runs on the loop.
-    """
-
-    def __init__(self, pin: int = 17):
-        self._loop = asyncio.get_running_loop()
-        self.events: asyncio.Queue[TriggerType] = asyncio.Queue()
-        self._detector = TriggerDetector()
-        self._button = Button(
-            pin, pull_up=True, bounce_time=DEBOUNCE_S, hold_time=HOLD_S
-        )
-        self._button.when_pressed = lambda: self._loop.call_soon_threadsafe(self._on_press)
-        self._button.when_released = lambda: self._loop.call_soon_threadsafe(self._on_release)
-        self._button.when_held = lambda: self._loop.call_soon_threadsafe(self._on_hold)
-
-    def close(self) -> None:
-        self._button.close()
-
-    def _emit(self, event: TriggerType | None) -> None:
-        if event is not None:
-            log.info("button: %s", event.value)
-            self.events.put_nowait(event)
-
-    def _on_press(self) -> None:
-        self._emit(self._detector.on_press(self._loop.time()))
-
-    def _on_hold(self) -> None:
-        self._emit(self._detector.on_hold(self._loop.time()))
-
-    def _on_release(self) -> None:
-        now = self._loop.time()
-        event, deadline = self._detector.on_release(now)
-        self._emit(event)
-        if deadline is not None:
-            self._loop.call_later(max(0.0, deadline - now), self._on_timeout)
-
-    def _on_timeout(self) -> None:
-        self._emit(self._detector.on_timeout(self._loop.time()))

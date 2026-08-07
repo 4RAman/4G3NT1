@@ -1,0 +1,35 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+
+  // firmware/ modules import each other by bare name (`import protocol`)
+  // because that is how they sit on the device's filesystem; stubs/ holds
+  // the hand-written aioble stub. Without these, every firmware import is
+  // an unresolved-import squiggle.
+  "python.analysis.extraPaths": ["firmware", "stubs"],
+  // Where `machine`, `bluetooth`, `neopixel` and friends come from. Populate
+  // it with the "MicroPython: refresh stubs" task; it is gitignored.
+  "python.analysis.stubPath": "typings",
+  // MicroPython's dialect is close to but not exactly CPython's, and the
+  // stubs are approximate. Basic keeps the genuinely useful errors (typos,
+  // wrong arity, unresolved imports) without a wall of noise about it.
+  "python.analysis.typeCheckingMode": "basic",
+
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": ["tests"],
+
+  // Stub files are generated and large; keep them out of search results and
+  // the file watcher without hiding them from the explorer entirely.
+  "search.exclude": {
+    "typings/**": true,
+    ".venv/**": true
+  },
+  "files.watcherExclude": {
+    "**/typings/**": true,
+    "**/.venv/**": true
+  },
+
+  "[python]": {
+    "editor.rulers": [88]
+  }
+}

@@ -5,9 +5,6 @@ whose meaning changes with the **mode** it is in. It is the complete usage
 reference and a validation target for the build — the architecture and phasing
 behind it live in [DESIGN.md](DESIGN.md).
 
-> Some pieces ship in phases (see the bottom of this manual). Where a feature
-> is Phase 2, it is marked **[Phase 2]**.
-
 ---
 
 ## 1. What it is
@@ -71,17 +68,22 @@ Configure shows your modes as a list of one-line summaries:
 
 ```
 MODES
-  > Default      always · short->Ask AI · long->Focus      [edit]
+  > Default      always · short->Log "meds" · long->Focus   [edit]
   > Wake up      at 07:00 Mon-Fri · Alarm, snooze 9 min     [edit]
   > Focus        entered from Default · Stopwatch "focus"   [edit]
   + Add mode
-> Device settings   (AI hosts, timeouts, ports...)
+> Device settings   (Bluetooth name, database, ports...)
 [Save & apply]  [Check]  [Revert]    Saved
 ```
 
 Click a summary to expand and edit it; click again to collapse. Device
 plumbing lives in its own collapsed **Device settings** drawer so it stays out
-of your way.
+of your way, and the colours in a **Lights** drawer beside it (§8).
+
+Next to **+ Add mode** is a **ready-made mode** picker: Pomodoro, Gratitude
+counter, Stopwatch and a 5AM alarm, each dropped in complete and ready to
+edit. Quicker than assembling one field by field, and a decent tour of what
+the button can do.
 
 ### 4.2 Anatomy of a mode
 
@@ -89,13 +91,22 @@ Every mode is edited with the same three-part card, no matter its kind:
 
 1. **Name** — your label; shown in summaries, the status line, and over
    Bluetooth.
-2. **Template** — *what kind* of mode it is (Actions / Alarm / Stopwatch /
-   Counter). Choosing it swaps the fields below to match.
-3. **Activation** — *when* it turns on (Always / Time window / At a time /
-   Entered from another mode). Choosing it swaps the scope fields.
+2. **What it does** — *what kind* of mode it is (Actions / Alarm / Stopwatch /
+   Counter / Pomodoro / Metronome). Choosing it swaps the fields below to
+   match.
+3. **When it's on** — (Always on / Only during certain hours / At a set time
+   each day / Only when another mode starts it). Choosing it swaps the scope
+   fields.
 
 Because the card shape is always the same, the menu never grows new sections
-as you add capability — new mode types just appear in the Template dropdown.
+as you add capability — new mode types just appear in the **What it does**
+dropdown.
+
+Modes are listed in two groups, because they turn on in completely different
+ways: **Everyday modes** answer presses in list order, and **modes that take
+over the button** own every press until you leave them. Each takeover mode's
+card says in plain words how to start it and how to get back out, and warns
+you if nothing can start it at all.
 
 ### 4.3 Buttons
 
@@ -109,7 +120,7 @@ list exactly what to fix first.
 
 ---
 
-## 5. Templates (what a mode does)
+## 5. What a mode does
 
 ### 5.1 Actions — the everyday mode
 
@@ -120,7 +131,6 @@ Available actions:
 
 | Action | What it does |
 |---|---|
-| **Ask the AI** | sends your prompt to the model; the spoken/returned answer is shown and sent over Bluetooth |
 | **Log an event** | records a timestamped event (meds, habits); counted and streak-tracked |
 | **Start / stop a timer** | toggles a named stopwatch; the elapsed time is logged when stopped |
 | **Call a webhook** | POSTs to any URL — the IFTTT / Make / n8n / Home Assistant hook |
@@ -150,7 +160,7 @@ Fields:
 
 Activate an alarm with **At a time** (a real alarm clock) — see §6.
 
-### 5.3 Stopwatch — time something **[Phase 2]**
+### 5.3 Stopwatch — time something
 
 A **takeover** mode. Starting it begins timing (LED shows a running state).
 
@@ -162,7 +172,35 @@ A **takeover** mode. Starting it begins timing (LED shows a running state).
 Field: **Timer name** — what the elapsed time is logged as (e.g. `focus`).
 Daily totals accumulate, so you can see total focus time for the day.
 
-### 5.4 Counter — tally something **[Phase 2]**
+### 5.4 Pomodoro — work in blocks
+
+A **takeover** mode. Starting it begins a work block; when that ends, a
+break begins, and so on. The LED shows which half you are in — a slow orange
+breathe for work, green for a break — so it reads from across the room.
+
+Every finished **work** block is logged (breaks are not), so your counts and
+streaks work on focus time like any other event.
+
+Fields:
+
+- **Work / Break / Long break minutes** — 25 / 5 / 15 by default.
+- **Blocks before a long break** — every 4th break is the long one.
+- **Between blocks** — how much the button asks of you:
+  *start the next block automatically*, *wait for a press every time*, or
+  *breaks start themselves, work waits for a press*.
+- **Minutes added by "Add more time"** — 10 by default.
+- **Log each finished block as** — the event name, `pomodoro` by default.
+
+**The three gestures are yours to assign**, each to one of: start/pause,
+restart the block, add more time, skip to the next block, or leave. The
+defaults are **tap = start/pause, long press = leave, double tap = +10 min**
+— long press leaves, matching every other takeover mode. Assign *restart*
+to whichever gesture you prefer.
+
+While paused (or waiting for you to start the next block) the LED shows the
+**Listening** colour, since nothing is counting down.
+
+### 5.5 Counter — tally something
 
 A **takeover** mode. Opening it starts a tally (LED shows a counting state).
 
@@ -173,16 +211,32 @@ A **takeover** mode. Opening it starts a tally (LED shows a counting state).
 
 Field: **Event name** — what each increment is logged as (e.g. `water`).
 
+### 5.6 Metronome — tap out a tempo
+
+A **takeover** mode, and the only one with nothing to configure — the tempo is
+whatever you tap, not something you save.
+
+| Gesture | Result |
+|---|---|
+| **Short press / double tap** | mark a beat |
+| **Long press** | exit |
+
+The BPM is a rolling average of your recent taps, so it settles as you keep
+going rather than jumping on every beat; pause for more than two seconds and
+it starts the average over. The LED pulses live at the tapped tempo — fast
+tapping is capped at a safe flash rate — and goes back to your configured
+**Metronome running** colour when you leave.
+
 ---
 
-## 6. Activations (when a mode turns on)
+## 6. When it's on
 
-| Activation | For | You set | Behaviour |
+| Setting | For | You set | Behaviour |
 |---|---|---|---|
-| **Always** | the Default ambient mode | — | the floor; active whenever nothing else has taken over. Exactly one mode is Always. |
-| **Time window** | ambient modes | start + end time, optional days | active only inside the window (it may cross midnight, e.g. 22:00–06:00); overrides Default for the gestures it defines |
-| **At a time** | Alarm (and other takeover modes) | a clock time, optional days | fires at that time and takes over — this is how you set an alarm |
-| **Entered from another mode** | Stopwatch / Counter | — | never starts on its own; you reach it with an **Enter a mode** action on a gesture in another mode |
+| **Always on** | the Default everyday mode | — | the floor; active whenever nothing else has taken over. Exactly one mode is Always on. |
+| **Only during certain hours** | everyday modes | start + end time, optional days | active only inside the window (it may cross midnight, e.g. 22:00–06:00); overrides Default for the gestures it defines |
+| **At a set time each day** | Alarm | a clock time, optional days | fires at that time and takes over — this is how you set an alarm |
+| **Only when another mode starts it** | Stopwatch / Counter / Pomodoro | — | never starts on its own; you reach it with an **Enter a mode** action on a gesture in another mode |
 
 How they interact when you press the button:
 
@@ -199,29 +253,38 @@ is running, the alarm takes priority.
 ## 7. Recipes
 
 **Wake-up alarm, weekdays at 7 am**
-Add mode → name "Wake up" → Template **Alarm** (message "Wake up", snooze 9,
-log on dismiss `woke_up`) → Activation **At a time** 07:00, days Mon–Fri.
+Add mode → name "Wake up" → **Alarm** (message "Wake up", snooze 9,
+log on dismiss `woke_up`) → **At a set time each day** 07:00, days Mon–Fri.
 At 7 am it rings; tap to dismiss, hold to snooze 9 minutes.
 
 **Morning meds reminder that goes quiet once taken**
-Add mode → "Morning meds" → Template **Actions** (double tap → Log
-`meds_taken`) → Activation **Time window** 05:00–07:00 → set **Skip if already
-logged today** = `meds_taken`. Between 5 and 7, a double tap logs your meds and
+Add mode → "Morning meds" → **Actions** (double tap → Log
+`meds_taken`) → **Only during certain hours** 05:00–07:00 → set **Skip if
+already logged today** = `meds_taken`. Between 5 and 7, a double tap logs
+your meds and
 the reminder stands down for the day.
 
-**A focus stopwatch you start by hand [Phase 2]**
-Add mode → "Focus" → Template **Stopwatch** (timer name `focus`) → Activation
-**Entered from another mode**. Then in **Default**, map **Long press → Enter a
-mode → Focus**. Long-press to start timing; short-press to lap; long-press to
-stop and log the elapsed time.
+**A focus stopwatch you start by hand**
+Add mode → "Focus" → **Stopwatch** (timer name `focus`) → **Only when another
+mode starts it**. Then in **Default**, map **Long press → Enter a mode →
+Focus**. Long-press to start timing; short-press to lap; long-press to stop
+and log the elapsed time. Until you add that Enter a mode gesture, the Focus
+card tells you nothing can start it.
 
-**Water tracker [Phase 2]**
-Add mode → "Water" → Template **Counter** (event `water`) → Entered from
-another mode. In Default, map **Double tap → Enter a mode → Water**. Open it,
+**Water tracker**
+Add mode → "Water" → **Counter** (event `water`) → **Only when another mode
+starts it**. In Default, map **Double tap → Enter a mode → Water**. Open it,
 tap once per glass, long-press to close.
 
+**A Pomodoro on the desk**
+Add a **Pomodoro** from the ready-made picker, then in **Default** map
+**Long press → Enter a mode → Pomodoro**. Long-press to start working; the
+LED breathes orange while you work and green on breaks. Tap to pause, double
+tap for ten more minutes, long press when you are done. Each finished block
+is logged, so `pomodoro` gets a daily count and a streak like anything else.
+
 **Everyday default**
-Keep a **Default** Actions mode (Always) with, say, Short press → Ask the AI,
+Keep a **Default** Actions mode (Always) with, say, Short press → Log an event,
 so the button is always useful even when no special mode applies.
 
 ---
@@ -230,16 +293,36 @@ so the button is always useful even when no special mode applies.
 
 The RGB LED shows device state; short feedback sounds confirm what happened.
 
+**The colours are yours to change.** In the web menu, open **Lights (what
+each state looks like)**. Every state gets a style, its colours, and how fast
+it moves; **Save & apply** sends them straight to the button — no restart, no
+reflashing. The swatch beside each row animates exactly as the LED will.
+
+| Style | What it does |
+|---|---|
+| **Solid** | one colour, held |
+| **Breathe** | fades between off and the colour |
+| **Flash** | hard on/off blink |
+| **Alternate two colours** | swaps between two colours |
+| **Fade between two colours** | crossfades between two colours, through the shades in between |
+| **Rainbow** | cycles through every hue |
+
+The defaults, which are also what the button shows if it is powered up with
+no computer attached:
+
 | State | LED | When |
 |---|---|---|
-| **Idle** | slow blue breathe | waiting, ambient |
+| **Idle** | slow blue breathe (3 s) | waiting, ambient |
 | **Listening** | solid yellow | a press was registered |
-| **Thinking** | fast rainbow fade, rotating colors | an action is running (e.g. asking the AI) |
-| **Success** | green (2 s) | action succeeded |
-| **Error** | red flashes | action failed / no rule matched |
-| **Ringing** | urgent red/white flash | an alarm is going off |
-| **Timing [Phase 2]** | (running indicator) | a stopwatch is open |
-| **Counting [Phase 2]** | (counting indicator) | a counter is open |
+| **Thinking** | rainbow, 1 s a turn | an action is running (e.g. calling a webhook) |
+| **Success** | solid green (held 2 s) | action succeeded |
+| **Error** | red flash | action failed / no rule matched |
+| **Ringing** | red/white alternating | an alarm is going off |
+| **Timing** | cyan breathe (1.6 s) | a stopwatch is open |
+| **Counting** | magenta breathe (2.2 s) | a counter is open |
+| **Working** | slow orange breathe (5 s) | a Pomodoro work block is running |
+| **Resting** | slow green breathe (5 s) | a Pomodoro break is running |
+| **Metronome running** | amber flash at the tapped tempo | a metronome is open |
 
 | Sound | Tone | When |
 |---|---|---|
@@ -266,27 +349,29 @@ Above the Configure section the page shows:
   a time-windowed mode or watch a 07:00 alarm fire seconds later. It keeps
   ticking, never persists across restarts, and never changes your event
   history timestamps.
-- **Virtual device** (development/mock only) — mirrors the LED animations and
-  plays the device's actual tones in the browser.
+- **Virtual device** (whenever no real button is connected) — mirrors the LED
+  animations and plays the device's actual tones in the browser.
 
 ---
 
-## 10. Phone / Bluetooth
+## 10. Bluetooth
 
-The device advertises over Bluetooth LE as the name set in **Device settings →
-Bluetooth name**. A subscribed phone or laptop receives state changes and
-action results (e.g. the AI's answer) as they happen. The same information is
-available over the REST API the web UI uses, so a future phone app can reuse
-it.
+The button and the computer are two halves of one device: the button detects
+your gestures and shows the LED and tones, the computer runs everything else.
+They talk over Bluetooth LE, and the button advertises under the name set in
+**Device settings → Bluetooth name**.
+
+Two consequences worth knowing: **the computer has to be awake** for a press to
+do anything (alarms included), and everything the app knows is on the REST API
+the web UI uses — so a phone app can reuse it.
 
 ---
 
-## 11. AI answers, online and offline
+## 11. Reaching an AI
 
-"Ask the AI" prefers a model on your LAN for speed and falls back to a smaller
-model running on the device itself if the LAN model is unreachable — so the
-button still answers when your network or server is down. Hosts, models, and
-timeouts are all in **Device settings → AI backends**.
+There is no model on the button. To involve one, use **Call a webhook** and
+let whatever receives it do the thinking — an automation in n8n / Make /
+Home Assistant, or your own script.
 
 ---
 
@@ -305,12 +390,12 @@ timeouts are all in **Device settings → AI backends**.
 
 ---
 
-## Phasing at a glance
+Everything in this manual is live, on real hardware: an ESP32 detects your
+gestures and shows the lights and tones, the computer runs everything else.
+With no button attached, the browser's virtual device stands in for it and
+every word above still applies.
 
-- **Phase 1** — Default/Actions modes, **scheduled Alarms you stop with the
-  button**, time-window and always activations, the collapsible Modes menu and
-  Device drawer.
-- **Phase 2** — **Stopwatch** and **Counter** modes, plus the **Enter a mode**
-  action that starts them by gesture.
-
-Implementation detail and rationale: [DESIGN.md](DESIGN.md).
+Implementation detail and rationale: [DESIGN.md](DESIGN.md) for the mode
+machine, [DESIGN-ESP32.md](DESIGN-ESP32.md) for the hardware split. What is
+coming next — swappable apps, and a button that keeps working when you walk
+away from the computer: [ROADMAP.md](ROADMAP.md).
