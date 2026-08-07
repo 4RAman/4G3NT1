@@ -38,8 +38,10 @@ import sys
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from .device import ButtonDevice, LEDState, MockDevice, Sound, TriggerType
+from .single_instance import AlreadyRunning, SingleInstance
 
 log = logging.getLogger("aibutton")
 
@@ -47,6 +49,14 @@ log = logging.getLogger("aibutton")
 _ERROR_DISPLAY_S = 1.5
 # SUCCESS hold time; the device's green window matches it.
 _SUCCESS_DISPLAY_S = 2.0
+# The press wait wakes at least this often so a scheduled alarm is noticed
+# within a second of its minute - crucial for the test clock (set 06:59 -> a
+# 07:00 alarm rings ~1s later) and so an alarm added live via the web UI or
+# SIGHUP starts firing without waiting for an unrelated press. Polling
+# unconditionally (not only when an alarm exists *now*) is what lets a newly
+# configured alarm engage immediately after a hot reload; the idle cost is one
+# cheap scheduler scan per second. It also paces the loop's fault backoff.
+_SCHEDULER_TICK_S = 1.0
 
 # Metronome: how many recent taps the rolling BPM average is computed over.
 _METRONOME_TAP_HISTORY = 8
@@ -106,6 +116,32 @@ class DeviceStatus:
 
 
 @dataclass
+class FaultTracker:
+    """Counts main-loop faults and decides which ones get logged.
+
+    Pure - it never logs, it only answers "is this one worth a traceback?",
+    so the throttle is testable without a clock or a logger. The reason it
+    exists: a fault that recurs every tick writes a traceback a second, and
+    over the 24-hour soak in ROADMAP.md that is both a full disk and a log
+    nobody can read. The first fault always logs; after that, one per
+    `interval_s`.
+    """
+
+    interval_s: float = 60.0
+    count: int = 0
+    last_logged: float | None = None
+
+    def record(self, now: float) -> bool:
+        """Register a fault at monotonic time `now`. True if it should be
+        logged now."""
+        self.count += 1
+        if self.last_logged is None or now - self.last_logged >= self.interval_s:
+            self.last_logged = now
+            return True
+        return False
+
+
+@dataclass
 class Clock:
     """Wall clock with a settable offset - the web UI's "test clock".
 
@@ -151,6 +187,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="run one pass of every trigger, then exit",
     )
+    p.add_argument(
+        "--no-lock",
+        action="store_true",
+        help="skip the single-instance guard (two copies will fight over the button)",
+    )
     return p.parse_args(argv)
 
 
@@ -174,6 +215,14 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     from .store import EventStore
 
     cm = ConfigManager(args.config)
+    # One process per button. BLE allows a single central, and two copies also
+    # share the event database and the web port. Tests inject `device` and get
+    # no lock: they run many services in one session against temp databases,
+    # and none of them touch real hardware.
+    guard = None
+    if device is None and not args.no_lock:
+        guard = SingleInstance(Path(cm.config.database_path).with_suffix(".lock"))
+        guard.acquire()  # raises AlreadyRunning; main() turns that into exit 1
     status = DeviceStatus()
     clock = Clock()
     if device is None:
@@ -250,11 +299,33 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
-    if hasattr(signal, "SIGHUP"):  # POSIX only
+
+    # SIGHUP is POSIX-only and reloads the config. SIGTERM/SIGINT exist
+    # everywhere and are the graceful-shutdown hook - they used to sit behind
+    # the same SIGHUP check, which meant Windows (the host this actually runs
+    # on) had no graceful shutdown at all: Ctrl+C unwound as KeyboardInterrupt
+    # straight through the takeover loops instead of letting them exit on
+    # `stop` and stop their own timers and alarms.
+    if hasattr(signal, "SIGHUP"):
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(signal.SIGHUP, cm.reload)
-            loop.add_signal_handler(signal.SIGTERM, stop.set)
-            loop.add_signal_handler(signal.SIGINT, stop.set)
+
+    def _fallback_handler(signum, _frame) -> None:
+        # A second Ctrl+C restores the default handler, so an interrupt during
+        # a wedged shutdown still kills the process instead of being swallowed.
+        with contextlib.suppress(ValueError, OSError):
+            signal.signal(signum, signal.SIG_DFL)
+        loop.call_soon_threadsafe(stop.set)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except (NotImplementedError, AttributeError, ValueError, RuntimeError):
+            # Windows' ProactorEventLoop has no add_signal_handler; signal()
+            # runs the handler on the main thread, so hop back onto the loop
+            # before touching the Event.
+            with contextlib.suppress(ValueError, OSError):
+                signal.signal(sig, _fallback_handler)
 
     async def fail(message: str) -> None:
         log.error("%s", message)
@@ -697,20 +768,18 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         set_led(LEDState.IDLE)
         set_status("IDLE")
 
-    # The press wait wakes at least this often so a scheduled alarm is noticed
-    # within a second of its minute - crucial for the test clock (set 06:59 ->
-    # a 07:00 alarm rings ~1s later) and so an alarm added live via the web UI
-    # or SIGHUP starts firing without waiting for an unrelated press. Polling
-    # unconditionally (not only when an alarm exists *now*) is what lets a
-    # newly configured alarm engage immediately after a hot reload; the idle
-    # cost is one cheap scheduler scan per second.
-    _SCHEDULER_TICK_S = 1.0
     # Occurrence keys already rung today, so an alarm fires once per minute.
     fired: set[str] = set()
     # The palette last sent to the device. Editing colours in the web UI (or
     # a SIGHUP) replaces cm.config wholesale, so the tick below notices and
     # re-sends - which is why a colour picker updates the real LED live.
     pushed_palette = cm.config.led_palette
+    # Nothing inside one iteration is allowed to end the service. handle() and
+    # the takeover loops already guard their own bodies; this is the backstop
+    # for the rest of an iteration - the store, the scheduler scan, the
+    # palette push - because a button that dies on a locked database is worse
+    # than one that misses a press.
+    faults = FaultTracker()
 
     try:
         if args.demo:
@@ -723,41 +792,60 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             "AI Button ready (config: %s, %d mode(s))", cm.path, len(cm.config.modes)
         )
         while not stop.is_set():
-            trigger = await _wait_for_trigger(
-                device.events, stop, timeout=_SCHEDULER_TICK_S
-            )
-            if stop.is_set():
-                break
-            if trigger is not None:
-                await handle(trigger)
-                # Single in-flight action: drop presses made while busy.
-                discarded = 0
-                while not device.events.empty():
-                    device.events.get_nowait()
-                    discarded += 1
-                if discarded:
-                    log.info("discarded %d press(es) made while busy", discarded)
-            if cm.config.led_palette != pushed_palette:
-                pushed_palette = cm.config.led_palette
-                device.set_palette(pushed_palette)
-                log.info("LED palette changed - pushed to the device")
-            # After every wait (press or tick), check whether a scheduled
-            # alarm is due now and ring it; an alarm preempts the ambient
-            # layer. Prune `fired` to today's keys so it never grows without
-            # bound across days.
-            now = clock.now()
-            today_prefix = now.date().isoformat()
-            # Match the trailing "@<date>T<HH:MM>" structurally so a mode name
-            # that happens to embed a date can't keep a stale key alive.
-            fired = {
-                k for k in fired
-                if k.rsplit("@", 1)[-1].startswith(f"{today_prefix}T")
-            }
-            due = due_alarm(cm.config.modes, now, fired)
-            if due is not None:
-                mode, key = due
-                fired.add(key)
-                await fire_alarm(mode.name, mode.behavior)
+            try:
+                trigger = await _wait_for_trigger(
+                    device.events, stop, timeout=_SCHEDULER_TICK_S
+                )
+                if stop.is_set():
+                    break
+                if trigger is not None:
+                    await handle(trigger)
+                    # Single in-flight action: drop presses made while busy.
+                    discarded = 0
+                    while not device.events.empty():
+                        device.events.get_nowait()
+                        discarded += 1
+                    if discarded:
+                        log.info("discarded %d press(es) made while busy", discarded)
+                if cm.config.led_palette != pushed_palette:
+                    pushed_palette = cm.config.led_palette
+                    device.set_palette(pushed_palette)
+                    log.info("LED palette changed - pushed to the device")
+                # After every wait (press or tick), check whether a scheduled
+                # alarm is due now and ring it; an alarm preempts the ambient
+                # layer. Prune `fired` to today's keys so it never grows without
+                # bound across days.
+                now = clock.now()
+                today_prefix = now.date().isoformat()
+                # Match the trailing "@<date>T<HH:MM>" structurally so a mode
+                # name that happens to embed a date can't keep a stale key
+                # alive.
+                fired = {
+                    k for k in fired
+                    if k.rsplit("@", 1)[-1].startswith(f"{today_prefix}T")
+                }
+                due = due_alarm(cm.config.modes, now, fired)
+                if due is not None:
+                    mode, key = due
+                    fired.add(key)
+                    await fire_alarm(mode.name, mode.behavior)
+            except asyncio.CancelledError:
+                raise  # shutdown, not a fault
+            except Exception as exc:
+                if faults.record(loop.time()):
+                    log.exception("main loop fault #%d - continuing", faults.count)
+                status.last_ok = False
+                status.last_message = f"internal error: {exc}"
+                # A fault part-way through handle() leaves the LED on
+                # LISTENING or THINKING forever; drop back to IDLE so the
+                # button looks alive again rather than hung.
+                with contextlib.suppress(Exception):
+                    set_led(LEDState.IDLE)
+                set_status("IDLE")
+                # A fault that recurs every tick would otherwise spin as fast
+                # as it can raise; hold at tick rate, and stay interruptible.
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=_SCHEDULER_TICK_S)
         log.info("shutting down")
     finally:
         if web_server is not None:
@@ -771,6 +859,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             await device.close()
         tones.close()
         store.close()
+        if guard is not None:
+            guard.release()
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -782,6 +872,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     try:
         asyncio.run(run(args))
+    except AlreadyRunning as exc:
+        # Expected operator error, not a bug: say what to do, without a
+        # traceback that makes it look like a crash.
+        log.error("%s", exc)
+        raise SystemExit(1)
     except KeyboardInterrupt:
         pass  # Windows fallback where SIGINT handlers aren't wired
 

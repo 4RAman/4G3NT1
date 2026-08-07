@@ -252,6 +252,16 @@ async def test_status_includes_dev_fields(client, ctx):
     datetime.fromisoformat(data["now"])  # parseable
 
 
+async def test_status_reports_a_degraded_event_log(client, ctx):
+    # An empty Events tab has two very different causes - nothing logged yet,
+    # and a log that isn't being kept because the database wouldn't open. The
+    # button keeps working either way, so the UI has to be able to tell them
+    # apart rather than show an innocent-looking empty table.
+    assert (await client.get("/api/status")).json()["store_degraded"] is False
+    ctx.store.degraded = True
+    assert (await client.get("/api/status")).json()["store_degraded"] is True
+
+
 async def test_status_led_palette_reflects_the_device_not_the_config(client, ctx):
     # A takeover mode (the metronome) can push a live palette override that
     # briefly disagrees with cfg.led_palette; the virtual device panel has to

@@ -404,10 +404,6 @@ whatever this item ends up needing.
 
 ## Smaller, worth doing
 
-- **Single-instance guard.** Two copies of the app fight over the button:
-  BLE allows one central, so the connection ping-pongs and the web UI
-  flickers between connected and offline. Detect it at startup and refuse,
-  rather than leaving it to be diagnosed from a log.
 - **Verify power-cycle recovery.** Phase 3's last unchecked criterion: pull
   the ESP32's USB mid-session and confirm the host reconnects on its own.
   Reconnect logic is tested against a fake bleak, not against real hardware.
@@ -462,6 +458,32 @@ whatever this item ends up needing.
 
 ## Done
 
+- ~~**Single-instance guard**~~ - [single_instance.py](aibutton/single_instance.py)
+  takes an OS-level lock on `<database_path>.lock` at startup and a second
+  copy refuses with the holder's PID and exit 1, instead of two processes
+  ping-ponging the BLE connection. The lock is a file lock rather than a PID
+  file precisely so a crash or a hard kill leaves nothing to clear by hand -
+  verified by killing the holder with `-Force` and starting a fresh one.
+  `--no-lock` opts out for the rare deliberate second instance.
+- ~~**The run loop survives its own components**~~ - `handle()` and the
+  takeover loops guarded their own bodies, but `resolve()`, `store.logged_today`,
+  `due_alarm()`, `log_mode_enter()` and the palette push all sat unguarded in
+  the `while` body, so one locked-database write ended the service. The
+  iteration now has a backstop that logs, drops the LED back to IDLE (a fault
+  mid-`handle()` used to leave it stuck on LISTENING) and holds at tick rate
+  rather than spinning. Repeat faults are throttled by `FaultTracker` - pure,
+  so the throttle is tested without a clock.
+- ~~**A bad event log no longer stops the button**~~ - an unopenable database
+  degrades to an in-memory log with a loud error and a `degraded` flag,
+  instead of `EventStore.__init__` preventing startup. Writes also get a
+  busy timeout so a transient lock doesn't fail a press.
+- ~~**Graceful shutdown on Windows**~~ - SIGTERM/SIGINT were registered
+  behind a `hasattr(signal, "SIGHUP")` check, so on the host this actually
+  runs on they were never wired at all and Ctrl+C unwound as a
+  `KeyboardInterrupt` straight through the takeover loops. They are now
+  registered separately from SIGHUP, falling back to `signal.signal` where
+  the event loop has no `add_signal_handler`; a second Ctrl+C restores the
+  default handler so a wedged shutdown is still killable.
 - ~~**Pomodoro mode**~~ - a takeover template with configurable durations, an
   `advance` setting (auto / manual / breaks-only), and assignable gestures.
 - ~~**Built-in modes set**~~ - Pomodoro, Gratitude counter, Stopwatch and 5AM

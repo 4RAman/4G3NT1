@@ -94,8 +94,11 @@ It also needs per-app colour, which is [TODO.md](TODO.md) item 3 and decision
 - [ ] **A naive-user run**: someone who has never seen it installs an app and
       uses it, unaided, while you keep your mouth shut and take notes
 - [ ] **24-hour soak** with no manual restart, no wedged BLE, no lost presses
-- [ ] **Single-instance guard** and **verified power-cycle recovery** — both
-      already on the smaller-items list, both embarrassing in a demo
+- [x] **Single-instance guard** — an OS-level file lock; a second copy
+      refuses with the holder's PID instead of fighting for the radio
+- [ ] **Verified power-cycle recovery** — still needs real hardware: the
+      reconnect path is tested against a fake bleak, not against a button
+      whose USB was pulled mid-session
 - [ ] **Protocol v1 frozen** (see below) — this is the one architectural task
       Stage 2 must not defer
 

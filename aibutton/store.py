@@ -30,6 +30,14 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 
+_MEMORY = ":memory:"
+# How long a write waits on a competing writer before raising "database is
+# locked". One process holds one connection, so contention means something
+# else has the file open - a stale copy of the service, or a DB browser.
+# Waiting a few seconds beats failing a press over a transient lock.
+_BUSY_TIMEOUT_S = 5.0
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -46,24 +54,51 @@ def _local_day_bounds_utc() -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
-class EventStore:
-    def __init__(self, path: str):
+def _migrate(conn: sqlite3.Connection) -> None:
+    """`CREATE TABLE IF NOT EXISTS` only helps a brand-new file - an
+    existing events.db predating the `mode` column needs it added by
+    hand, or every insert below fails against the old schema."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
+    if "mode" not in columns:
+        conn.execute("ALTER TABLE events ADD COLUMN mode TEXT")
+
+
+def _connect(path: str) -> sqlite3.Connection:
+    """Open (creating the directory if needed), apply the schema, migrate."""
+    target: str | Path = path
+    if path != _MEMORY:
         db_path = Path(path)
         if db_path.parent != Path("."):
             db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(db_path)
-        self._conn.execute(_SCHEMA)
-        self._migrate()
-        self._conn.commit()
-        log.info("event store at %s", db_path)
+        target = db_path
+    conn = sqlite3.connect(target, timeout=_BUSY_TIMEOUT_S)
+    conn.execute(_SCHEMA)
+    _migrate(conn)
+    conn.commit()
+    return conn
 
-    def _migrate(self) -> None:
-        """`CREATE TABLE IF NOT EXISTS` only helps a brand-new file - an
-        existing events.db predating the `mode` column needs it added by
-        hand, or every insert below fails against the old schema."""
-        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(events)")}
-        if "mode" not in columns:
-            self._conn.execute("ALTER TABLE events ADD COLUMN mode TEXT")
+
+class EventStore:
+    def __init__(self, path: str):
+        self.path = path
+        # True when the on-disk database could not be opened and history is
+        # being kept in memory instead. Read by the web UI so a degraded log
+        # is visible rather than silently empty.
+        self.degraded = False
+        try:
+            self._conn = _connect(path)
+        except (sqlite3.Error, OSError) as exc:
+            # A button that refuses to start because its logbook is
+            # unwritable is the wrong trade - pressing it still has to do
+            # something. Fall back to an in-memory log and say so loudly.
+            log.error(
+                "event store: cannot open %s (%s) - logging to memory only, "
+                "history will be lost on exit",
+                path, exc,
+            )
+            self.degraded = True
+            self._conn = _connect(_MEMORY)
+        log.info("event store at %s", _MEMORY if self.degraded else path)
 
     def log_event(self, name: str, mode: str | None = None) -> datetime:
         now = _utcnow()

@@ -151,6 +151,10 @@ def create_app(ctx: WebContext) -> FastAPI:
             # False while a real button is out of range or unplugged - the
             # app keeps running, so the UI has to say why nothing lights up.
             "device_connected": ctx.device.connected,
+            # True when the event database could not be opened and history is
+            # being kept in memory. The button still works, so the UI has to
+            # say why the Events tab will be empty again after a restart.
+            "store_degraded": ctx.store.degraded,
             "now": ctx.clock.now().isoformat(timespec="seconds"),
             "clock_override": ctx.clock.overridden,
             "led_state": s.led_state,
