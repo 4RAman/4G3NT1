@@ -17,7 +17,9 @@ from aibutton.control.status import (
     summary_lines,
 )
 from aibutton.control.supervisor import (
+    Supervisor,
     flash_command,
+    prefs_path,
     service_command,
     status_url,
     web_url,
@@ -112,6 +114,52 @@ def test_the_service_command_runs_the_module_unbuffered(tmp_path):
     argv = service_command("py.exe", cfg)
     assert argv[:4] == ["py.exe", "-u", "-m", "aibutton.main"]
     assert argv[-2:] == ["--config", str(cfg)]
+
+
+def test_the_panel_starts_the_real_button_by_default(tmp_path):
+    # Someone running the control panel has a button. A Start that quietly
+    # launched a simulated one would look like it worked and do nothing.
+    assert "--ble" in service_command("py.exe", tmp_path / "config.json")
+
+
+def test_the_panel_can_be_told_to_start_a_simulated_button(tmp_path):
+    argv = service_command("py.exe", tmp_path / "config.json", ble=False)
+    assert "--ble" not in argv
+
+
+def test_the_ble_preference_survives_a_restart(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    first = Supervisor(tmp_path, cfg)
+    assert first.use_ble is True  # the default
+    first.set_use_ble(False)
+    first.close()
+
+    assert Supervisor(tmp_path, cfg).use_ble is False
+
+
+def test_panel_preferences_live_beside_the_config_not_inside_it(tmp_path):
+    # config.json is the service's, is hot-reloaded, and is rewritten
+    # wholesale by the web UI's editor - a panel setting stored there would
+    # not survive a Save.
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"web_port": 8080}', encoding="utf-8")
+    sup = Supervisor(tmp_path, cfg)
+    sup.set_use_ble(False)
+    sup.close()
+    assert json.loads(cfg.read_text(encoding="utf-8")) == {"web_port": 8080}
+    assert prefs_path(cfg).exists()
+
+
+def test_corrupt_panel_preferences_fall_back_to_defaults(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    prefs_path(cfg).write_text("{not json", encoding="utf-8")
+    sup = Supervisor(tmp_path, cfg)
+    try:
+        assert sup.use_ble is True
+    finally:
+        sup.close()
 
 
 def test_the_flash_command_lists_every_firmware_module_explicitly(tmp_path):

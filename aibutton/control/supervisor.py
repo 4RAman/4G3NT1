@@ -18,6 +18,7 @@ actually gets run is assertable without spawning anything.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import signal
@@ -45,11 +46,46 @@ _TERMINATE_S = 3.0
 _IS_WINDOWS = os.name == "nt"
 
 
-def service_command(python: str, config: Path) -> list[str]:
+def service_command(python: str, config: Path, *, ble: bool = True) -> list[str]:
     """The argv that starts the service. `-u` because the log window reads
     the child's stdout as it goes: block buffering would hold whole startup
-    messages back until something else filled the buffer."""
-    return [python, "-u", "-m", "aibutton.main", "--config", str(config)]
+    messages back until something else filled the buffer.
+
+    `--ble` is the default here even though it is opt-in on the command
+    line: someone running the control panel has a button, and a panel whose
+    Start button silently launches a simulated one is worse than useless.
+    dev.ps1 remains the no-hardware path.
+    """
+    argv = [python, "-u", "-m", "aibutton.main"]
+    if ble:
+        argv.append("--ble")
+    argv += ["--config", str(config)]
+    return argv
+
+
+def prefs_path(config: Path) -> Path:
+    """The panel's own settings, beside the config it drives. Deliberately
+    not *in* config.json: that file is the service's, is hot-reloaded, and
+    is rewritten wholesale by the web UI's editor."""
+    return config.with_name("control-panel.json")
+
+
+def load_prefs(config: Path) -> dict:
+    """Never raises - a corrupt or missing prefs file means defaults."""
+    try:
+        with open(prefs_path(config), encoding="utf-8") as f:
+            prefs = json.load(f)
+        return prefs if isinstance(prefs, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_prefs(config: Path, prefs: dict) -> None:
+    """Best effort. Losing a preference is not worth an error dialog."""
+    try:
+        prefs_path(config).write_text(json.dumps(prefs, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        log.warning("could not save control panel prefs: %s", exc)
 
 
 def flash_command(python: str, root: Path) -> list[str]:
@@ -93,6 +129,16 @@ class Supervisor:
         self._lock = threading.Lock()
         self._client = httpx.Client(timeout=POLL_TIMEOUT_S)
         self._exit_code: int | None = None
+        # Whether Start launches the real button or a simulated one. Sticky
+        # across restarts, because it is a property of this desk, not of a
+        # session.
+        self.use_ble: bool = bool(load_prefs(config).get("use_ble", True))
+
+    def set_use_ble(self, value: bool) -> None:
+        self.use_ble = value
+        prefs = load_prefs(self.config)
+        prefs["use_ble"] = value
+        save_prefs(self.config, prefs)
 
     # --- log ----------------------------------------------------------
 
@@ -153,7 +199,7 @@ class Supervisor:
             self.note("--- already running ---")
             return
         self._exit_code = None
-        argv = service_command(self.python, self.config)
+        argv = service_command(self.python, self.config, ble=self.use_ble)
         self.note(f"--- starting: {' '.join(argv[1:])} ---")
         try:
             self._proc = self._spawn(argv, "service")

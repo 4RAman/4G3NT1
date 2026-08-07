@@ -4,3 +4,10 @@ __pycache__/
 .pytest_cache/
 data/
 typings/
+# The tray control panel's local state: preferences, its run lock, and the
+# icon drawn from aibutton/control/icon.py on first run. All per-machine.
+# (Comments get their own lines - gitignore has no inline comment syntax, so
+# "pattern  # note" is one literal pattern that matches nothing.)
+control-panel.json
+control-panel.lock
+button.ico

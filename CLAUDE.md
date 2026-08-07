@@ -38,6 +38,13 @@ So: anything about *what the button does* goes in the web UI; anything about
 *whether the service is running* goes in the control panel. The panel imports
 the service, never the reverse.
 
+The panel's Start defaults to `--ble`, the opposite of the command line's
+default, and that asymmetry is deliberate: someone running the panel has a
+button in front of them. Its own settings live in `control-panel.json`,
+*beside* `config.json` and never inside it — the web UI's editor rewrites
+that file wholesale, so a panel setting stored there would not survive a
+Save.
+
 Stopping is the one non-obvious part. Windows never delivers SIGTERM between
 processes, and `CTRL_BREAK_EVENT` needs a console a tray app does not have —
 so the polite stop is `POST /api/service/stop`, and signals are the fallback

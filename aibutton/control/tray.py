@@ -14,6 +14,7 @@ reason - one thread owns the UI state, which is why nothing here locks.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import tkinter as tk
 import webbrowser
@@ -21,9 +22,9 @@ from pathlib import Path
 from tkinter import scrolledtext
 
 import pystray
-from PIL import Image, ImageDraw
 
-from .status import COLOURS, Health, Level, headline, summary_lines
+from .icon import ensure_ico, status_dot
+from .status import Health, Level, headline, summary_lines
 from .supervisor import Supervisor, web_url
 
 log = logging.getLogger(__name__)
@@ -33,19 +34,6 @@ POLL_MS = 1000
 # and re-reads each item's text/visibility, so the slots exist up front and
 # the unused ones hide themselves.
 _STATUS_SLOTS = 6
-_ICON_PX = 64
-
-
-def _icon_image(level: Level) -> Image.Image:
-    """A filled dot in the level's colour. Deliberately not a glyph: at 16 px
-    on a taskbar, colour is the only thing that reads reliably."""
-    img = Image.new("RGBA", (_ICON_PX, _ICON_PX), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    pad = 6
-    draw.ellipse((pad, pad, _ICON_PX - pad, _ICON_PX - pad), fill=COLOURS[level] + (255,))
-    # A dark rim keeps the dot visible against a same-coloured taskbar.
-    draw.ellipse((pad, pad, _ICON_PX - pad, _ICON_PX - pad), outline=(20, 20, 24, 200), width=3)
-    return img
 
 
 class ControlPanel:
@@ -63,11 +51,15 @@ class ControlPanel:
         # Closing the window hides it; the tray icon is the real lifetime.
         self._tk.protocol("WM_DELETE_WINDOW", self.hide_window)
         self._tk.withdraw()
+        ico = ensure_ico(Path(__file__).resolve().parent)
+        if ico is not None:  # cosmetic; the panel works without it
+            with contextlib.suppress(tk.TclError):
+                self._tk.iconbitmap(str(ico))
         self._build_window()
 
         self._icon = pystray.Icon(
             "button-control",
-            _icon_image(Level.STOPPED),
+            status_dot(Level.STOPPED),
             "Button control",
             menu=self._menu(),
         )
@@ -178,6 +170,14 @@ class ControlPanel:
                 self._on(self.flash),
                 enabled=lambda *_: not self.sup.flashing,
             ),
+            pystray.MenuItem(
+                "Use the real button",
+                self._on(self.toggle_ble),
+                checked=lambda *_: self.sup.use_ble,
+                # Changing it mid-run would lie about what is running, and
+                # the service reads it only at launch.
+                enabled=lambda *_: not self.health.running,
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Status and log...", self._on(self.show_window)),
             pystray.MenuItem(
@@ -208,6 +208,15 @@ class ControlPanel:
         if self.sup.flash():
             self.show_window()  # flashing fails in ways you need to read
 
+    def toggle_ble(self) -> None:
+        self.sup.set_use_ble(not self.sup.use_ble)
+        self.sup.note(
+            "--- Start will use "
+            + ("the real button (BLE)" if self.sup.use_ble else "a simulated button")
+            + " ---"
+        )
+        self._tick(reschedule=False)
+
     def open_web(self) -> None:
         url = web_url(self.config)
         if url:
@@ -231,7 +240,7 @@ class ControlPanel:
             level = self.health.level
             if level is not self._level:
                 self._level = level
-                self._icon.icon = _icon_image(level)
+                self._icon.icon = status_dot(level)
                 self._icon.title = f"Button control - {headline(self.health)}"
             # Cheap, and the labels depend on state this tick may have changed.
             self._icon.update_menu()

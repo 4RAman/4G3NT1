@@ -141,7 +141,13 @@ refuses at startup rather than fighting the first for the connection.
 
 The web UI configures the button; it cannot *start* it, since it is served by
 the very service it would launch. That job belongs to the **tray control
-panel** (`control.pyw`, or `python -m aibutton.control`):
+panel**. Put it on the desktop and Start Menu with:
+
+```powershell
+.\tools\install_shortcuts.ps1          # -Remove to take them away again
+```
+
+or run it directly (`control.pyw`, or `python -m aibutton.control`):
 
 - a tray dot whose colour is the whole status at a glance — grey stopped,
   amber running-but-no-button, green ready, red died on its own;
@@ -151,6 +157,11 @@ panel** (`control.pyw`, or `python -m aibutton.control`):
   in the log window, because flashing this chip fails in ways you need to
   read;
 - **Open web UI**, for everything about what the button actually does.
+
+Start launches the **real** button (`--ble`) by default — a panel that
+silently ran a simulated one would look like it worked and do nothing.
+*Use the real button* in the menu turns that off for working with no
+hardware around, and the choice sticks in `control-panel.json`.
 
 With `MockDevice` behind the seam, the browser *is* the button — you drive
 everything from the page:
