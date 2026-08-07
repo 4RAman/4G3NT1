@@ -1,6 +1,13 @@
 # Runtime dependencies for the PC host. Pure desktop Python - the hardware
 # half now lives in ESP32 firmware, so nothing here is platform-specific.
-# Phase 3 adds `bleak` here for the BLE central.
 httpx>=0.27
 fastapi>=0.110
 uvicorn>=0.29
+bleak>=0.22          # the BLE central (--ble); was dev-only before Phase 3
+
+# The tray control panel (aibutton/control) only. The service itself never
+# imports these, so a headless host can install the four above and run fine.
+# Tk is stdlib and does the window; these two do the tray icon, which has no
+# stdlib equivalent on Windows.
+pystray>=0.19
+Pillow>=10.0

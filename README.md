@@ -65,6 +65,8 @@ that a future phone app can reuse.
 | `aibutton/button.py` | `TriggerDetector` — no longer runtime code, kept as the spec the firmware port follows |
 | `firmware/` | the ESP32 half: MicroPython + `aioble` peripheral, gesture detection, LED animations, buzzer tones |
 | `tools/ble_probe.py` | drive the firmware by hand over BLE (`--cycle` runs every animation and tone) |
+| `aibutton/control/` | the tray control panel: start/stop the service, watch it, flash the firmware (`status.py` is pure; `tray.py` is the only part that needs a screen) |
+| `control.pyw` | double-click launcher for the control panel — no console window |
 | `aibutton/web/index.html` | the web UI dashboard — one static page, no build step |
 | `aibutton/web/static/` | the configuration menu, as small ES modules (no build step) — `schema.js` is the single place to add an action type or setting |
 | `config.json` | the config the app runs on (override with `--config` or `$AIBUTTON_CONFIG`) |
@@ -125,14 +127,30 @@ around): [CLAUDE.md](CLAUDE.md).
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-dev.txt
 .venv\Scripts\python -m pytest
+control.pyw                                                    # tray control panel (double-click)
 .\dev.ps1                                                      # MockDevice, web UI at :8080
 .venv\Scripts\python -m aibutton.main --ble --config config.json   # the real button
 .venv\Scripts\python -m aibutton.main --demo --no-web          # one-shot smoke test
 ```
 
 Flashing the ESP32 is in [firmware/README.md](firmware/README.md). Only one
-instance can run at a time — BLE allows a single central, so two copies
-steal the connection from each other.
+instance can run at a time — BLE allows a single central — and a second one
+refuses at startup rather than fighting the first for the connection.
+
+## Control panel
+
+The web UI configures the button; it cannot *start* it, since it is served by
+the very service it would launch. That job belongs to the **tray control
+panel** (`control.pyw`, or `python -m aibutton.control`):
+
+- a tray dot whose colour is the whole status at a glance — grey stopped,
+  amber running-but-no-button, green ready, red died on its own;
+- **Start** / **Stop** the service, with stop asking politely (so open timers
+  close and a ringing alarm is silenced) before it escalates;
+- **Update the button's firmware** — `mpremote` copy + reset, with the output
+  in the log window, because flashing this chip fails in ways you need to
+  read;
+- **Open web UI**, for everything about what the button actually does.
 
 With `MockDevice` behind the seam, the browser *is* the button — you drive
 everything from the page:

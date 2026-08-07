@@ -14,12 +14,36 @@ expensive ones after hardware ships.
 .venv/Scripts/python -m pytest -q                       # the whole suite, no hardware needed
 .venv/Scripts/python -m aibutton.main --config config.json          # MockDevice + web UI
 .venv/Scripts/python -m aibutton.main --ble --config config.json    # the real button
+.venv/Scripts/python -m aibutton.control               # the tray control panel
 .venv/Scripts/python -m mpremote cp firmware/*.py : + reset         # flash the firmware
 .venv/Scripts/python tools/ble_probe.py --cycle        # drive the firmware by hand
 ```
 
 Only **one** instance may run: BLE allows a single central, so two copies
-steal the connection from each other. Kill the old one first.
+steal the connection from each other. A second one now *refuses* at startup
+(`single_instance.py`) rather than fighting — stop the first, or pass
+`--no-lock` if you genuinely mean it.
+
+## The control panel is not the web UI
+
+Two UIs, and the split is structural rather than stylistic:
+
+- **The web UI** (`webui.py`, :8080) is served *by* the running service and
+  configures it — modes, lights, events. It can never start the service,
+  because it only exists once the service is up.
+- **The control panel** (`aibutton/control/`, a tray icon) sits *around* the
+  service and owns its lifecycle — start, stop, watch, flash the firmware.
+
+So: anything about *what the button does* goes in the web UI; anything about
+*whether the service is running* goes in the control panel. The panel imports
+the service, never the reverse.
+
+Stopping is the one non-obvious part. Windows never delivers SIGTERM between
+processes, and `CTRL_BREAK_EVENT` needs a console a tray app does not have —
+so the polite stop is `POST /api/service/stop`, and signals are the fallback
+for POSIX and for a service started from a terminal. A hard kill stays safe
+by construction (the OS drops the run lock, the store commits per write); it
+just skips the device's goodbye.
 
 ## Shape
 
@@ -175,8 +199,11 @@ is the one surface that will exist in someone else's pocket.
 - Tests assert behaviour and name the scenario, not the method. Prefer one
   event-script table over many near-identical cases (see
   [test_trigger_port.py](tests/test_trigger_port.py)).
-- No new runtime dependencies without a reason; the host runs on httpx,
-  fastapi, uvicorn and bleak.
+- No new runtime dependencies without a reason; the service runs on httpx,
+  fastapi, uvicorn and bleak. The tray control panel adds **pystray** and
+  **Pillow** — a tray icon has no stdlib equivalent on Windows, and its
+  window is plain Tk. Those two are the control panel's alone: nothing in
+  the service imports them, so a headless host still installs four.
 - **`aibutton` is a provisional name.** It is descriptive and inaccurate —
   there is deliberately no AI on the device. A rename is coming
   (ROADMAP **D7**), so don't spread the string further than it already is:

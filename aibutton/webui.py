@@ -67,6 +67,10 @@ class WebContext:
     device: ButtonDevice
     clock: object
     tones: ToneLibrary
+    # Asks the run loop to shut down gracefully. None when nothing provided
+    # one (tests, and anything embedding the app), in which case the stop
+    # endpoint reports that it cannot oblige rather than pretending it did.
+    on_stop: object = None
 
 
 class _WarningCollector(logging.Handler):
@@ -207,6 +211,26 @@ def create_app(ctx: WebContext) -> FastAPI:
             "effective": as_dict(ctx.cm.config),
             "warnings": warnings,
         }
+
+    @app.post("/api/service/stop")
+    async def stop_service():
+        """Shut the service down the way Ctrl+C would.
+
+        This exists because Windows has no way for one process to ask
+        another to stop politely: SIGTERM is never delivered across
+        processes, and console control events need a console the tray
+        control panel does not have. The alternative is `TerminateProcess`,
+        which skips the run loop's cleanup - open timers left dangling and a
+        ringing alarm left ringing on the device.
+
+        No new exposure worth noting: this API already lets any caller
+        rewrite the whole config (see this module's header - it is
+        unauthenticated by design and expects a trusted network).
+        """
+        if ctx.on_stop is None:
+            raise HTTPException(503, "this service was not started with a stop hook")
+        ctx.on_stop()
+        return {"stopping": True}
 
     @app.post("/api/config/validate")
     async def validate_config(body: dict = Body(...)):

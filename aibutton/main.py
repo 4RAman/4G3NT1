@@ -267,6 +267,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     def set_status(state: str) -> None:
         status.state = state
 
+    # Created before the web UI so the stop endpoint can be handed the same
+    # event the signal handlers below set - one shutdown path, three ways in.
+    stop = asyncio.Event()
+
     web_server = None
     web_task = None
     if not args.no_web and cm.config.web_enabled:
@@ -280,6 +284,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 device=device,
                 clock=clock,
                 tones=tones,
+                # The endpoint runs on this loop, so setting the event
+                # directly is safe and needs no thread hop.
+                on_stop=stop.set,
             )
             web_server = make_server(
                 create_app(ctx), cm.config.web_host, cm.config.web_port
@@ -298,7 +305,6 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             web_server = None
 
     loop = asyncio.get_running_loop()
-    stop = asyncio.Event()
 
     # SIGHUP is POSIX-only and reloads the config. SIGTERM/SIGINT exist
     # everywhere and are the graceful-shutdown hook - they used to sit behind
@@ -317,7 +323,13 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             signal.signal(signum, signal.SIG_DFL)
         loop.call_soon_threadsafe(stop.set)
 
-    for sig in (signal.SIGTERM, signal.SIGINT):
+    # SIGBREAK is Windows-only and is what a Ctrl+Break sent to our process
+    # group arrives as - the control panel stops the service that way
+    # precisely so this graceful path runs instead of a hard terminate.
+    shutdown_signals = [signal.SIGTERM, signal.SIGINT]
+    if hasattr(signal, "SIGBREAK"):
+        shutdown_signals.append(signal.SIGBREAK)
+    for sig in shutdown_signals:
         try:
             loop.add_signal_handler(sig, stop.set)
         except (NotImplementedError, AttributeError, ValueError, RuntimeError):

@@ -252,6 +252,24 @@ async def test_status_includes_dev_fields(client, ctx):
     datetime.fromisoformat(data["now"])  # parseable
 
 
+async def test_stop_endpoint_asks_the_run_loop_to_shut_down(client, ctx):
+    # The control panel's only polite way to stop the service on Windows:
+    # SIGTERM is never delivered between processes there, and a console
+    # control event needs a console a tray app does not have.
+    asked = []
+    ctx.on_stop = lambda: asked.append(True)
+    res = await client.post("/api/service/stop")
+    assert res.status_code == 200
+    assert res.json() == {"stopping": True}
+    assert asked == [True]
+
+
+async def test_stop_endpoint_refuses_when_nothing_can_act_on_it(client):
+    # Embedded/test setups pass no hook; saying so beats reporting a
+    # shutdown that was never going to happen.
+    assert (await client.post("/api/service/stop")).status_code == 503
+
+
 async def test_status_reports_a_degraded_event_log(client, ctx):
     # An empty Events tab has two very different causes - nothing logged yet,
     # and a log that isn't being kept because the database wouldn't open. The
