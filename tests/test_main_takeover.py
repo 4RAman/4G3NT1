@@ -104,7 +104,7 @@ async def test_run_enter_mode_stopwatch_then_counter(tmp_path, monkeypatch):
     finally:
         store.close()
 
-    kinds_names = [(kind, name) for (_ts, kind, name, _dur, _mode) in rows]
+    kinds_names = [(kind, name) for (_ts, kind, name, _dur, _mode, _val) in rows]
 
     # Stopwatch: exactly one timer_start + one timer_stop for "focus", plus a
     # lap log row.
@@ -117,7 +117,7 @@ async def test_run_enter_mode_stopwatch_then_counter(tmp_path, monkeypatch):
 
     # Every row fired while a takeover mode owned the button is attributed to
     # that mode, not left blank.
-    modes_by_name = {name: mode for (_ts, _kind, name, _dur, mode) in rows}
+    modes_by_name = {name: mode for (_ts, _kind, name, _dur, mode, _val) in rows}
     assert modes_by_name["focus"] == "Focus"
     assert modes_by_name["focus_lap"] == "Focus"
     assert modes_by_name["water"] == "Water"
