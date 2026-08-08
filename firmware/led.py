@@ -141,6 +141,30 @@ class NeoPixelBackend:
         self.set(0, 0, 0)
 
 
+class MultiBackend:
+    """Fans one state out to several physical LEDs - the button's own
+    WS2812 and the board's onboard one, lit the same so both show the
+    current state. Each `set`/`off` reaches every backend even if one of
+    them raises, so a bad onboard LED can't blank the one in the button."""
+
+    def __init__(self, backends):
+        self._backends = backends
+
+    def set(self, r, g, b):
+        for backend in self._backends:
+            try:
+                backend.set(r, g, b)
+            except Exception as exc:  # noqa: BLE001 - one LED's fault, not the other's
+                print("led: backend failed (%s)" % exc)
+
+    def off(self):
+        for backend in self._backends:
+            try:
+                backend.off()
+            except Exception as exc:  # noqa: BLE001
+                print("led: backend failed (%s)" % exc)
+
+
 class PWMBackend:
     """A discrete RGB LED, one PWM channel per colour (330R per channel)."""
 
@@ -161,26 +185,74 @@ class PWMBackend:
         self.set(0, 0, 0)
 
 
-def make_backend():
-    """The LED described by hardware.py. A miswired or unsupported LED must
-    not stop the button from reporting gestures, so failures degrade to
+def _announce(what, pin):
+    """Say out loud which pin we think an LED is on.
+
+    A WS2812 has no readback, so the firmware cannot tell an absent one from
+    a dark one: `NeoPixel(Pin(n))` constructs happily for any valid GPIO,
+    which means a wrong pin number fails *silently* - no exception, no log,
+    just an LED that never lights. Printing the assumption is the only thing
+    that turns "it's dark and I don't know why" into "it's dark and it thinks
+    it's on 48", which is the difference between guessing and measuring.
+    """
+    print("led: %s on GPIO%s" % (what, pin))
+
+
+def _make_primary_backend():
+    """The LED described by LED_KIND. A miswired or unsupported LED must not
+    stop the button from reporting gestures, so failures degrade to
     NullBackend with a printed reason rather than a boot loop."""
     try:
         if hardware.LED_KIND == "neopixel":
-            return NeoPixelBackend(
+            backend = NeoPixelBackend(
                 hardware.NEOPIXEL_PIN,
                 hardware.LED_BRIGHTNESS,
                 getattr(hardware, "NEOPIXEL_ORDER", "GRB"),
                 getattr(hardware, "NEOPIXEL_COUNT", 1),
             )
+            _announce("WS2812", hardware.NEOPIXEL_PIN)
+            return backend
         if hardware.LED_KIND == "rgb_pwm":
-            return PWMBackend(
+            backend = PWMBackend(
                 hardware.RGB_PINS, hardware.RGB_ACTIVE_HIGH, hardware.RGB_PWM_FREQ
             )
+            print("led: RGB LED on GPIOs %s" % (tuple(hardware.RGB_PINS),))
+            return backend
     except Exception as exc:  # noqa: BLE001 - any driver failure, same fallback
         print("led: %s backend failed (%s) - running dark" % (hardware.LED_KIND, exc))
         return NullBackend()
     return NullBackend()
+
+
+def _make_onboard_backend():
+    """The board's own WS2812, if ONBOARD_NEOPIXEL_PIN says one exists.
+    Same degrade-to-dark rule as the primary LED - it's a bonus indicator,
+    not one the button can afford to crash over."""
+    pin = getattr(hardware, "ONBOARD_NEOPIXEL_PIN", None)
+    if pin is None:
+        return None
+    try:
+        backend = NeoPixelBackend(
+            pin,
+            getattr(hardware, "ONBOARD_LED_BRIGHTNESS", 0.25),
+            getattr(hardware, "ONBOARD_NEOPIXEL_ORDER", "GRB"),
+            1,
+        )
+    except Exception as exc:  # noqa: BLE001 - same fallback as the primary LED
+        print("led: onboard backend failed (%s) - running dark" % exc)
+        return None
+    _announce("onboard WS2812", pin)
+    return backend
+
+
+def make_backend():
+    """The LED(s) described by hardware.py - just the one in the button, or
+    that one plus the board's onboard LED mirroring it, if configured."""
+    backends = [_make_primary_backend()]
+    onboard = _make_onboard_backend()
+    if onboard is not None:
+        backends.append(onboard)
+    return backends[0] if len(backends) == 1 else MultiBackend(backends)
 
 
 class LEDController:

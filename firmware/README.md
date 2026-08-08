@@ -45,6 +45,7 @@ Other hardware is a line in `hardware.py`:
 |---|---|
 | This build | defaults as shipped (`BUTTON_PIN = 4`, `NEOPIXEL_PIN = 1`) |
 | Onboard WS2812 instead | `NEOPIXEL_PIN` per the table below |
+| Onboard WS2812 *too*, mirroring the button's | `ONBOARD_NEOPIXEL_PIN` per the table below |
 | ESP32-C3 (onboard RGB) | `BUTTON_PIN = 9`, `NEOPIXEL_PIN = 8` |
 | Any board + discrete RGB LED | `LED_KIND = "rgb_pwm"`, set `RGB_PINS` |
 | A ring of *n* pixels | `NEOPIXEL_COUNT = n` |
@@ -69,12 +70,15 @@ unlit, raise it.
 
 ### Which pin is an onboard RGB LED on?
 
-Only relevant if you drive a board's own WS2812 rather than the button's.
-Boards sold as "ESP32-S3 Mini" disagree: **48** on the common Super Mini
-clones, **47** on the LOLIN/Wemos S3 Mini, **21** on the Waveshare S3-Zero,
-**38** on a DevKitC-1 v1.1. Rather than guess from the silkscreen, paste this
-into the REPL (`mpremote connect COM5 repl`) and watch which number is
-printed when the LED turns red:
+Relevant if you drive a board's own WS2812 instead of the button's
+(`NEOPIXEL_PIN`), or *in addition to* it so both light up together
+(`ONBOARD_NEOPIXEL_PIN` — see `hardware.py`; the onboard LED mirrors
+whatever state the button's LED is showing). Boards sold as "ESP32-S3 Mini"
+disagree: **48** on the common Super Mini clones, **47** on the LOLIN/Wemos
+S3 Mini, **21** on the Waveshare S3-Zero, **38** on a DevKitC-1 v1.1. Rather
+than guess from the silkscreen, paste this into the REPL
+(`mpremote connect COM5 repl`) and watch which number is printed when the
+LED turns red:
 
 ```python
 import time
@@ -89,8 +93,9 @@ for pin in (48, 47, 21, 38):
         print("pin", pin, "unusable:", exc)
 ```
 
-Put the winner in `hardware.py` as `NEOPIXEL_PIN`. If none of them light up,
-the board may gate the LED behind a power pin (some Feather-style boards do);
+Put the winner in `hardware.py` as `NEOPIXEL_PIN` (replacing the button's LED)
+or `ONBOARD_NEOPIXEL_PIN` (mirroring it). If none of them light up, the board
+may gate the LED behind a power pin (some Feather-style boards do);
 `LED_KIND = "none"` keeps everything else working meanwhile.
 
 ## Flashing
@@ -154,10 +159,17 @@ is also a VS Code task (see *Editing in VS Code*).
    settle into a slow blue breathe. Ctrl-C stops the firmware for editing,
    Ctrl-D restarts it.
 
-   No LED? It printed which backend failed and why, and the run continued —
-   check `NEOPIXEL_PIN` and the LED's own wiring. Press the button and the
-   REPL should print `button: short_press` whether or not the LED works;
-   nothing printed means the switch wiring, not the firmware.
+   It also prints the pin it believes each LED is on — `led: WS2812 on
+   GPIO1`, and `led: onboard WS2812 on GPIO48` if you configured one. Read
+   those first when an LED is dark: a WS2812 has no readback, so a *wrong*
+   pin number raises nothing and logs nothing on its own. If the line is
+   there and the LED isn't lit, the pin is wrong (or the wiring is) — the
+   sweep above says which.
+
+   No LED at all? It printed which backend failed and why, and the run
+   continued — check `NEOPIXEL_PIN` and the LED's own wiring. Press the
+   button and the REPL should print `button: short_press` whether or not the
+   LED works; nothing printed means the switch wiring, not the firmware.
 
 ## Editing in VS Code
 

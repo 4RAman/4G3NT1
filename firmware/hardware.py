@@ -48,21 +48,54 @@ NEOPIXEL_PIN = 1
 # the chain); under-estimating leaves the rest of the ring dark.
 NEOPIXEL_COUNT = 1
 
-LED_BRIGHTNESS = 0.25     # WS2812s are painfully bright at full scale
+# 0..1, scaling every colour before it reaches the button's WS2812.
+#
+# Full scale. Note this does *not* fix a warm/orange cast on white: the
+# onboard LED and this one are written identical bytes (MultiBackend fans one
+# set() out to both), so a colour difference between them is electrical, not
+# arithmetic - see "white looks orange" in README.md. Raising this makes the
+# LED brighter and, if anything, the cast slightly stronger, because more
+# current means more droop on a rail that is already marginal for blue.
+LED_BRIGHTNESS = 1.0
 
 # Byte order of the LED itself. MicroPython's neopixel driver assumes "GRB",
 # which most strips are - but plenty of dev-board LEDs are wired "RGB", and
 # then that assumption swaps two of your colours.
 #
-# Diagnose it by which colours are wrong, not by guessing:
-#   red <-> green swapped (cyan shows as magenta, blue fine) -> "RGB"
-#   everything right                                         -> "GRB"
-#   blue involved in the swap                                -> "BGR" / "BRG"
+# Diagnose it against *what is set here now*, not against an absolute: whatever
+# two components look swapped, swap those two letters in this name.
+#
+# This LED and the onboard one are NOT the same order - the button's WS2812 is
+# RGB, the board's is GRB. That is normal (they are different parts from
+# different makers) and it is why each has its own setting rather than sharing
+# one.
+#
+# White is useless for this. It is three equal components, so every
+# permutation of it is still white - a byte-order fault only shows on colours
+# with unequal components (red, green, cyan, magenta).
 NEOPIXEL_ORDER = "RGB"
 
 RGB_PINS = (18, 19, 20)   # (red, green, blue) when LED_KIND == "rgb_pwm"
 RGB_ACTIVE_HIGH = True    # False for a common-anode LED
 RGB_PWM_FREQ = 1000
+
+# --- onboard LED (optional, mirrors the LED above) ----------------------
+# Most "ESP32-S3 Mini" boards also carry their own WS2812 next to the USB
+# port, separate from the one wired into the button. Set this to drive it
+# too - it always shows the same state as the LED above, just as a second,
+# always-visible copy (handy with the button's LED buried inside a case).
+# None (the default) leaves it dark.
+#
+# Pin disagrees by board: 48 on the common Super Mini clones and DevKitC-1
+# v1.0, 47 on the LOLIN/Wemos S3 Mini, 21 on the Waveshare S3-Zero, 38 on
+# DevKitC-1 v1.1. README.md has a snippet that identifies it in ten seconds.
+# 48 is measured, not guessed: confirmed lit on this build's Melife
+# ESP32-S3FH4R2 ("Super Mini"-style clone). Another board is another number -
+# the REPL snippet in README.md identifies it.
+ONBOARD_NEOPIXEL_PIN = 48
+
+ONBOARD_NEOPIXEL_ORDER = "GRB"  # onboard WS2812s are usually wired GRB
+ONBOARD_LED_BRIGHTNESS = 0.25
 
 # --- buzzer ------------------------------------------------------------
 # A piezo buzzer between the pin and GND. None disables sound entirely.

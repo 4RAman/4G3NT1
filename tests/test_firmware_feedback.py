@@ -12,6 +12,7 @@ import types
 from contextlib import contextmanager
 
 import buzzer as fw_buzzer
+import hardware as fw_hardware
 import led as fw_led
 import protocol
 import pytest
@@ -313,6 +314,77 @@ def test_hsv_to_rgb_hits_the_primaries():
     assert fw_led._hsv_to_rgb(1 / 3, 1, 1) == (0, 1, 0)
     assert fw_led._hsv_to_rgb(2 / 3, 1, 1) == (0, 0, 1)
     assert fw_led._hsv_to_rgb(0.5, 0, 1) == (1, 1, 1)  # no saturation = white
+
+
+# --- onboard LED mirroring ----------------------------------------------
+
+def test_multi_backend_fans_out_to_every_led():
+    a, b = RecordingLED(), RecordingLED()
+    multi = fw_led.MultiBackend([a, b])
+    multi.set(1.0, 0.0, 0.0)
+    assert a.colors[-1] == b.colors[-1] == (1, 0, 0)
+    multi.off()
+    assert a.colors[-1] == b.colors[-1] == (0, 0, 0)
+
+
+def test_multi_backend_survives_one_led_failing():
+    # An onboard LED going bad must not blank the one in the button.
+    class BrokenLED:
+        def set(self, r, g, b):
+            raise RuntimeError("no such pin")
+
+        def off(self):
+            raise RuntimeError("no such pin")
+
+    good = RecordingLED()
+    multi = fw_led.MultiBackend([BrokenLED(), good])
+    multi.set(0.0, 1.0, 0.0)
+    assert good.colors[-1] == (0, 1, 0)
+
+
+def test_make_backend_is_just_the_button_led_with_no_onboard_pin(monkeypatch):
+    monkeypatch.setattr(fw_hardware, "LED_KIND", "neopixel", raising=False)
+    monkeypatch.setattr(fw_hardware, "ONBOARD_NEOPIXEL_PIN", None, raising=False)
+
+    class FakeNeoPixel:
+        ORDER = None
+
+        def __init__(self, _pin, count):
+            pass
+
+        def __setitem__(self, i, value):
+            pass
+
+        def write(self):
+            pass
+
+    with _fake_machine(FakeNeoPixel):
+        backend = fw_led.make_backend()
+    assert isinstance(backend, fw_led.NeoPixelBackend)
+
+
+def test_make_backend_adds_the_onboard_led_when_configured(monkeypatch):
+    monkeypatch.setattr(fw_hardware, "LED_KIND", "neopixel", raising=False)
+    monkeypatch.setattr(fw_hardware, "NEOPIXEL_PIN", 1, raising=False)
+    monkeypatch.setattr(fw_hardware, "ONBOARD_NEOPIXEL_PIN", 48, raising=False)
+
+    class FakeNeoPixel:
+        ORDER = None
+
+        def __init__(self, _pin, count):
+            pass
+
+        def __setitem__(self, i, value):
+            pass
+
+        def write(self):
+            pass
+
+    with _fake_machine(FakeNeoPixel):
+        backend = fw_led.make_backend()
+    assert isinstance(backend, fw_led.MultiBackend)
+    assert len(backend._backends) == 2
+    assert all(isinstance(b, fw_led.NeoPixelBackend) for b in backend._backends)
 
 
 # --- buzzer ------------------------------------------------------------
