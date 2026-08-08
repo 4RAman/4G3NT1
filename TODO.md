@@ -46,6 +46,51 @@ Only one instance of the app may run at a time (BLE allows a single
 central) — if you need to restart the service to pick up a Python change,
 confirm with the user first if it might be running against the real button.
 
+## Four bodies of work, not fifteen items
+
+The numbered list below is written so each item stands alone, which is right
+for picking one up cold and wrong for deciding what to do next: the items that
+*share a reflash* are scattered across it. This section is the other view.
+
+**The headline: most of the outstanding feature requests are protocol v1's
+payload.** Richer colour (gradients, sequencing, per-colour durations,
+per-mode looks) is what **D4**'s "ephemeral effects" is *for*. Arbitrary tap
+counts and hold levels are what **D5**'s "parameterised gestures" is *for*.
+Neither was specified as a protocol feature when it was asked for; both are.
+So they are one revision, or they are four reflashes and four chances to drift
+the mirrored tables.
+
+| Body of work | Items it spans | Gate |
+|---|---|---|
+| **The colour engine** — a stop list instead of `{style, 2 colours, period}`; progress ramps; named looks a mode picks from | 0b·3, **3**, **4**, 0a's per-app colour | Wire change → protocol v1 |
+| **The gesture engine** — N taps, hold levels, the ramp that renders them | 0b·2, the 5-tap toggle | Wire change → protocol v1 |
+| **Depth without the wire** — metronome config ✔, event values ✔, Tinker mode, filtering/export | **1**, **9**, **12** | None — ship freely |
+| **Reach and hosting** — launcher, remote UI | **0a**, **7**, **8** | 0a gates 7 |
+
+Three things fall out of that table and are worth stating rather than
+rediscovering:
+
+- **One structure covers three of the colour asks.** A list of
+  `{colour, hold, fade}` stops subsumes all six current styles (solid = one
+  stop; flash = colour + black, stepped; fade = two stops, smoothed; breathe =
+  colour → black) and *then* gives gradients (many stops), sequencing (stepped
+  stops) and asymmetric duty (unequal holds) for nothing. Design it once.
+- **A ramp is a different axis from a stop list**, and also reusable: the same
+  stops driven by *progress 0→1* instead of by the clock serve a countdown's
+  red→violet walk, a Pomodoro block, and the hold-level indicator. Write it
+  once, four consumers.
+- **N-tap does not cost latency.** A single tap already waits out the 0.4 s
+  double-tap window before it emits ([trigger.py](firmware/trigger.py)).
+  Counting to N and firing on a quiet gap is the same wait, measured from the
+  last tap instead of the first.
+
+**Do not ship the colour work as host-side palette rewrites in the meantime.**
+`run_metronome` already reaches around the abstraction that way, and CLAUDE.md
+names it a workaround to generalise rather than copy. The one exception worth
+making is a countdown ramp: it steps every few seconds, so pushing it from the
+host is honest, and it is the cheapest way to prove the ramp's shape *before*
+it is frozen into the wire.
+
 ## Sprint
 
 ### 0a. Reaching more than three apps — a launcher
@@ -110,15 +155,25 @@ Rationale and the cost of deferring each: **D4**, **D5**, **D6**, **D8** in
 call, so a takeover session is recorded with its duration. `recent()` and
 `/api/events` both carry `mode` through.
 
+**Also shipped since:** the `value` column — one nullable REAL an event may
+carry, so the log can record *how much* rather than only *that*. Deliberately
+one untyped slot (a column per app doesn't survive third-party apps; folding
+the number into `name` breaks `count_today`/`current_streak`, which group by
+exactly that string). The metronome is its first user. `_migrate` now adds
+each column independently, so a database from any version catches up in one
+open.
+
 **What is left:**
 - Filtering/search in the Events tab UI (by kind, by name, by date range) —
   `/api/events` ([webui.py](aibutton/webui.py)) still takes `limit` and
   nothing else, and [index.html](aibutton/web/index.html) renders a flat
-  table.
+  table. Now worth more than it was: there is a numeric column to filter and
+  sort on.
 - Exporting the log (CSV/JSON download) — there's no export endpoint today.
 - Which *gesture* produced an event, which the `mode` column doesn't tell
   you. Only worth adding if item 12 turns out to need it — don't widen the
-  schema on spec.
+  schema on spec. Note this gets *harder* to defer once gestures are
+  parameterised (0b·2): "which gesture" stops being one of three.
 
 Whatever you build, keep [test_webui.py](tests/test_webui.py)'s pattern:
 assert against the real `EventStore`, not a mock.
@@ -171,6 +226,25 @@ to `TEMPLATE_BY_TYPE` (or add an `ledStates: string[]` field on each
 takeover template's descriptor - that's the Open/Closed-correct place per
 CLAUDE.md's schema-as-data rule).
 
+**The stronger version that was actually asked for**, and it is worth building
+this rather than the paragraph above, because the two cost about the same and
+only one of them scales:
+
+- **Colours come first, not last.** In a mode's detail pane the look sits at
+  the *top*, above the behaviour fields. What a mode looks like is how you
+  recognise it going off across the room; it is not an afterthought setting.
+- **A mode picks from a pool of named looks rather than owning an inline
+  effect.** A top-level `looks: { "focus-warm": {...} }` in config, referenced
+  by name. This is strictly better than a per-mode override: it solves "two
+  Pomodoros cannot look different" *and* gives reuse across modes, *and* it is
+  already the shape **D4**'s ephemeral effects want to push down the wire — a
+  named look is a thing you can send without allocating a global `LEDState`.
+- **The split stays clean.** System states (IDLE/LISTENING/THINKING/SUCCESS/
+  ERROR) stay in the Lights tab, because they belong to the button rather than
+  to any mode. Mode-owned states (ALERT/TIMING/COUNTING/WORKING/RESTING/
+  METRONOME) move into the mode editor as a look reference. "Mode light
+  settings in modes, everything else in the lights panel" is exactly that line.
+
 **Real dependency, not optional polish:** every Pomodoro today shares the
 *one* `WORKING`/`RESTING` palette entry — this was already flagged as
 "Palette for the built-in modes" in the old list. Moving the picker into the
@@ -203,7 +277,22 @@ readout, same `{ el, validate }` contract as every other widget), with
 `device.py` (or at minimum raise the clamp floor from 0.01 s to the real
 safety floor - it's a one-line change to the `max(1, ...)`).
 
-**Confirm the number before shipping.** The request was "no lower than 4Hz
+**The number is now load-bearing, and still unconfirmed.**
+`_METRONOME_MIN_PERIOD_S = 1/3` in [main.py](aibutton/main.py) is a real,
+shipped, enforced floor — `metronome_flash()` groups beats so no tapped tempo
+can strobe past it, and there are tests over the whole tempo range saying so.
+So the guess below is already in the product; confirming it is now a change to
+working code rather than a decision before writing any.
+
+Two things that follow. **Whatever number is picked, there should be one
+constant**, and `_METRONOME_MIN_PERIOD_S` is the obvious one to promote —
+config.py and device.py should import it rather than each holding a copy.
+And **the stop-list work (item 3's stronger version) multiplies the ways to
+strobe**: a sequence of five colours at 0.1 s each is a 2 Hz cycle but a 10 Hz
+*change* rate, which the current per-effect check would not catch at all. The
+floor needs to be defined over transitions, not over `period_s`.
+
+**Confirm the number.** The request was "no lower than 4Hz
 cycles, to prevent seizures" - taken literally that's a period floor of
 `0.25 s` (1/4 Hz), i.e. flashing is allowed *up to* 4 times/second. Standard
 photosensitive-epilepsy guidance (WCAG 2.3.1) generally caps general-purpose
@@ -252,17 +341,18 @@ resolve against, which changes what a from-scratch `config.json` looks like.
 Depends on (a): renaming/re-purposing only makes sense once this mode can't
 be deleted out from under the defaults it's supposed to route to.
 
-### 6. Make the Press/Clock side-panel sections collapsible
+### 6. Make the Press/Clock side-panel sections collapsible ✔ shipped
 
-Small, self-contained. `.side-block` in [index.html](aibutton/web/index.html)
-(Virtual device / Press / Clock) are always fully expanded, which is most of
-the side pane's height on a short viewport. Wrap each in a native
-`<details>`/`<summary>` (the project already leans on plain HTML disclosure
-widgets elsewhere before this session's rewrite removed the last of them;
-it's the simplest option and needs no new JS) or a small custom toggle if you
-want the state to persist across reloads (`localStorage`, same pattern as
-[help.js](aibutton/web/static/help.js)'s Tips toggle). Decide whether
-collapsed is the sensible default or only remembers what the user last set.
+Shipped as one fold of the *whole* pane rather than per-block disclosures
+([sidepane.js](aibutton/web/static/sidepane.js)), toggled from the header
+beside Tips. The three blocks are one thing — inspection surface — and
+someone driving a real button wants all of it gone, not two thirds of it.
+Expanded is the default; the choice is remembered.
+
+Two things left behind for the next toggle rather than this one:
+[prefs.js](aibutton/web/static/prefs.js) now holds the throw-guarded
+localStorage helpers (storage *raises* in private browsing and off
+`file://`), and `.header-tools` is the cluster Tinker mode joins.
 
 ### 7. Build at least 10 modes total
 
@@ -311,19 +401,54 @@ above.
 
 ### 8. Host the web UI on the user's server (docker / nginx / SSL)
 
-**Do not start building before this is answered - it changes the shape of
-the whole task:** BLE has short range and this app allows exactly one
+**Do not start building before the topology is picked - it changes the shape
+of the whole task.** BLE has short range and this app allows exactly one
 running instance (`CLAUDE.md`'s single-instance rule; `DESIGN-ESP32.md`'s
-"host must be awake" constraint; "WiFi transport" is explicitly parked below
-*because* it would remove this constraint, which it hasn't been). So "host
-on my server" only makes sense if either (a) the server named `4g3nt.0` -
-confirm the exact hostname, that may be a rendering of the BLE device name
-`4G3NT0` seen in the live dashboard rather than a real server name - is
-physically near the button and holds the Bluetooth connection itself, or
-(b) the intent is to host *only* the read-only web dashboard remotely while
-a separate local process (this Windows machine, today) keeps the actual BLE
-connection and event database. Those are architecturally different builds.
-Ask before writing a Dockerfile.
+"host must be awake" constraint). Three shapes, and the research below rules
+one of them in that was not previously on the list:
+
+**(a) Relay.** A local process keeps BLE and the event database and opens an
+*outbound* WebSocket to the server, which hosts the dashboard. Works in any
+browser including iOS. The server never touches Bluetooth, so the whole
+`--net=host` / BT-passthrough question disappears. This is the old option (b),
+and it is still the right answer for an always-on dashboard.
+
+**(b) Web Bluetooth — the browser holds the button.** Genuinely available, and
+it was not considered before. Chrome/Edge on desktop, Chrome on Android.
+Requires HTTPS (already planned) and a user click to open the browser's own
+device chooser — no silent auto-connect. Notifications work, so gestures
+arrive fine, and the custom 128-bit UUIDs in [device.py](aibutton/device.py)
+are exactly what it wants. Three consequences:
+
+- The topology is `ESP32 ←BLE→ browser ←HTTPS→ server`. The server holds no
+  radio, so there is no Docker Bluetooth story at all.
+- The browser and the local service become **mutually exclusive** — the ESP32
+  takes one central, so this is the single-instance rule stretched across two
+  machines, not a second connection.
+- **It fails the latency budget if the server does the thinking.** Press →
+  browser → server → decision → browser → light is 100–500 ms against
+  ARCHITECTURE.md's non-negotiable ≤50 ms. So a server-side brain only becomes
+  viable *after* the runtime moves onto the device (Phase C), at which point it
+  is nearly free.
+
+**No iOS, ever, and that closed a different question.** Safari does not
+implement Web Bluetooth and every other iOS browser is WebKit underneath, so
+there is no workaround. Firefox declined on desktop too. That is why
+ARCHITECTURE.md's "native or PWA?" is now answered — see the resolved bullet
+there.
+
+**The cheap first move is (b) applied to the editor, not the dashboard.**
+[build_editor.py](tools/build_editor.py) already swaps `ConfigApi` for
+`FileApi`; a third `BleApi` gives a page that configures the button directly
+with no service and no server, and doubles as the phone app's authoring
+prototype. Chrome/Android-only is a fair ask for a tinkerer's tool in a way it
+is not for the everyday surface.
+
+**Blocking prerequisite for any of this, and it is on no other list:** the web
+UI has **no authentication**. [config.py](aibutton/config.py) says so in a
+comment next to `web_host` ("LAN-facing; the web UI has no auth"). Hosting it
+publicly exposes the config editor and the whole event log. Auth comes before
+a Dockerfile, not after.
 
 **Once that's settled**, the concrete work: containerize
 (`requirements.txt`/`requirements-dev.txt` already list the deps - fastapi,
@@ -391,7 +516,19 @@ in `main.py` (mirrors `ring_alarm`, much simpler - no snooze branch), and a
 
 ### 12. Look into analytics/tracking - scope first, this is vague as given
 
-Before building anything: "improve performance" needs to be pinned down -
+**One half is now decided: it is all local.** "No invasive distractions. No
+ads." is a product promise, and it is written into
+[ROADMAP.md](ROADMAP.md)'s principles as *nothing is extracted from the user*.
+So whatever this turns out to mean, the data stays on the user's machine,
+nothing phones home, and there is no analytics vendor. That also rules out the
+easy Stage-5 business model, which is better known now than later.
+
+**Also easier than it was:** the `value` column (item 1) means the log can
+carry numbers, not just occurrences - which was the actual blocker under any
+reading of (a) below.
+
+What is still open is which *question* this answers. "improve performance"
+needs to be pinned down -
 it could mean (a) *habit* analytics for the user (mode usage, streaks,
 time-of-day patterns - a real dashboard over `EventStore`), (b) *device*
 telemetry (BLE reconnect frequency, gesture-to-feedback latency, dropped
@@ -544,6 +681,37 @@ edits a scene. Suite: `test_scenes.py`, `test_webui_scenes.py`,
   scene produced this row" - the thing an A/B test eventually wants. Belongs
   with item 1, not here.
 
+### 14. Tinker mode - one flag that decides how much surface you see
+
+The base experience should be obvious to someone who has never seen it; the
+fringe options should still exist. That is [ROADMAP.md](ROADMAP.md)'s first
+principle ("neither one sees the other's surface"), and today nothing
+implements it - every field a template has is rendered to everybody.
+
+**Build it exactly like Tips.** Add `tier: 'basic' | 'tinker'` to field
+descriptors in [schema.js](aibutton/web/static/schema.js), default `basic`
+when absent, and have `widgets.js` mark the node so a single toggle hides the
+lot. Data on descriptors, one renderer change, no branches - the Open/Closed
+rule the schema already follows. The toggle joins `.header-tools` next to
+Tips, and reads its state through
+[prefs.js](aibutton/web/static/prefs.js) like the side pane does.
+
+**They are two axes, not one, and that is worth keeping straight:** Tips is
+*explain / don't explain*; Tinker is *show / hide surface*. A basic user with
+Tips on should get a short, fully-explained form. Do not collapse them into a
+single "beginner mode".
+
+**The judgement is which fields are which**, and it is the whole value of the
+item - a Tinker flag on everything is the same as no flag. First pass worth
+arguing with: metronome's `tap_history`/`reset_gap_s`/`max_bpm` are tinker and
+`start_bpm` is basic; Pomodoro's `extend_minutes` and per-gesture command
+bindings are tinker; every `log_as`/event name is basic (it is what you came
+for); the whole Device settings group is tinker except `sounds_enabled`.
+
+**Do this after item 3's look work, not before.** Colour is the thing that
+should be at the top of a basic mode form, so deciding what "basic" contains
+before the look editor exists means deciding it twice.
+
 ## Smaller, worth doing
 
 - **Verify power-cycle recovery.** Phase 3's last unchecked criterion: pull
@@ -600,6 +768,28 @@ edits a scene. Suite: `test_scenes.py`, `test_webui_scenes.py`,
 
 ## Done
 
+- ~~**The metronome can go fast, and has settings**~~ - it had no config at
+  all (the tempo is session state, so the dataclass was empty), and its
+  ceiling was not a number anyone had chosen: `_METRONOME_MIN_PERIOD_S` is a
+  photosensitivity floor that capped the *light* at 180 BPM. Tempo and flash
+  rate are now separate limits - `max_bpm` bounds the tempo and is yours to
+  raise, while `metronome_flash()` keeps the light legal by marking every Nth
+  beat and saying so in the status line. 240 BPM is a real 240 BPM rather than
+  a lie or a strobe. Plus `start_bpm`, `tap_history`, `reset_gap_s`,
+  `sound_on_tap`, `log_as`, each falling back per key. `max_bpm` also stops one
+  bounced contact (two edges 20 ms apart imply 3000 BPM) throwing the average
+  away. A finished session logs its tempo in the new `value` column; backing
+  out without setting one logs nothing.
+- ~~**An event can carry a number**~~ - one nullable `value REAL`, appended so
+  existing positional reads keep meaning what they meant, with a test that
+  attaching a value never changes what an event *counts* as. See item 1.
+- ~~**The side pane folds away**~~ - see item 6.
+- ~~**The offline editor rendered as a sliver**~~ - its layout container
+  carried only `.body-split`, a class the shared stylesheet does not define,
+  so `display: grid` and `flex: 1` never applied and `.tab-panels` resolved to
+  zero height. It looked built - toolbar and tabs render - which is why it
+  survived a look. The test asserts the invariant (a layout container must
+  carry a class the stylesheet actually defines) rather than pixels.
 - ~~**Single-instance guard**~~ - [single_instance.py](aibutton/single_instance.py)
   takes an OS-level lock on `<database_path>.lock` at startup and a second
   copy refuses with the holder's PID and exit 1, instead of two processes

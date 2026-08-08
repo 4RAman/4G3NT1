@@ -300,8 +300,20 @@ every later phase a port rather than a design.
 
 - **Cloud identity and the store's economics.** Stage 5. Nothing above
   depends on the answer, which is the point of local-first.
-- **Whether the phone app is native or a PWA.** BLE support decides it; check
-  before committing. Doesn't change any contract here.
+- ~~**Whether the phone app is native or a PWA.**~~ **Resolved: it cannot be a
+  PWA.** The check was Web Bluetooth support, and the answer is that no browser
+  on iOS has it — Safari does not implement it, and every other iOS browser is
+  WebKit underneath, so "use Chrome instead" is not an escape. Firefox declined
+  on desktop too. A PWA companion would be Android-and-desktop only, which is
+  not a phone app. So: **native, or a native shell with a BLE bridge.** Still
+  doesn't change any contract here — the sync protocol is the same either way.
+
+  What Web Bluetooth *is* good for is the tinkerer's surface, where
+  Chrome/Edge/Android is a fair ask: a hosted or offline page that pairs with
+  the button directly, with no service and no server holding the radio. That is
+  a small delta on [build_editor.py](tools/build_editor.py) — a third `*Api`
+  implementation beside `ConfigApi` and `FileApi` — and it is the honest
+  prototype for the phone app's authoring half.
 - **How many apps can be *installed* vs *reachable*.** Flash says hundreds;
   the launcher's UX says maybe a dozen before cycling gets tedious. That's a
   design problem for the launcher, not a capacity one.

@@ -32,7 +32,17 @@ with extra steps.
 | **Apps, not features** | Shipping an app touches the app's own files and its test. If it touches the core, it isn't an app — it's a core change, and it needs to justify itself as one. |
 | **Flexibility over feature count** | New capability arrives as *data* (a manifest, a descriptor), not as a branch in the editor or the run loop. This is the existing Open/Closed rule in [CLAUDE.md](CLAUDE.md), applied to apps. |
 | **One button, one light** | Nothing in the design assumes a screen, a keyboard, or a second button — including the recovery paths, which are the ones that quietly assume a laptop. |
+| **Nothing is extracted from the user** | No ads, no telemetry, no analytics that leave the machine, no account required to use what you bought. The test: unplug the network and the product is undiminished except for the features that are *obviously* network features (webhooks, AI, the store). |
 | **Ship the demo before the paradigm** | No Stage-3 refactor is allowed to block Stage 2. If the two conflict, Stage 2 wins and Stage 3 absorbs the cost. |
+
+The fifth one is a product promise, not a nicety, and it settles a question
+that was open: **analytics are local.** [TODO.md](TODO.md) item 12 asks what
+"improve performance" means; whatever it turns out to mean, the data stays on
+the user's own machine. Usage history is the user's, the button does not phone
+home, and "local-first, no account required" in
+[ARCHITECTURE.md](ARCHITECTURE.md) is the same promise stated from the other
+end. It also rules out the easy version of a Stage-5 business model, which is
+worth knowing now rather than discovering after building one.
 
 ---
 
