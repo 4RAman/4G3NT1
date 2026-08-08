@@ -57,8 +57,16 @@
   #clockbar { background: #3a2c10; color: #ffd98a; border: 1px solid #5c4413;
               border-radius: var(--radius); padding: 3px 10px; font-size: 12px; }
   /* One switch for every [data-help] node in the page - see help.js. */
-  .help-toggle { margin-left: auto; padding: 3px 10px; font-size: 12px; color: var(--dim); }
-  .help-toggle[aria-pressed="true"] { color: var(--text); border-color: var(--blue); }
+  .help-toggle, .pane-toggle { margin-left: auto; padding: 3px 10px; font-size: 12px; color: var(--dim); }
+  .help-toggle[aria-pressed="true"], .pane-toggle[aria-expanded="false"] {
+    color: var(--text); border-color: var(--blue); }
+  /* The view switches, grouped: they change how much of the page you are
+     looking at, as opposed to anything about the button. One cluster so they
+     read as a set - Tinker mode lands here too. (The offline editor has only
+     Tips and no cluster, which is why .help-toggle keeps its own auto margin
+     above and gives it up in here.) */
+  .header-tools { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .header-tools > button { margin-left: 0; }
 
   .badge { padding: 2px 10px; border-radius: var(--radius); font-size: 12px; font-weight: 600;
            background: var(--line); }
@@ -76,6 +84,14 @@
   .app-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr; }
   @media (max-width: 900px) {
     .app-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  }
+  /* Folded away (see sidepane.js). The track is removed rather than zeroed so
+     the pane's border doesn't survive as a stray line, and the row axis is
+     reset too because under 900px the pane is a row, not a column. */
+  .app-body.side-collapsed { grid-template-columns: 1fr; }
+  .app-body.side-collapsed > .side-pane { display: none; }
+  @media (max-width: 900px) {
+    .app-body.side-collapsed { grid-template-rows: 1fr; }
   }
 
   .side-pane { background: var(--panel); border-right: 1px solid var(--line);
@@ -271,13 +287,17 @@
       <span id="state" class="badge">…</span>
       <span id="meta"></span>
       <span id="clockbar" hidden></span>
-      <button type="button" id="help-toggle" class="help-toggle" aria-pressed="false">ⓘ Tips</button>
+      <div class="header-tools">
+        <button type="button" id="help-toggle" class="help-toggle" aria-pressed="false">ⓘ Tips</button>
+        <button type="button" id="pane-toggle" class="pane-toggle"
+                aria-expanded="true" aria-controls="side-pane">◧ Panel</button>
+      </div>
     </div>
     <p id="last"></p>
   </header>
 
   <div class="app-body">
-    <aside class="side-pane scroll-fade">
+    <aside class="side-pane scroll-fade" id="side-pane">
       <div id="virtual" class="side-block" hidden>
         <h2>Virtual device</h2>
         <div class="virtual-row">
@@ -351,6 +371,9 @@
 <!-- The global Tips toggle - loads first so [data-help] content starts hidden
      before menu.js has anything to render. -->
 <script type="module" src="/static/help.js"></script>
+
+<!-- The side pane's fold. Served page only: the offline editor has no pane. -->
+<script type="module" src="/static/sidepane.js"></script>
 
 <!-- Config menu: structured editor, built from ES modules (no build step). -->
 <script type="module" src="/static/menu.js"></script>

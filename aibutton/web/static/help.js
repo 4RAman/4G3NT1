@@ -10,26 +10,11 @@
 // DOM change is simpler and more robust than threading an "apply help state"
 // call through each render path.
 
+import { readFlag, writeFlag } from './prefs.js';
+
 const KEY = 'aibutton-help';
 
-// Storage can throw rather than return null - private browsing, and a page
-// opened straight off the filesystem (the standalone editor). Losing the
-// preference is fine; taking the rest of the page down with it is not.
-function remembered() {
-  try {
-    return localStorage.getItem(KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function remember(value) {
-  try {
-    localStorage.setItem(KEY, value ? '1' : '0');
-  } catch { /* not remembered this session */ }
-}
-
-let on = remembered();
+let on = readFlag(KEY);
 
 function apply() {
   document.querySelectorAll('[data-help]').forEach((node) => { node.hidden = !on; });
@@ -41,7 +26,7 @@ export function isHelpOn() {
 
 export function setHelpOn(next) {
   on = next;
-  remember(on);
+  writeFlag(KEY, on);
   apply();
   sync();
 }
