@@ -147,7 +147,7 @@ def test_log_event_records_mode(tmp_path):
     store = EventStore(str(tmp_path / "events.db"))
     store.log_event("meds_taken", mode="Default")
     row = store.recent()[0]
-    assert row == (row[0], "log", "meds_taken", None, "Default")
+    assert row == (row[0], "log", "meds_taken", None, "Default", None)
     store.close()
 
 
@@ -196,6 +196,101 @@ def test_migration_adds_mode_column_to_an_existing_db(tmp_path):
         assert rows[0][4] is None  # no mode recorded before the migration
         store.log_event("fresh", mode="Default")  # new inserts still work
         assert store.recent()[0][4] == "Default"
+    finally:
+        store.close()
+
+
+# --- the value column ----------------------------------------------------
+
+def test_log_event_records_a_value(tmp_path):
+    store = EventStore(str(tmp_path / "events.db"))
+    store.log_event("metronome", mode="Tempo", value=128.5)
+    assert store.recent()[0][5] == 128.5
+    store.close()
+
+
+def test_a_value_is_optional_and_absent_by_default(tmp_path):
+    store = EventStore(str(tmp_path / "events.db"))
+    store.log_event("meds_taken")
+    assert store.recent()[0][5] is None
+    store.close()
+
+
+def test_a_value_does_not_change_what_an_event_counts_as(tmp_path):
+    """Counts and streaks group by name, so attaching a number to an event
+    must not split it into its own bucket - otherwise every app that starts
+    logging a value silently breaks its own history."""
+    store = EventStore(str(tmp_path / "events.db"))
+    store.log_event("pushups")
+    store.log_event("pushups", value=20)
+    store.log_event("pushups", value=25)
+    assert store.count_today("pushups") == 3
+    assert store.current_streak("pushups") == 1
+    store.close()
+
+
+def test_migration_adds_the_value_column_to_a_db_that_only_has_mode(tmp_path):
+    """The realistic upgrade: a database already migrated once, for `mode`,
+    now needing `value` as well."""
+    path = tmp_path / "events.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            duration_s REAL,
+            mode TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO events (ts, kind, name, mode) VALUES (?, 'log', 'legacy', 'Default')",
+        (datetime.now(timezone.utc).isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+    store = EventStore(str(path))
+    try:
+        assert store.recent()[0][5] is None  # nothing recorded a value before
+        store.log_event("fresh", value=3)
+        assert store.recent()[0][5] == 3
+    finally:
+        store.close()
+
+
+def test_migration_catches_up_a_database_missing_both_columns(tmp_path):
+    """Columns are added independently, so the oldest schema reaches the
+    newest in one open rather than one version per open."""
+    path = tmp_path / "events.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            duration_s REAL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO events (ts, kind, name) VALUES (?, 'log', 'ancient')",
+        (datetime.now(timezone.utc).isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+    store = EventStore(str(path))
+    try:
+        row = store.recent()[0]
+        assert (row[2], row[4], row[5]) == ("ancient", None, None)
+        store.log_event("fresh", mode="Default", value=42)
+        assert store.recent()[0][4:] == ("Default", 42)
     finally:
         store.close()
 

@@ -114,7 +114,7 @@ async def test_a_scheduler_that_raises_does_not_take_the_service_down(
     # The press was handled despite the faults around it.
     store = EventStore(str(db_path))
     try:
-        names = [name for (_ts, _kind, name, _dur, _mode) in store.recent(100)]
+        names = [name for (_ts, _kind, name, _dur, _mode, _val) in store.recent(100)]
     finally:
         store.close()
     assert "ping" in names

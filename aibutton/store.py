@@ -25,9 +25,20 @@ CREATE TABLE IF NOT EXISTS events (
                                   -- | 'mode_enter' | 'mode_exit'
     name TEXT NOT NULL,
     duration_s REAL,             -- set on 'timer_stop' / 'mode_exit' rows
-    mode TEXT                    -- which mode was active when this fired
+    mode TEXT,                   -- which mode was active when this fired
+    value REAL                   -- a number this event carried; see below
 )
 """
+
+# `value` is deliberately one untyped numeric slot rather than a column per
+# app. A metronome session's BPM, a counter's tally, a lap number and a sensor
+# reading are all "the number this press produced", and the two alternatives
+# are worse: a column each does not survive third-party apps, and folding the
+# number into `name` breaks count_today/current_streak, which group by exactly
+# that string. What a value *means* is read off `name` and `kind`, the same way
+# `duration_s` already means different things on a timer_stop and a mode_exit.
+#
+# NULL is the normal case: most events are the fact that something happened.
 
 
 _MEMORY = ":memory:"
@@ -56,11 +67,16 @@ def _local_day_bounds_utc() -> tuple[str, str]:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """`CREATE TABLE IF NOT EXISTS` only helps a brand-new file - an
-    existing events.db predating the `mode` column needs it added by
-    hand, or every insert below fails against the old schema."""
+    existing events.db predating a column needs it added by hand, or every
+    insert below fails against the old schema.
+
+    Each column is added independently, so a database from any earlier
+    version catches up in one pass rather than only the most recent one."""
     columns = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
     if "mode" not in columns:
         conn.execute("ALTER TABLE events ADD COLUMN mode TEXT")
+    if "value" not in columns:
+        conn.execute("ALTER TABLE events ADD COLUMN value REAL")
 
 
 def _connect(path: str) -> sqlite3.Connection:
@@ -100,11 +116,16 @@ class EventStore:
             self._conn = _connect(_MEMORY)
         log.info("event store at %s", _MEMORY if self.degraded else path)
 
-    def log_event(self, name: str, mode: str | None = None) -> datetime:
+    def log_event(
+        self, name: str, mode: str | None = None, value: float | None = None
+    ) -> datetime:
+        """Record that `name` happened. `value` is an optional number the
+        event carried (see the note on the schema above) - counts and streaks
+        ignore it, so adding one never changes what an existing event means."""
         now = _utcnow()
         self._conn.execute(
-            "INSERT INTO events (ts, kind, name, mode) VALUES (?, 'log', ?, ?)",
-            (now.isoformat(), name, mode),
+            "INSERT INTO events (ts, kind, name, mode, value) VALUES (?, 'log', ?, ?, ?)",
+            (now.isoformat(), name, mode, value),
         )
         self._conn.commit()
         return now
@@ -207,10 +228,14 @@ class EventStore:
         return elapsed
 
     def recent(self, limit: int = 50) -> list[tuple]:
-        """Newest-first (ts, kind, name, duration_s, mode) rows - backs the
-        web UI's Events tab."""
+        """Newest-first (ts, kind, name, duration_s, mode, value) rows - backs
+        the web UI's Events tab.
+
+        `value` is appended rather than slotted in beside the other nullable
+        columns so existing positional reads keep meaning what they meant."""
         return self._conn.execute(
-            "SELECT ts, kind, name, duration_s, mode FROM events ORDER BY id DESC LIMIT ?",
+            "SELECT ts, kind, name, duration_s, mode, value "
+            "FROM events ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
 

@@ -61,7 +61,7 @@ async def _run(tmp_path, cfg, script, settle=0.15):
 
     store = EventStore(str(db))
     try:
-        return [(kind, name) for (_ts, kind, name, _d, _mode) in store.recent(100)]
+        return [(kind, name) for (_ts, kind, name, _d, _mode, _val) in store.recent(100)]
     finally:
         store.close()
 

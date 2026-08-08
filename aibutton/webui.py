@@ -449,8 +449,9 @@ def create_app(ctx: WebContext) -> FastAPI:
     async def events(limit: int = 50):
         rows = ctx.store.recent(min(max(limit, 1), 500))
         return [
-            {"ts": ts, "kind": kind, "name": name, "duration_s": duration, "mode": mode}
-            for ts, kind, name, duration, mode in rows
+            {"ts": ts, "kind": kind, "name": name, "duration_s": duration,
+             "mode": mode, "value": value}
+            for ts, kind, name, duration, mode, value in rows
         ]
 
     @app.post("/api/trigger/{trigger}")

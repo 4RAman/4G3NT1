@@ -168,7 +168,7 @@ async def test_no_tempo_data_is_logged_only_lifecycle(tmp_path):
     finally:
         store.close()
 
-    kinds = [kind for (_ts, kind, _name, _dur, _mode) in rows]
+    kinds = [kind for (_ts, kind, _name, _dur, _mode, _val) in rows]
     # Entering/exiting is logged like any takeover mode, but the metronome
     # itself never calls store.log_event/toggle_timer - purely live, by design.
     assert set(kinds) == {"mode_enter", "mode_exit"}
