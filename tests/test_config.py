@@ -690,6 +690,8 @@ def test_all_four_templates_and_enter_mode_roundtrip(tmp_path):
 
 
 def test_metronome_roundtrips(tmp_path):
+    """A metronome written with no fields comes back carrying all of them, so
+    the editor has something to show rather than an empty form."""
     cfg = load_config(write(tmp_path, {
         "modes": [
             {"name": "Tempo", "template": "metronome", "activation": {"type": "manual"}},
@@ -698,8 +700,41 @@ def test_metronome_roundtrips(tmp_path):
     dumped = as_dict(cfg)
     assert dumped["modes"][0] == {
         "name": "Tempo", "template": "metronome", "activation": {"type": "manual"},
+        "start_bpm": 120.0, "max_bpm": 300.0, "tap_history": 8,
+        "reset_gap_s": 2.0, "sound_on_tap": True, "log_as": "metronome",
     }
     assert parse_config(dumped) == cfg  # exact round-trip
+
+
+def test_metronome_fields_fall_back_one_at_a_time(tmp_path):
+    """A bad tempo costs you that tempo, not the whole mode - the same per-key
+    rule the rest of the parser follows."""
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {"name": "Tempo", "template": "metronome", "activation": {"type": "manual"},
+             "start_bpm": "fast", "tap_history": 1, "reset_gap_s": -3,
+             "sound_on_tap": "yes", "max_bpm": 240},
+        ],
+    }))
+    behavior = cfg.modes[0].behavior
+    assert behavior.start_bpm == 120.0    # not a number
+    assert behavior.tap_history == 8      # below the two taps an average needs
+    assert behavior.reset_gap_s == 2.0    # not positive
+    assert behavior.sound_on_tap is True  # not a bool
+    assert behavior.max_bpm == 240.0      # the one good value survives
+
+
+def test_a_starting_tempo_above_the_ceiling_lifts_the_ceiling(tmp_path):
+    """Both values parse; they just disagree. Keeping the tempo the user asked
+    to start at beats silently starting them slower."""
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {"name": "Tempo", "template": "metronome", "activation": {"type": "manual"},
+             "start_bpm": 260, "max_bpm": 200},
+        ],
+    }))
+    behavior = cfg.modes[0].behavior
+    assert (behavior.start_bpm, behavior.max_bpm) == (260.0, 260.0)
 
 
 def test_constructed_takeover_modes_roundtrip():

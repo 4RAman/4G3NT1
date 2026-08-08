@@ -265,9 +265,30 @@ POMODORO_ADVANCE = ("auto", "manual", "break_only")
 @dataclass(frozen=True)
 class MetronomeBehavior:
     """The takeover metronome template: short_press/double_tap mark a beat,
-    long_press exits. No fields of its own - the tempo is session state, not
-    config, so there is nothing here to parse or round-trip. Handled by
-    main.py's run_metronome loop, not actions.execute()."""
+    long_press exits. Handled by main.py's run_metronome loop, not
+    actions.execute().
+
+    The *tempo* remains session state - you tap it in, it is never stored -
+    but how the tempo is read, bounded and shown is config:
+
+        start_bpm     what the light pulses at before the first tap lands
+        tap_history   how many recent intervals the rolling average spans
+        reset_gap_s   a silence this long starts the average over
+        max_bpm       the ceiling a tap sequence can register at
+
+    `max_bpm` is about contact bounce, not taste: two edges 20 ms apart imply
+    3000 BPM, and without a ceiling one bad press throws the average away.
+    Raising it is how this mode goes faster - it is *not* the same limit as
+    the LED's flash floor, which is a safety cap the light works around by
+    marking every Nth beat (see main.py's run_metronome).
+    """
+
+    start_bpm: float = 120.0
+    tap_history: int = 8
+    reset_gap_s: float = 2.0
+    max_bpm: float = 300.0
+    sound_on_tap: bool = True
+    log_as: str = "metronome"  # a finished session logs its BPM under this
 
     @property
     def template(self) -> str:
@@ -740,8 +761,58 @@ def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior | None:
 
 
 def _parse_metronome_body(raw: dict, where: str) -> MetronomeBehavior:
-    """No fields to parse - a metronome mode is just a template + activation."""
-    return MetronomeBehavior()
+    """Parse the flat metronome-template fields, falling back per key. A bad
+    tempo costs you that tempo, not the whole mode."""
+    defaults = MetronomeBehavior()
+
+    def positive(key: str, default: float) -> float:
+        value = raw.get(key, default)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return float(value)
+        log.error("config: %s.%s must be a number > 0 - using %s", where, key, default)
+        return default
+
+    start_bpm = positive("start_bpm", defaults.start_bpm)
+    max_bpm = positive("max_bpm", defaults.max_bpm)
+    if start_bpm > max_bpm:
+        # Not a fallback but a reconciliation: both values parsed fine, they
+        # just disagree. Lifting the ceiling keeps the tempo the user actually
+        # asked to start at, rather than silently slowing them down.
+        log.warning(
+            "config: %s.start_bpm (%s) is above max_bpm (%s) - raising max_bpm to match",
+            where, start_bpm, max_bpm,
+        )
+        max_bpm = start_bpm
+
+    tap_history = raw.get("tap_history", defaults.tap_history)
+    if not (isinstance(tap_history, int) and not isinstance(tap_history, bool) and tap_history >= 2):
+        # Two taps is one interval - the least you can average anything over.
+        log.error(
+            "config: %s.tap_history must be a whole number >= 2 - using %s",
+            where, defaults.tap_history,
+        )
+        tap_history = defaults.tap_history
+
+    sound_on_tap = raw.get("sound_on_tap", defaults.sound_on_tap)
+    if not isinstance(sound_on_tap, bool):
+        log.error("config: %s.sound_on_tap must be true or false - using %s",
+                  where, defaults.sound_on_tap)
+        sound_on_tap = defaults.sound_on_tap
+
+    log_as = raw.get("log_as", defaults.log_as)
+    if not (isinstance(log_as, str) and log_as):
+        log.error("config: %s.log_as must be a non-empty string - using %r",
+                  where, defaults.log_as)
+        log_as = defaults.log_as
+
+    return MetronomeBehavior(
+        start_bpm=start_bpm,
+        tap_history=tap_history,
+        reset_gap_s=positive("reset_gap_s", defaults.reset_gap_s),
+        max_bpm=max_bpm,
+        sound_on_tap=sound_on_tap,
+        log_as=log_as,
+    )
 
 
 def _parse_mode(raw, idx: int) -> Mode | None:
@@ -1089,6 +1160,13 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["log_as"] = mode.behavior.log_as
         for trigger, command in mode.behavior.gestures.items():
             entry[trigger] = command
+    elif isinstance(mode.behavior, MetronomeBehavior):
+        entry["start_bpm"] = mode.behavior.start_bpm
+        entry["tap_history"] = mode.behavior.tap_history
+        entry["reset_gap_s"] = mode.behavior.reset_gap_s
+        entry["max_bpm"] = mode.behavior.max_bpm
+        entry["sound_on_tap"] = mode.behavior.sound_on_tap
+        entry["log_as"] = mode.behavior.log_as
     return entry
 
 

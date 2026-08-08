@@ -286,11 +286,33 @@ export const TEMPLATES = [
     nature: 'takeover',
     allowedActivations: ['manual'], // started by an enter_mode gesture only
     body: 'fields',
-    fields: [], // no config - the tempo is session state, not stored
-    defaults: () => ({}),
+    // The tempo itself is session state and is never stored. Everything here
+    // is how the tempo gets read, bounded and shown.
+    fields: [
+      { key: 'start_bpm', label: 'Starting tempo (BPM)', kind: 'number', min: 1, step: 1,
+        hint: 'What the light keeps time at before your first tap lands.' },
+      { key: 'max_bpm', label: 'Fastest tempo (BPM)', kind: 'number', min: 1, step: 1,
+        hint: 'Ceiling for what taps can register - stops one bounced press '
+          + 'reading as a huge tempo. Raise it to go faster; the light stays '
+          + 'safe by marking every Nth beat above ~180.' },
+      { key: 'tap_history', label: 'Taps to average over', kind: 'number', min: 2, step: 1,
+        hint: 'More = steadier but slower to follow you; fewer = twitchier.' },
+      { key: 'reset_gap_s', label: 'Silence that restarts it (seconds)', kind: 'number',
+        min: 0.1, step: 0.1,
+        hint: 'A pause this long starts the average over instead of averaging in the gap.' },
+      { key: 'sound_on_tap', label: 'Click on each tap', kind: 'checkbox',
+        hint: 'Turn off to practise by light alone.' },
+      { key: 'log_as', label: 'Log each session as', kind: 'text', required: true,
+        placeholder: 'metronome',
+        hint: 'One event per session, carrying the tempo you settled on.' },
+    ],
+    defaults: () => ({
+      start_bpm: 120, max_bpm: 300, tap_history: 8, reset_gap_s: 2,
+      sound_on_tap: true, log_as: 'metronome',
+    }),
     startedBy: 'gesture',
     exits: () => 'long press (short/double = tap the tempo)',
-    describe: () => 'Metronome',
+    describe: (mode) => `Metronome from ${mode.start_bpm ?? 120} BPM`,
   },
 ];
 
@@ -396,6 +418,7 @@ export const BUILTIN_MODES = [
     blurb: 'Tap out a beat to set the tempo; the LED pulses along with it.',
     mode: () => ({
       name: 'Metronome', template: 'metronome', activation: { type: 'manual' },
+      ...TEMPLATE_BY_TYPE.metronome.defaults(),
     }),
   },
 ];

@@ -33,6 +33,7 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import math
 import signal
 import sys
 import time
@@ -58,16 +59,35 @@ _SUCCESS_DISPLAY_S = 2.0
 # cheap scheduler scan per second. It also paces the loop's fault backoff.
 _SCHEDULER_TICK_S = 1.0
 
-# Metronome: how many recent taps the rolling BPM average is computed over.
-_METRONOME_TAP_HISTORY = 8
-# A gap this long (seconds) between taps starts the average over, so picking
-# the button back up after a pause does not average in the silence.
-_METRONOME_RESET_GAP_S = 2.0
-# The LED's period is floored here regardless of tapped tempo - a WCAG-style
-# flash-rate safety cap (item 4 in TODO.md will formalize the exact number
-# for the palette editor generally; this is a conservative stand-in so a fast
-# tap tempo can't strobe the LED faster than roughly 3 times a second).
+# The shortest period the LED may flash at, whatever tempo is tapped: a
+# WCAG-style flash-rate safety cap of roughly 3 times a second. This is the one
+# metronome number that is *not* config - how many taps to average and how fast
+# the tempo may go are MetronomeBehavior's business, but a light that can
+# trigger a seizure is not a preference. (Item 4 in TODO.md formalizes the
+# number for the palette editor generally; this is where it already applies.)
+# run_metronome works around it by marking every Nth beat rather than clamping
+# the tempo, so raising max_bpm makes the button faster without making the
+# light more dangerous.
 _METRONOME_MIN_PERIOD_S = 1 / 3
+
+
+def metronome_flash(bpm: float) -> tuple[float, int]:
+    """(LED period, how many beats each flash stands for) for a tempo of `bpm`.
+
+    Module-level and pure on purpose. It is the one part of the metronome that
+    is logic rather than I/O, and what it enforces is a safety property - so it
+    is worth checking as a table rather than by tapping a mock device against a
+    real clock, where the assertion ends up being about scheduler jitter.
+
+    Tempo and flash rate are separate limits. Past roughly 180 BPM a beat is
+    shorter than the light may legally blink, so instead of clamping the tempo
+    (which would lie about it) or blinking through the floor (which would be a
+    hazard), each flash marks the smallest whole number of beats that lands
+    back inside the floor.
+    """
+    beat_s = 60.0 / bpm
+    per_flash = max(1, math.ceil(_METRONOME_MIN_PERIOD_S / beat_s))
+    return beat_s * per_flash, per_flash
 
 
 async def _wait_for_trigger(
@@ -635,31 +655,50 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 start_phase(not working)
             show()
 
-    async def run_metronome(mode_name: str) -> ActionResult:
+    async def run_metronome(behavior: MetronomeBehavior, mode_name: str) -> ActionResult:
         """Takeover metronome: short_press/double_tap mark a beat, long_press
-        exits. BPM is the rolling average of the last _METRONOME_TAP_HISTORY
-        tap intervals; a gap longer than _METRONOME_RESET_GAP_S starts the
-        average over. The LED pulses at the resulting tempo via a live
-        palette override (its period floored for flash safety); the finally
+        exits. BPM is the rolling average of the last `tap_history` intervals;
+        a gap longer than `reset_gap_s` starts the average over. The LED
+        pulses at the resulting tempo via a live palette override; the finally
         block restores the configured palette so the override never outlives
-        the session."""
+        the session, and logs the session's tempo.
+
+        How this goes fast. The tempo and the flash rate are different limits.
+        `max_bpm` bounds the tempo and is yours to raise;
+        _METRONOME_MIN_PERIOD_S bounds how often the light may blink and is a
+        photosensitivity floor, not a preference. Above roughly 180 BPM those
+        two collide, so rather than clamp the tempo (a lie) or flash through
+        the floor (a hazard), the light marks every Nth beat - the smallest N
+        that keeps it inside the floor. The tempo stays honest and the LED
+        stays safe.
+        """
         loop = asyncio.get_running_loop()
         taps: list[float] = []  # loop.time() of recent beats, oldest first
         bpm: float | None = None
+        beats = 0
         set_led(LEDState.METRONOME)
         set_status("METRONOME")
         status.last_mode = mode_name
-        status.last_message = "tap to set the tempo"
 
-        def push_tempo() -> None:
+        def push_tempo(tempo: float) -> int:
             base = cm.config.led_palette.get(LEDState.METRONOME.value)
-            if base is None or bpm is None:
-                return
-            period = max(_METRONOME_MIN_PERIOD_S, 60.0 / bpm)
-            device.set_palette({
-                **cm.config.led_palette,
-                LEDState.METRONOME.value: replace(base, period_s=period),
-            })
+            period, per_flash = metronome_flash(tempo)
+            if base is not None:
+                device.set_palette({
+                    **cm.config.led_palette,
+                    LEDState.METRONOME.value: replace(base, period_s=period),
+                })
+            return per_flash
+
+        def describe(tempo: float, per_flash: int) -> str:
+            grouped = f" (light marks every {per_flash} beats)" if per_flash > 1 else ""
+            return f"{round(tempo)} BPM{grouped}"
+
+        # The mode owns its starting tempo, so the light is already keeping
+        # time before the first tap rather than sitting at whatever period the
+        # global palette entry happens to carry.
+        push_tempo(behavior.start_bpm)
+        status.last_message = f"tap to set the tempo (from {round(behavior.start_bpm)} BPM)"
 
         try:
             if args.demo:
@@ -672,20 +711,30 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 if trigger is None:  # shutting down mid-session
                     return ActionResult(True, "metronome stopped (shutdown)")
                 if trigger is TriggerType.LONG_PRESS:
-                    message = f"{round(bpm)} BPM" if bpm else "metronome (no tempo set)"
-                    return ActionResult(True, message)
+                    if bpm is None:
+                        return ActionResult(True, "metronome (no tempo set)")
+                    # One row per session: the tempo you settled on. The
+                    # duration comes free from the mode_enter/mode_exit pair,
+                    # so "when did I practise, how long, how fast" is a query
+                    # rather than a guess.
+                    store.log_event(behavior.log_as, mode=mode_name, value=round(bpm, 1))
+                    _, per_flash = metronome_flash(bpm)
+                    return ActionResult(
+                        True, f"{describe(bpm, per_flash)} over {beats} beats"
+                    )
                 # short_press / double_tap -> a beat
                 now = loop.time()
-                if taps and (now - taps[-1]) > _METRONOME_RESET_GAP_S:
+                if taps and (now - taps[-1]) > behavior.reset_gap_s:
                     taps.clear()
                 taps.append(now)
-                del taps[:-_METRONOME_TAP_HISTORY]
-                play_sound(Sound.ACK)
+                del taps[:-behavior.tap_history]
+                beats += 1
+                if behavior.sound_on_tap:
+                    play_sound(Sound.ACK)
                 if len(taps) >= 2:
                     intervals = [b - a for a, b in zip(taps, taps[1:])]
-                    bpm = 60.0 / (sum(intervals) / len(intervals))
-                    status.last_message = f"{round(bpm)} BPM"
-                    push_tempo()
+                    bpm = min(behavior.max_bpm, 60.0 / (sum(intervals) / len(intervals)))
+                    status.last_message = describe(bpm, push_tempo(bpm))
                 else:
                     status.last_message = "tap again to set the tempo"
         finally:
@@ -712,7 +761,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             elif isinstance(mode.behavior, PomodoroBehavior):
                 result = await run_pomodoro(mode.behavior, mode.name)
             elif isinstance(mode.behavior, MetronomeBehavior):
-                result = await run_metronome(mode.name)
+                result = await run_metronome(mode.behavior, mode.name)
             else:
                 result = ActionResult(False, f"mode {mode.name!r} is not a takeover mode")
         except Exception as exc:  # a takeover bug must never kill the loop
