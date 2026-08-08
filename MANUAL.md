@@ -118,6 +118,48 @@ you if nothing can start it at all.
 If something is wrong (e.g. a time window missing an end time), Save/Check
 list exactly what to fix first.
 
+### 4.4 Scenes — saved setups you can swap
+
+The bar above the tabs holds the **scene**: a whole saved setup — every mode,
+every colour, every setting — that you can switch between in one click. Keep a
+"Work" scene and a "Kitchen" scene. Try two arrangements of the same modes and
+see which one you actually use.
+
+- **The picker** switches scenes immediately. No restart; the button changes
+  under your hand, colours included.
+- **Save as…** saves what is on screen right now as a new scene and switches
+  to it. This is how you make the second half of an A/B pair: set it up, save
+  as "B", then flip between them.
+- **Rename / Duplicate / Delete** do what they say. Deleting the scene you are
+  running drops you back to the base config first.
+- **Export / Import** move a scene between machines, or in and out of a text
+  editor.
+- **No scene — base config** runs `config.json` on its own. That is what a
+  button that has never used scenes is doing.
+
+**Scenes are files.** They live in a `scenes/` folder next to `config.json`,
+one `.json` each, and you can edit them in Notepad with nothing running — no
+service, no button, no browser. To check one before you use it:
+
+```bash
+.venv/Scripts/python -m aibutton.scenes check focus
+```
+
+That runs the same validator the button does and prints exactly what it would
+complain about. `list` shows every scene, `activate <name>` switches without
+opening anything.
+
+Two things worth knowing:
+
+- **A scene only has to hold what it changes.** A scene with just `modes` in
+  it keeps the colours from `config.json` — useful when you want to compare
+  two sets of behaviour without the lights changing underneath you. Scenes you
+  save from this page hold everything, because that is what was on screen.
+- **A few settings only apply at startup** — the Bluetooth name, the web
+  address and port, and where the event database lives. Switch to a scene that
+  changes one of those and the page will say so and name it; restart the
+  service to make it take. Everything else is instant.
+
 ---
 
 ## 5. What a mode does

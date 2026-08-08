@@ -45,4 +45,40 @@ export class ConfigApi {
   status() {
     return this._json('/api/status');
   }
+
+  // --- scenes ---
+  // Every one of these returns the same shape (the saved scenes, which is
+  // active, the resulting effective config, and anything waiting on a
+  // restart), so the scene bar re-renders from one payload however it got
+  // there. See webui.py's _scene_state.
+
+  /** All saved scenes plus which one is running. */
+  scenes() {
+    return this._json('/api/scenes');
+  }
+
+  /** One scene's file contents, for Export. */
+  scene(id) {
+    return this._json(`/api/scenes/${encodeURIComponent(id)}`);
+  }
+
+  /** Switch scenes, hot. Pass 'none' to run the base config on its own. */
+  activateScene(id) {
+    return this._json(`/api/scenes/${encodeURIComponent(id)}/activate`, { method: 'POST' });
+  }
+
+  /** Create one. `config` omitted means "snapshot what is running now". */
+  createScene(body) {
+    return this._send('/api/scenes', 'POST', body);
+  }
+
+  /** Overwrite one - it does not have to be the active scene. */
+  saveScene(id, body) {
+    return this._send(`/api/scenes/${encodeURIComponent(id)}`, 'PUT', body);
+  }
+
+  /** Delete one. The server refuses the active scene. */
+  deleteScene(id) {
+    return this._json(`/api/scenes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
 }

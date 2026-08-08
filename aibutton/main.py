@@ -287,6 +287,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 # The endpoint runs on this loop, so setting the event
                 # directly is safe and needs no thread hop.
                 on_stop=stop.set,
+                # Frozen here so the scene endpoints can tell the user which
+                # of their changes are waiting on a restart: the store, the
+                # lock, the web bind and the BLE name were all decided above.
+                startup_config=cm.config,
             )
             web_server = make_server(
                 create_app(ctx), cm.config.web_host, cm.config.web_port

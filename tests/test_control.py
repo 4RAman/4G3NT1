@@ -20,6 +20,7 @@ from aibutton.control.supervisor import (
     Supervisor,
     flash_command,
     prefs_path,
+    scene_url,
     service_command,
     status_url,
     web_url,
@@ -213,3 +214,107 @@ def test_an_unreadable_config_falls_back_instead_of_raising(tmp_path):
     bad = tmp_path / "config.json"
     bad.write_text("{not json", encoding="utf-8")
     assert status_url(bad) == "http://127.0.0.1:8080/api/status"
+
+
+# --- scenes, from the panel's side --------------------------------------
+
+
+def _scene_config(tmp_path, active="focus", web_enabled=False):
+    """A config pointing at two scenes beside it.
+
+    The web UI is off by default so `switch_scene` has no URL to try: these
+    tests are about the offline path, and a config that dialled the default
+    port could reach a real service on this machine and switch *its* scene.
+    """
+    scenes_dir = tmp_path / "scenes"
+    scenes_dir.mkdir(exist_ok=True)
+    (scenes_dir / "focus.json").write_text(
+        json.dumps({"name": "Deep Focus", "modes": []}), encoding="utf-8"
+    )
+    (scenes_dir / "kitchen.json").write_text(
+        json.dumps({"name": "Kitchen", "modes": []}), encoding="utf-8"
+    )
+    return _config(
+        tmp_path, web_enabled=web_enabled, scenes={"dir": "scenes", "active": active}
+    )
+
+
+def test_the_scene_list_is_read_from_files_so_it_works_while_stopped(tmp_path):
+    sup = Supervisor(tmp_path, _scene_config(tmp_path))
+
+    entries, active = sup.scene_state()
+
+    assert [e.name for e in entries] == ["Deep Focus", "Kitchen"]
+    assert active == "focus"
+
+
+def test_the_scene_list_is_cached_between_polls(tmp_path):
+    # The tray polls once a second and this reads every scene file.
+    config = _scene_config(tmp_path)
+    sup = Supervisor(tmp_path, config)
+    sup.scene_state(now=100.0)
+
+    (config.parent / "scenes" / "late.json").write_text(
+        json.dumps({"name": "Late", "modes": []}), encoding="utf-8"
+    )
+
+    assert len(sup.scene_state(now=101.0)[0]) == 2  # still the cached read
+    assert len(sup.scene_state(now=110.0)[0]) == 3  # past the TTL
+
+
+def test_switching_with_nothing_running_moves_the_pointer_for_the_next_start(tmp_path):
+    config = _scene_config(tmp_path)
+    sup = Supervisor(tmp_path, config)
+
+    assert sup.switch_scene("kitchen") is True
+
+    assert json.loads(config.read_text(encoding="utf-8"))["scenes"]["active"] == "kitchen"
+    assert "applies at next start" in sup.log_text()
+
+
+def test_switching_to_no_scene_clears_the_pointer(tmp_path):
+    config = _scene_config(tmp_path)
+    sup = Supervisor(tmp_path, config)
+
+    sup.switch_scene(None)
+
+    assert "active" not in json.loads(config.read_text(encoding="utf-8"))["scenes"]
+
+
+def test_a_switch_invalidates_the_cached_list(tmp_path):
+    config = _scene_config(tmp_path)
+    sup = Supervisor(tmp_path, config)
+    sup.scene_state(now=100.0)
+
+    sup.switch_scene("kitchen")
+
+    assert sup.scene_state(now=100.0)[1] == "kitchen"
+
+
+def test_switching_an_unwritable_config_reports_instead_of_raising(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text("{not json", encoding="utf-8")
+    sup = Supervisor(tmp_path, config)
+
+    assert sup.switch_scene("focus") is False
+    assert "could not switch scene" in sup.log_text()
+
+
+def test_the_scene_activate_url_is_derived_from_the_config(tmp_path):
+    cfg = _scene_config(tmp_path, web_enabled=True)  # string building only, no request
+    assert scene_url(cfg, "kitchen") == "http://127.0.0.1:8080/api/scenes/kitchen/activate"
+    assert scene_url(cfg, None) == "http://127.0.0.1:8080/api/scenes/none/activate"
+
+
+def test_a_scene_name_with_a_space_is_escaped_into_the_url(tmp_path):
+    cfg = _scene_config(tmp_path, web_enabled=True)
+    assert scene_url(cfg, "My Focus").endswith("/api/scenes/My%20Focus/activate")
+
+
+def test_no_web_ui_means_no_scene_url_and_the_file_path_instead(tmp_path):
+    config = _config(tmp_path, web_enabled=False, scenes={"dir": "scenes", "active": "focus"})
+    (tmp_path / "scenes").mkdir(exist_ok=True)
+    sup = Supervisor(tmp_path, config)
+
+    assert scene_url(config, "kitchen") is None
+    assert sup.switch_scene("kitchen") is True  # still switches, via the file

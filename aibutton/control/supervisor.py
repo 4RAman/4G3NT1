@@ -25,11 +25,14 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from collections import deque
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 
+from .. import scenes
 from ..config import load_config
 from .status import Health, from_payload
 
@@ -39,6 +42,10 @@ log = logging.getLogger(__name__)
 # a startup; not enough to grow without bound over a long session.
 LOG_LINES = 500
 POLL_TIMEOUT_S = 1.5
+# How long a read of the scenes directory is reused. The tray polls every
+# second and this reads every scene file; five seconds is far below the rate
+# anyone edits a scene by hand, and a switch invalidates it immediately.
+_SCENE_CACHE_S = 5.0
 # How long the child gets to leave politely at each escalation step.
 _GRACE_S = 6.0
 _TERMINATE_S = 3.0
@@ -116,6 +123,16 @@ def web_url(config: Path) -> str | None:
     return url[: -len("/api/status")] + "/" if url else None
 
 
+def scene_url(config: Path, scene_id: str | None) -> str | None:
+    """Where to POST to switch scenes. None when there is no web UI to ask,
+    which is not an error - the file path below still works."""
+    url = status_url(config)
+    if url is None:
+        return None
+    target = quote(scene_id or "none", safe="")
+    return url[: -len("/api/status")] + f"/api/scenes/{target}/activate"
+
+
 class Supervisor:
     """One service child, plus whatever the tray needs to know about it."""
 
@@ -133,12 +150,61 @@ class Supervisor:
         # across restarts, because it is a property of this desk, not of a
         # session.
         self.use_ble: bool = bool(load_prefs(config).get("use_ble", True))
+        # Scene list cache - see scene_state(). None means "never read".
+        self._scenes: list = []
+        self._active_scene: str | None = None
+        self._scenes_at: float | None = None
 
     def set_use_ble(self, value: bool) -> None:
         self.use_ble = value
         prefs = load_prefs(self.config)
         prefs["use_ble"] = value
         save_prefs(self.config, prefs)
+
+    # --- scenes -------------------------------------------------------
+
+    def scene_state(self, now: float | None = None) -> tuple[list, str | None]:
+        """The saved scenes and which one is active, read straight off disk.
+
+        Files rather than the API on purpose: the scene list has to work with
+        the service stopped, which is exactly when you want to line one up for
+        the next start. Cached briefly because this reads every scene file and
+        the tray polls once a second - `now` is a parameter so the cache is
+        testable without waiting.
+        """
+        now = time.monotonic() if now is None else now
+        if self._scenes_at is None or now - self._scenes_at >= _SCENE_CACHE_S:
+            cfg = load_config(str(self.config))  # never raises
+            directory = scenes.dir_for(str(self.config), cfg.scenes)
+            self._scenes = scenes.list_scenes(directory)
+            self._active_scene = cfg.scenes.active
+            self._scenes_at = now
+        return self._scenes, self._active_scene
+
+    def switch_scene(self, scene_id: str | None) -> bool:
+        """Switch the active scene.
+
+        Asks the running service first, so the button changes under your hand.
+        With nothing running - or no web UI to ask - it moves the pointer in
+        config.json instead and says the change lands at the next start. Both
+        paths end in the same place, because the files are the truth.
+        """
+        self._scenes_at = None  # whatever happens, the cached view is stale
+        url = scene_url(self.config, scene_id)
+        if url is not None:
+            try:
+                if self._client.post(url).status_code == 200:
+                    self.note(f"--- scene: {scene_id or 'none'} ---")
+                    return True
+            except Exception:
+                pass  # not running, or not listening - fall through to the file
+        try:
+            scenes.set_active(str(self.config), scene_id)
+        except (OSError, ValueError) as exc:
+            self.note(f"--- could not switch scene: {exc} ---")
+            return False
+        self.note(f"--- scene: {scene_id or 'none'} (applies at next start) ---")
+        return True
 
     # --- log ----------------------------------------------------------
 

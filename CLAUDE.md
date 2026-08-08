@@ -17,6 +17,8 @@ expensive ones after hardware ships.
 .venv/Scripts/python -m aibutton.control               # the tray control panel
 .venv/Scripts/python -m mpremote cp firmware/*.py : + reset         # flash the firmware
 .venv/Scripts/python tools/ble_probe.py --cycle        # drive the firmware by hand
+.venv/Scripts/python -m aibutton.scenes list|check|activate         # scenes, service stopped
+.venv/Scripts/python tools/build_editor.py             # dist/button-editor.html (offline)
 ```
 
 Only **one** instance may run: BLE allows a single central, so two copies
@@ -173,7 +175,21 @@ Three consequences for code written today:
 - **A bad config never crashes the service.** Every key falls back
   individually with a logged error, and the web API returns those same
   warnings so the editor shows what was actually accepted. New config
-  surfaces follow that pattern — see `_parse_effect` for the shape.
+  surfaces follow that pattern — see `_parse_effect` for the shape. A missing
+  or broken *scene* is the same rule one level up: it is reported and the base
+  config runs.
+- **One parser, and scenes merge before it.** A scene
+  ([scenes.py](aibutton/scenes.py)) is layered over `config.json` as a **raw
+  dict** inside `load_config_full`, so `parse_config` still sees one object
+  and every fallback applies to scene files for free. Never add a second
+  validation path for scenes — that is the whole reason the merge is where it
+  is. `scenes.py` imports nothing from the package, exactly like `device.py`;
+  `config` imports *it*.
+- **Edits go to the active scene, the pointer stays in config.json.**
+  `ConfigManager.write_path` is the one place that decides, so the two files
+  never hold two copies of the same modes list. Anything a scene changes that
+  is only read at startup (BLE name, web bind, database path) is reported as
+  `needs_restart` rather than silently ignored.
 - **Feedback is fire-and-forget.** `set_led` and friends are synchronous and
   must never block; `BLEDevice` queues and drops rather than waiting. The
   mode machine cannot afford to await a radio.

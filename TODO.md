@@ -402,6 +402,148 @@ carry enough detail (no mode/source column, no takeover-session records) to
 build much analysis on top of, so item 1's scope decision should account for
 whatever this item ends up needing.
 
+### 13. Scenes - swappable, offline-editable button configs ✔ shipped
+
+**Status: all four stages landed** ([scenes.py](aibutton/scenes.py),
+[config.py](aibutton/config.py), [webui.py](aibutton/webui.py),
+[scenes.js](aibutton/web/static/scenes.js),
+[supervisor.py](aibutton/control/supervisor.py),
+[tray.py](aibutton/control/tray.py),
+[build_editor.py](tools/build_editor.py)). Kept here rather than moved to
+**Done** because the reasoning below is why the code is shaped the way it is,
+and the next person to touch config loading needs it.
+
+**One thing is untested against reality:** the tray's `Scene >` submenu is
+covered by unit tests on `Supervisor.scene_state` / `switch_scene` and the
+pystray menu is built the same way the status slots are, but nobody has
+clicked it - `tray.py` needs a screen, so the suite deliberately does not
+import it. Click it once before trusting it.
+
+**The want:** save a whole button setup, keep several of them, swap between
+them in one click. A/B two arrangements of the same modes; keep a "work" set
+and a "kitchen" set; hand someone a file. And **edit them with nothing
+running** - no service, no button, no browser talking to localhost.
+
+**The shape.** `config.json` stays the entry point and gains one key. The
+active scene file is shallow-merged over the base *raw dict* before
+`parse_config` ever sees it:
+
+```jsonc
+// config.json
+{ "database_path": "data/events.db", "web_port": 8080,
+  "scenes": { "dir": "scenes", "active": "focus" },
+  "modes": [ /* the fallback when no scene resolves */ ] }
+
+// scenes/focus.json - every key it defines wins
+{ "name": "Focus", "modes": [ /* ... */ ], "led_palette": { /* ... */ } }
+```
+
+Four reasons for that exact shape, each of which rules out an alternative:
+
+- **The merge happens on raw dicts inside `load_config`, not inside
+  `parse_config`.** `parse_config` stays pure and untouched, so every
+  existing per-key fallback, every warning string, and
+  `POST /api/config/validate` all apply to scene files with **no new
+  validation code**.
+- **It lives in `load_config`, not `ConfigManager`**, so every caller gets
+  it - including `control/supervisor.py`'s `status_url()`, which loads the
+  config to find the web port. Put the merge a layer up and the tray
+  silently reads the wrong port for the active scene.
+- **The editor writes the scene file; only the one-line `scenes.active`
+  pointer is written back to `config.json`.** No copy of the config to keep
+  in sync, so no way for a hand-edit to be silently clobbered by the next
+  switch.
+- **No `scenes` key means today's behaviour, byte for byte.** `--config` is
+  unchanged. A `config.json` with no scenes dir is still just a config.
+
+A scene *may* be a whole config, but the merge is shallow, so it doesn't have
+to be: a scene that defines only `modes` inherits the base's lights, which is
+what you want when A/B-testing behaviour and holding appearance constant.
+**A scene's own `scenes` key is dropped during the merge** - a scene
+repointing the active scene is a loop and a footgun.
+
+**The honest cost of whole-config scenes.** `web_host`, `web_port`,
+`database_path` and `ble_device_name` are read **once at startup**
+(`config.py`'s docstring already says so for the web bind address; the store,
+the lock and the BLE name are the same). A scene that changes them reloads
+cleanly and then does nothing, which is the worst kind of bug. So the API
+tells the truth instead: the activate/save endpoints diff the newly-effective
+values against a snapshot of the config the process actually started with and
+return `needs_restart: ["web_port", ...]`; the UI shows it and the tray - which
+already owns the process lifecycle - offers the restart.
+
+Two related things worth knowing but **not** in scope here: the
+single-instance lock is derived from `database_path` (`main.py`), so a scene
+changing it changes which lock is held; and the event log has no column for
+*which scene produced a row*, which is the real blocker for A/B-testing on
+data rather than on feel. Keep `database_path` constant across scenes; the
+event column belongs with item 1.
+
+**Stages, all landed.** Each was useful on its own and the offline
+requirement is satisfied by the first.
+
+1. **Files and switching, no UI.** New
+   [scenes.py](aibutton/scenes.py): pure `merge()` / `slugify()` /
+   `scene_id()`, plus the I/O edge (`list_scenes`, `read_scene`,
+   `write_scene` atomically via tmp + `os.replace`, `set_active`).
+   [config.py](aibutton/config.py): `"scenes"` added to the `known` key set
+   (or it warns as unknown), a `_parse_scenes` following `_parse_effect`'s
+   per-key-fallback pattern, `SceneSettings` on `AppConfig`, emitted by
+   `as_dict` so the round-trip holds, and `load_config` doing the resolve +
+   merge. A missing dir, a missing file or broken JSON logs and runs the base
+   config - **a bad scene never crashes the service**, same invariant as a bad
+   config. Then a CLI: `python -m aibutton.scenes list | check <file> |
+   activate <id>`, where `check` runs the *real* parser and prints the real
+   warnings. That CLI is the offline validation story, and it is the reason
+   not to write a second parser in JavaScript.
+2. **The web UI picker.** `GET /api/scenes`, `POST /api/scenes`
+   (new / duplicate / save-as), `POST /api/scenes/{id}/activate`,
+   `PUT /api/scenes/{id}`, `DELETE /api/scenes/{id}` (refuses the active
+   one). `PUT /api/config` gains one documented branch: it writes the active
+   scene file when there is one. A new `web/static/scenes.js` owns the scene
+   bar so `menu.js` doesn't pick up a second responsibility, and the new
+   calls go on `api.js` - it stays the only module that touches `fetch`.
+   Export/Import buttons here are the bridge to and from offline files.
+3. **The tray submenu.** A `Scene >` radio list in
+   [tray.py](aibutton/control/tray.py), with the list and the activate call
+   in `supervisor.py`/`status.py` per that package's own contract (decisions
+   out of the Tk layer). It uses the API when the service is running and the
+   *files* when it isn't, so switching works before the button is even up.
+4. **The standalone editor.** `tools/build_editor.py` ->
+   `dist/button-editor.html`: `index.html` with the `static/*.js` modules
+   inlined - **required**, because browsers block ES modules over `file://` -
+   and `ConfigApi` swapped for a `FileApi` using the File System Access API
+   with a download fallback. One limitation to state plainly rather than
+   paper over: `parse_config` is Python and cannot run in that page, so the
+   standalone editor gets the existing per-widget `validate()` and nothing
+   more. Full validation is stage 1's CLI, or importing the scene.
+
+**Not the launcher.** A scene picker is a PC-side control and does not
+discharge item 0a's gate - reaching apps *from the button* is still that
+item's job. Scenes are also orthogonal to the Stage-3 app runtime: the merge
+is on raw dicts, so it survives `modes` becoming app manifests unchanged.
+
+**Verified:** scene files in `scenes/` hand-edited and picked up on reload;
+switching from the web UI applies modes *and* colours live (the palette push
+the main loop already does covers it) with no restart; a scene changing
+`web_port`/`ble_device_name` reports `needs_restart` naming both;
+`aibutton.scenes check` reports the real parser's warnings with the service
+stopped; the built `dist/button-editor.html` opens with no network at all and
+edits a scene. Suite: `test_scenes.py`, `test_webui_scenes.py`,
+`test_build_editor.py`, plus the scene half of `test_control.py`.
+
+**Left open, deliberately:**
+
+- The tray submenu is unclicked (above).
+- A scene saved *through the editor* carries the whole effective config,
+  including `database_path`, because that is what the page had on screen. So
+  UI-made scenes lose the "inherit what I don't mention" property that
+  hand-written ones keep. Fine as specified, worth revisiting if scenes ever
+  start disagreeing about where the database is.
+- The event log still has no `scene` column, so you cannot yet answer "which
+  scene produced this row" - the thing an A/B test eventually wants. Belongs
+  with item 1, not here.
+
 ## Smaller, worth doing
 
 - **Verify power-cycle recovery.** Phase 3's last unchecked criterion: pull

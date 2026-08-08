@@ -5,6 +5,10 @@
   "web_enabled": true,
   "web_host": "0.0.0.0",
   "web_port": 8080,
+  "scenes": {
+    "dir": "scenes",
+    "active": null
+  },
   "modes": [
     {
       "name": "Default",
@@ -18,7 +22,7 @@
       },
       "long_press": {
         "action": "enter_mode",
-        "target": "Pomodoro"
+        "target": "Metronome"
       },
       "double_tap": {
         "action": "enter_mode",
@@ -32,17 +36,6 @@
         "type": "manual"
       },
       "log_as": "stopwatch"
-    },
-    {
-      "name": "New mode",
-      "template": "actions",
-      "activation": {
-        "type": "always"
-      },
-      "short_press": {
-        "action": "log",
-        "event": "button_press"
-      }
     },
     {
       "name": "Pomodoro",
@@ -60,24 +53,31 @@
       "short_press": "toggle",
       "long_press": "exit",
       "double_tap": "extend"
+    },
+    {
+      "name": "Metronome",
+      "template": "metronome",
+      "activation": {
+        "type": "manual"
+      }
     }
   ],
   "led_palette": {
     "IDLE": {
-      "style": "breathe",
-      "color": "#ffffff",
+      "style": "rainbow",
+      "color": "#000105",
       "color2": "#00fbff",
-      "period_s": 1
+      "period_s": 20
     },
     "LISTENING": {
-      "style": "solid",
-      "color": "#ffff94",
+      "style": "breathe",
+      "color": "#ffffc2",
       "color2": "#000000",
-      "period_s": 1
+      "period_s": 0.4
     },
     "THINKING": {
       "style": "breathe",
-      "color": "#474747",
+      "color": "#f3ebce",
       "color2": "#363636",
       "period_s": 0.2
     },
@@ -91,37 +91,43 @@
       "style": "flash",
       "color": "#ff0000",
       "color2": "#000000",
-      "period_s": 0.2
+      "period_s": 0.18
     },
     "ALERT": {
       "style": "alternate",
       "color": "#ff0000",
-      "color2": "#1eff00",
+      "color2": "#fff700",
       "period_s": 0.4
     },
     "TIMING": {
       "style": "flash",
-      "color": "#ffffff",
+      "color": "#0062ff",
       "color2": "#000000",
       "period_s": 0.25
     },
     "COUNTING": {
-      "style": "breathe",
-      "color": "#ff00ff",
-      "color2": "#000000",
+      "style": "fade",
+      "color": "#00eeff",
+      "color2": "#0033ff",
       "period_s": 8
     },
     "WORKING": {
       "style": "breathe",
-      "color": "#ff4400",
+      "color": "#4400ff",
       "color2": "#000000",
-      "period_s": 5
+      "period_s": 10
     },
     "RESTING": {
       "style": "breathe",
       "color": "#00ff88",
       "color2": "#000000",
-      "period_s": 5
+      "period_s": 10
+    },
+    "METRONOME": {
+      "style": "flash",
+      "color": "#ffffff",
+      "color2": "#000000",
+      "period_s": 0.5
     }
   }
 }

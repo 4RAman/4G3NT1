@@ -11,7 +11,25 @@
 // call through each render path.
 
 const KEY = 'aibutton-help';
-let on = localStorage.getItem(KEY) === '1';
+
+// Storage can throw rather than return null - private browsing, and a page
+// opened straight off the filesystem (the standalone editor). Losing the
+// preference is fine; taking the rest of the page down with it is not.
+function remembered() {
+  try {
+    return localStorage.getItem(KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function remember(value) {
+  try {
+    localStorage.setItem(KEY, value ? '1' : '0');
+  } catch { /* not remembered this session */ }
+}
+
+let on = remembered();
 
 function apply() {
   document.querySelectorAll('[data-help]').forEach((node) => { node.hidden = !on; });
@@ -23,7 +41,7 @@ export function isHelpOn() {
 
 export function setHelpOn(next) {
   on = next;
-  localStorage.setItem(KEY, on ? '1' : '0');
+  remember(on);
   apply();
   sync();
 }

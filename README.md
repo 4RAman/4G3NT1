@@ -69,7 +69,9 @@ that a future phone app can reuse.
 | `control.pyw` | double-click launcher for the control panel — no console window |
 | `aibutton/web/index.html` | the web UI dashboard — one static page, no build step |
 | `aibutton/web/static/` | the configuration menu, as small ES modules (no build step) — `schema.js` is the single place to add an action type or setting |
+| `aibutton/scenes.py` | scenes: swappable saved configs, merged over `config.json` before parsing — imports nothing from the package, and carries the offline CLI |
 | `config.json` | the config the app runs on (override with `--config` or `$AIBUTTON_CONFIG`) |
+| `scenes/` | saved setups, one JSON file each — hand-editable with nothing running; `config.json` says which is active |
 | `tests/` | pytest suite — runs anywhere, no hardware needed; covers the firmware's hardware-free modules too |
 
 ## Architecture
@@ -162,6 +164,57 @@ Start launches the **real** button (`--ble`) by default — a panel that
 silently ran a simulated one would look like it worked and do nothing.
 *Use the real button* in the menu turns that off for working with no
 hardware around, and the choice sticks in `control-panel.json`.
+
+**Scene ▸** switches the whole saved setup from the tray. It asks the running
+service (so the change is instant) and falls back to moving the pointer in
+`config.json` when nothing is running, so you can line up tomorrow's scene
+before you start.
+
+## Scenes
+
+A **scene** is a whole saved config you can swap in one click — a "Work" set
+and a "Kitchen" set, or the two halves of an A/B test. They are plain files in
+`scenes/`, one per scene, and `config.json` holds a pointer:
+
+```jsonc
+// config.json
+{ "web_port": 8080, "scenes": { "dir": "scenes", "active": "focus" }, ... }
+
+// scenes/focus.json — every key it defines wins over config.json
+{ "name": "Deep Focus", "modes": [ ... ] }
+```
+
+The active scene is layered over `config.json` *as raw JSON* before the parser
+runs, which is why a scene gets the same per-key fallbacks and the same
+warnings as a config: there is only one parser. A scene need only carry what
+it changes — one holding just `modes` keeps the base's colours.
+
+Because they are files, they are editable with nothing running:
+
+```bash
+.venv/Scripts/python -m aibutton.scenes list           # what exists, what is active
+.venv/Scripts/python -m aibutton.scenes check focus    # validate, with the real parser
+.venv/Scripts/python -m aibutton.scenes activate focus # switch, applies at next start
+```
+
+Switching is hot — modes, colours and all — with one honest exception: the BLE
+name, the web host/port and the database path are only read at startup, so a
+scene that changes them reports `needs_restart` rather than pretending. No
+`scenes` block in `config.json` means none of this is in play.
+
+For a GUI with nothing running, build the standalone editor:
+
+```bash
+.venv/Scripts/python tools/build_editor.py
+```
+
+That writes `dist/button-editor.html` — one self-contained file you can
+double-click on any machine. It reuses the served UI's own modules and
+stylesheet (bundled, because browsers refuse ES modules over `file://`) and
+edits scene files through the file picker. The one thing it cannot bring along
+is the parser, which is Python: it checks fields as you type and points at
+`aibutton.scenes check` for the rest, rather than keeping a second validator
+in JavaScript that nothing tests.
 
 With `MockDevice` behind the seam, the browser *is* the button — you drive
 everything from the page:

@@ -12,20 +12,36 @@ import {
   MODE_GROUPS, SETTINGS_GROUPS, TEMPLATE_BY_TYPE, describeEffect, describeTemplate,
 } from './schema.js';
 import { ModeEditor } from './modeEditor.js';
+import { SceneBar } from './scenes.js';
 import { createField } from './widgets.js';
 import { paint as applySwatch } from './ledPreview.js';
 
 export class ConfigMenu {
-  /** @param {{modes: Element, lights: Element, device: Element, bar: Element}} mounts */
+  /** @param {{modes: Element, lights: Element, device: Element, bar: Element, scenes?: Element}} mounts */
   constructor(mounts, api = new ConfigApi()) {
     this.mounts = mounts;
     this.api = api;
     this.model = null; // working copy of the effective config
     this.dirty = false;
     this.selectedMode = null; // the mode object shown in the detail pane
+    // The scene bar lives outside the tabs and outlives a re-render: a scene
+    // spans modes, lights and settings, so rebuilding it per tab render would
+    // be both wasteful and a flicker on every keystroke-driven redraw.
+    this.sceneBar = mounts.scenes
+      ? new SceneBar(mounts.scenes, {
+        getModel: () => this.model,
+        isDirty: () => this.dirty,
+        // A switch replaces the whole config; nothing on screen survives it.
+        onChanged: () => this.load({ refreshScenes: false }),
+      }, api)
+      : null;
   }
 
-  async load() {
+  /** Re-read the config and rebuild. `refreshScenes` is false when the scene
+   *  bar is the one that caused this, since it has already rendered the
+   *  response it got - re-fetching would only wipe its own status line. */
+  async load({ refreshScenes = true } = {}) {
+    if (this.sceneBar && refreshScenes) this.sceneBar.load();
     try {
       const data = await this.api.get();
       this.model = structuredClone(data.effective);
@@ -33,7 +49,7 @@ export class ConfigMenu {
       this.dirty = false;
       this._render(data.warnings || []);
     } catch (err) {
-      for (const mount of Object.values(this.mounts)) clear(mount);
+      for (const mount of this._ownMounts()) clear(mount);
       this.mounts.modes.append(el('p', {
         className: 'menu-result err', textContent: `Could not load configuration: ${err.message}`,
       }));
@@ -50,8 +66,15 @@ export class ConfigMenu {
     this._applyActive(this._lastActive || {});
   }
 
+  /** The mounts this menu draws into, and therefore the only ones it may
+   *  clear. The scene bar renders into a mount of its own on its own
+   *  schedule - wiping it here would erase whatever it had just drawn. */
+  _ownMounts() {
+    return [this.mounts.modes, this.mounts.lights, this.mounts.device, this.mounts.bar];
+  }
+
   _render(warnings = []) {
-    for (const mount of Object.values(this.mounts)) clear(mount);
+    for (const mount of this._ownMounts()) clear(mount);
     if (this.selectedMode && !this.model.modes.includes(this.selectedMode)) this.selectedMode = null;
 
     this.mounts.modes.append(this._renderPrimer(), this._renderModesLayout());
@@ -434,9 +457,19 @@ export class ConfigMenu {
       if (!Array.isArray(this.model.modes)) this.model.modes = [];
       this.dirty = false;
       this._render();
+      // A save changes the active scene's mode count and can introduce a
+      // setting that needs a restart, both of which the bar reports.
+      this.sceneBar?.load();
+      // Say which file took the edit when it wasn't config.json: with a scene
+      // active, "Saved" without a name is the one ambiguous word here.
+      const where = res.scene ? ` to scene "${res.scene}"` : '';
+      const restart = res.needs_restart?.length
+        ? `\nRestart the service to apply: ${res.needs_restart.join(', ')}.` : '';
       this._showResult(
-        res.warnings.length ? 'warn' : 'ok',
-        res.warnings.length ? `Saved with warnings:\n${res.warnings.join('\n')}` : 'Saved & applied.',
+        res.warnings.length || restart ? 'warn' : 'ok',
+        (res.warnings.length
+          ? `Saved${where} with warnings:\n${res.warnings.join('\n')}`
+          : `Saved${where} & applied.`) + restart,
       );
     } catch (err) {
       this._showResult('err', `Save failed: ${err.message}`);
@@ -459,5 +492,8 @@ const mounts = {
   lights: document.getElementById('panel-lights'),
   device: document.getElementById('panel-device'),
   bar: document.getElementById('menu-bar'),
+  // Optional: no scene bar in the page (the standalone editor) simply means
+  // no scene switching, not a broken menu.
+  scenes: document.getElementById('scene-bar'),
 };
 if (mounts.modes) new ConfigMenu(mounts).load();

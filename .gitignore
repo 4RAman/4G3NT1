@@ -11,3 +11,4 @@ typings/
 control-panel.json
 control-panel.lock
 button.ico
+dist/

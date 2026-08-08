@@ -1,0 +1,285 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Button scene editor</title>
+<style>
+/*{{STYLE}}*/
+
+/* --- the bits only the offline editor has ---------------------------- */
+.editor-bar { flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+              flex-wrap: wrap; padding: 8px 20px; background: var(--panel);
+              border-bottom: 1px solid var(--line); }
+.editor-file { font-size: 12px; color: var(--dim); }
+.editor-file strong { color: var(--text); font-weight: 600; }
+.editor-msg { font-size: 12px; color: var(--dim); margin: 0; }
+.editor-msg.ok { color: var(--green); }
+.editor-msg.warn { color: var(--amber); }
+.editor-msg.err { color: var(--red); }
+.editor-bar > p.editor-msg { flex-basis: 100%; }
+/* No device pane here, so the work surface gets the whole width. */
+.body-split { grid-template-columns: 1fr; }
+</style>
+
+<div class="app">
+  <header class="app-header">
+    <div class="header-row">
+      <h1>Button scene editor</h1>
+      <span id="meta">offline &middot; nothing is connected</span>
+      <button type="button" class="help-toggle" id="help-toggle">&#9432; Tips</button>
+    </div>
+    <p id="last">Edits a scene file on this computer. Nothing here talks to a button or a service.</p>
+  </header>
+
+  <div class="body-split">
+    <main class="main-pane">
+      <div class="editor-bar">
+        <button type="button" class="primary" id="open-btn">Open scene…</button>
+        <button type="button" id="new-btn">New scene</button>
+        <button type="button" id="save-btn">Save</button>
+        <button type="button" id="saveas-btn">Save a copy…</button>
+        <span class="editor-file" id="file-name">No file open</span>
+        <p class="editor-msg" id="editor-msg"></p>
+        <p class="editor-msg hint" data-help>
+          Open a file from your <code>scenes/</code> folder, edit it, save it back.
+          Fields are checked as you type, but the button's own validator is not here -
+          run <code>python -m aibutton.scenes check &lt;name&gt;</code>, or just load the
+          scene, to see everything it would say. Saving writes a complete scene.
+        </p>
+      </div>
+
+      <nav class="tab-bar" role="tablist">
+        <button type="button" class="tab-btn" data-tab="modes" role="tab" aria-selected="true">Modes</button>
+        <button type="button" class="tab-btn" data-tab="lights" role="tab" aria-selected="false">Lights</button>
+        <button type="button" class="tab-btn" data-tab="device" role="tab" aria-selected="false">Device</button>
+      </nav>
+      <div class="tab-panels">
+        <section class="tab-panel scroll-fade" data-panel="modes" id="editor-modes">Open a scene to start.</section>
+        <section class="tab-panel scroll-fade" data-panel="lights" id="editor-lights" hidden></section>
+        <section class="tab-panel scroll-fade" data-panel="device" id="editor-device" hidden></section>
+      </div>
+      <div class="menu-bar" id="editor-menu-bar"></div>
+    </main>
+  </div>
+</div>
+
+<script>
+  // Same page-level tab switch as the served UI.
+  (function () {
+    const tabs = document.querySelectorAll('.tab-btn');
+    const panels = document.querySelectorAll('.tab-panel');
+    tabs.forEach((t) => t.addEventListener('click', () => {
+      tabs.forEach((x) => x.setAttribute('aria-selected', String(x === t)));
+      panels.forEach((p) => { p.hidden = p.dataset.panel !== t.dataset.tab; });
+    }));
+  })();
+</script>
+
+<script type="module">
+/*{{MODULES}}*/
+
+// A blank config exactly as config.py defines one, injected at build time so
+// there is no second copy of the defaults to keep in step.
+const DEFAULT_CONFIG = /*{{DEFAULTS}}*/;
+
+// The editor's own copy of the ConfigApi interface, backed by a file on this
+// computer instead of a service. ConfigMenu depends on the shape, never on
+// fetch (that is the whole point of api.js being its own module), so swapping
+// the implementation is all it takes to run with nothing behind it.
+//
+// The one thing that genuinely cannot come along is the parser: parse_config
+// is Python. Rather than reimplement it here - a mirrored table with no test,
+// exactly what CLAUDE.md warns about - validate() says so plainly and points
+// at the two places that run the real one.
+class FileApi {
+  constructor() {
+    this.handle = null;   // a FileSystemFileHandle, where the browser has them
+    this.name = null;
+    this.doc = null;      // the scene file's contents, less its display name
+    this.sceneName = null;
+  }
+
+  get supportsDirectSave() {
+    return typeof window.showSaveFilePicker === 'function';
+  }
+
+  _adopt(raw, name) {
+    const { name: sceneName, scenes, ...config } = raw || {};
+    this.sceneName = typeof sceneName === 'string' ? sceneName : null;
+    this.name = name;
+    // A scene may legitimately carry only what it overrides, but the editor
+    // has to render a whole config to be editable at all. Seeding from the
+    // defaults is why saving writes a complete scene - said out loud in the
+    // hint above rather than discovered later in a diff.
+    this.doc = { ...structuredClone(DEFAULT_CONFIG), ...config };
+    if (!Array.isArray(this.doc.modes)) this.doc.modes = [];
+  }
+
+  async open() {
+    if (typeof window.showOpenFilePicker === 'function') {
+      const [handle] = await window.showOpenFilePicker({
+        types: [{ description: 'Scene', accept: { 'application/json': ['.json'] } }],
+      });
+      this.handle = handle;
+      const file = await handle.getFile();
+      this._adopt(JSON.parse(await file.text()), file.name);
+      return this.name;
+    }
+    // Firefox and Safari have no file handles: read through an <input>, and
+    // saving becomes a download rather than a write-back.
+    const file = await pickFileByInput();
+    this.handle = null;
+    this._adopt(JSON.parse(await file.text()), file.name);
+    return this.name;
+  }
+
+  blank() {
+    this.handle = null;
+    this._adopt({ name: 'New scene' }, 'new-scene.json');
+    return this.name;
+  }
+
+  async write(body, { copy = false } = {}) {
+    const payload = { ...(this.sceneName ? { name: this.sceneName } : {}), ...body };
+    delete payload.scenes; // the active-scene pointer belongs to config.json
+    const text = `${JSON.stringify(payload, null, 2)}\n`;
+    let handle = copy ? null : this.handle;
+    if (!handle && this.supportsDirectSave) {
+      handle = await window.showSaveFilePicker({
+        suggestedName: this.name || 'scene.json',
+        types: [{ description: 'Scene', accept: { 'application/json': ['.json'] } }],
+      });
+      if (!copy) this.handle = handle;
+    }
+    if (handle) {
+      const writable = await handle.createWritable();
+      await writable.write(text);
+      await writable.close();
+      this.name = handle.name;
+      return handle.name;
+    }
+    download(this.name || 'scene.json', text);
+    return this.name;
+  }
+
+  // --- the ConfigApi shape ConfigMenu depends on ---
+
+  async get() {
+    if (!this.doc) throw new Error('no scene open');
+    return { effective: structuredClone(this.doc), warnings: [] };
+  }
+
+  async put(body) {
+    this.doc = structuredClone(body);
+    await this.write(body);
+    return { effective: structuredClone(this.doc), warnings: [], scene: this.sceneName };
+  }
+
+  async validate(body) {
+    this.doc = structuredClone(body);
+    return {
+      effective: structuredClone(this.doc),
+      warnings: [
+        'Field checks passed. The button\'s own validator is not available offline - '
+        + 'run "python -m aibutton.scenes check <name>" or load the scene to see the rest.',
+      ],
+    };
+  }
+
+  // No service, so no "which mode is active right now". The menu already
+  // treats a failure here as "keep the last marks", which is the truth.
+  async status() {
+    throw new Error('offline');
+  }
+}
+
+function download(name, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function pickFileByInput() {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.addEventListener('change', () => {
+      const file = input.files && input.files[0];
+      if (file) resolve(file); else reject(new Error('nothing picked'));
+    });
+    input.click();
+  });
+}
+
+const api = new FileApi();
+const menu = new ConfigMenu({
+  modes: document.getElementById('editor-modes'),
+  lights: document.getElementById('editor-lights'),
+  device: document.getElementById('editor-device'),
+  bar: document.getElementById('editor-menu-bar'),
+  // No scene bar: switching the active scene is a thing a running service
+  // does, and there isn't one here.
+}, api);
+
+const msgEl = document.getElementById('editor-msg');
+const fileEl = document.getElementById('file-name');
+
+function say(cls, text) {
+  msgEl.className = `editor-msg ${cls}`;
+  msgEl.textContent = text;
+}
+
+function showFile() {
+  fileEl.innerHTML = '';
+  const label = api.name
+    ? `${api.sceneName ? `${api.sceneName} — ` : ''}${api.name}`
+    : 'No file open';
+  const strong = document.createElement('strong');
+  strong.textContent = label;
+  fileEl.append(strong);
+  if (api.name && !api.handle && !api.supportsDirectSave) {
+    fileEl.append(' (saves as a download - this browser cannot write back)');
+  }
+}
+
+async function guarded(what, fn) {
+  if (menu.dirty && !window.confirm(`You have unsaved changes. ${what} will discard them. Continue?`)) return;
+  try {
+    await fn();
+  } catch (err) {
+    if (err && err.name === 'AbortError') return; // the picker was dismissed
+    say('err', err.message || String(err));
+  }
+}
+
+document.getElementById('open-btn').addEventListener('click', () => guarded('Opening a scene', async () => {
+  await api.open();
+  await menu.load();
+  showFile();
+  say('ok', `Opened ${api.name}.`);
+}));
+
+document.getElementById('new-btn').addEventListener('click', () => guarded('Starting a new scene', async () => {
+  api.blank();
+  await menu.load();
+  showFile();
+  say('ok', 'New scene, seeded with the defaults. Save it into your scenes folder.');
+}));
+
+document.getElementById('save-btn').addEventListener('click', () => guarded('Saving', async () => {
+  if (!api.doc) return say('warn', 'Open or start a scene first.');
+  await menu.save();
+  showFile();
+  say('ok', `Saved ${api.name}.`);
+}));
+
+document.getElementById('saveas-btn').addEventListener('click', () => guarded('Saving a copy', async () => {
+  if (!api.doc) return say('warn', 'Open or start a scene first.');
+  await api.write(menu.model, { copy: true });
+  say('ok', 'Copy written.');
+}));
+
+showFile();
+</script>

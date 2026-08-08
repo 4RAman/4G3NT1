@@ -46,6 +46,17 @@ Action primitives (the `actions` template body): log (SQLite event),
 timer_toggle (start/stop stopwatch pairs), webhook (POST - the
 IFTTT/Make/n8n hook), enter_mode (switch to a takeover mode).
 
+v0.4 - scenes
+-------------
+An optional "scenes" block makes the whole config swappable:
+
+    "scenes": { "dir": "scenes", "active": "focus" }
+
+The named file in that directory is layered over this one *as raw JSON*
+before anything below runs (see load_config_full and [scenes.py](scenes.py)),
+so a scene is validated by the same parser, with the same per-key fallbacks,
+as the config it overrides. No "scenes" block means none of this happens.
+
 Migration / back-compat: legacy v0.2 "rules" configs load and are converted
 to ambient `actions` modes (window activation from between/days, else
 always). Two removed actions are dropped with a loud warning rather than
@@ -64,7 +75,9 @@ import os
 from dataclasses import dataclass, field
 from datetime import time
 
+from . import scenes
 from .device import LED_STYLES, LEDState
+from .scenes import SceneSettings
 
 log = logging.getLogger(__name__)
 
@@ -420,6 +433,10 @@ class AppConfig:
     # What each LED state looks like. Pushed to the device on connect and on
     # every edit, so the button and the web UI's virtual device agree.
     led_palette: dict[str, LedEffect] = field(default_factory=_default_palette)
+    # Where the swappable scene files live and which one is active. The scene
+    # itself is merged in before parsing (see load_config_full), so nothing
+    # downstream of here knows a scene was involved.
+    scenes: SceneSettings = field(default_factory=SceneSettings)
 
 
 # --- parsing helpers ----------------------------------------------------
@@ -892,7 +909,7 @@ def parse_config(raw: dict) -> AppConfig:
     known = {
         "ble_device_name", "sounds_enabled", "database_path",
         "web_enabled", "web_host", "web_port",
-        "modes", "rules", "commands", "led_palette",
+        "modes", "rules", "commands", "led_palette", "scenes",
     }
     for key in raw:
         if key not in known:
@@ -907,26 +924,107 @@ def parse_config(raw: dict) -> AppConfig:
         web_port=_take(raw, "web_port", int, defaults.web_port),
         modes=_parse_modes(raw),
         led_palette=_parse_palette(raw),
+        scenes=scenes.parse_settings(raw.get("scenes")),
     )
 
 
-def load_config(path: str) -> AppConfig:
-    """Load config from `path`. Never raises - bad input falls back per-key."""
+def parse_with_warnings(raw: dict) -> tuple[AppConfig, list[str]]:
+    """`parse_config` plus the warnings it logged along the way.
+
+    The web API returns these to the editor and the scenes CLI prints them, so
+    both show exactly what the service would accept - there is one parser, and
+    this is how its complaints get out of the journal. Both loggers are
+    captured: a scene's own keys are validated in scenes.py, and a warning the
+    editor never sees is a warning nobody acts on.
+    """
+    warnings: list[str] = []
+
+    class _Collector(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__(level=logging.WARNING)
+
+        def emit(self, record: logging.LogRecord) -> None:
+            warnings.append(record.getMessage())
+
+    collector = _Collector()
+    loggers = [log, logging.getLogger(scenes.__name__)]
+    for logger in loggers:
+        logger.addHandler(collector)
+    try:
+        cfg = parse_config(raw)
+    finally:
+        for logger in loggers:
+            logger.removeHandler(collector)
+    return cfg, warnings
+
+
+@dataclass(frozen=True)
+class LoadedConfig:
+    """What `load_config_full` returns: the effective config, plus which scene
+    produced it. `scene_error` is why a *configured* scene isn't loaded - the
+    service runs the base config in that case, so the UI needs to be able to
+    say what happened rather than showing an active scene that isn't."""
+
+    config: AppConfig
+    scene_id: str | None = None
+    scene_path: str | None = None
+    scene_error: str = ""
+
+
+def _read_config_file(path: str) -> dict | None:
     try:
         with open(path, encoding="utf-8") as f:
             raw = json.load(f)
     except FileNotFoundError:
         log.warning("config: %s not found - using built-in defaults", path)
-        return AppConfig()
+        return None
     except (OSError, json.JSONDecodeError) as exc:
         log.error("config: cannot read %s (%s) - using built-in defaults", path, exc)
-        return AppConfig()
-
+        return None
     if not isinstance(raw, dict):
         log.error("config: top level of %s is not an object - using defaults", path)
-        return AppConfig()
+        return None
+    return raw
 
-    return parse_config(raw)
+
+def load_config_full(path: str) -> LoadedConfig:
+    """Load `path`, layer the active scene over it, and parse the result.
+
+    Never raises. A scene that is missing or broken is reported and the base
+    config runs on its own - a bad scene never crashes the service, for the
+    same reason a bad config doesn't.
+    """
+    raw = _read_config_file(path)
+    if raw is None:
+        return LoadedConfig(config=AppConfig())
+
+    settings = scenes.parse_settings(raw.get("scenes"))
+    if settings.active is None:
+        return LoadedConfig(config=parse_config(raw))
+
+    scene_file = scenes.path_for(path, settings, settings.active)
+    if scene_file is None or not scene_file.exists():
+        error = f"scene {settings.active!r} not found in {scenes.dir_for(path, settings)}"
+        log.error("config: %s - running the base config", error)
+        return LoadedConfig(config=parse_config(raw), scene_error=error)
+
+    scene_raw = scenes.read_json(scene_file)
+    if scene_raw is None:
+        error = f"scene {settings.active!r} is not a readable JSON object"
+        log.error("config: %s - running the base config", error)
+        return LoadedConfig(config=parse_config(raw), scene_error=error)
+
+    return LoadedConfig(
+        config=parse_config(scenes.merge(raw, scene_raw)),
+        scene_id=settings.active,
+        scene_path=str(scene_file),
+    )
+
+
+def load_config(path: str) -> AppConfig:
+    """The effective config at `path`, active scene included. Never raises -
+    bad input falls back per-key."""
+    return load_config_full(path).config
 
 
 def _action_to_dict(action: Action) -> dict:
@@ -1007,6 +1105,7 @@ def as_dict(cfg: AppConfig) -> dict:
         "web_enabled": cfg.web_enabled,
         "web_host": cfg.web_host,
         "web_port": cfg.web_port,
+        "scenes": scenes.settings_to_dict(cfg.scenes),
         "modes": [_mode_to_dict(mode) for mode in cfg.modes],
         "led_palette": {
             name: {
@@ -1021,11 +1120,15 @@ def as_dict(cfg: AppConfig) -> dict:
 
 
 class ConfigManager:
-    """Holds the live AppConfig; reload() re-reads the file (SIGHUP hook)."""
+    """Holds the live AppConfig; reload() re-reads the file (SIGHUP hook).
+
+    It keeps the whole `LoadedConfig` rather than just the AppConfig so the
+    API can answer "which scene is running, and if not the configured one,
+    why not" without re-reading the disk to find out."""
 
     def __init__(self, path: str | None = None):
         self._path = path or os.environ.get("AIBUTTON_CONFIG", DEFAULT_CONFIG_PATH)
-        self._config = load_config(self._path)
+        self._loaded = load_config_full(self._path)
 
     @property
     def path(self) -> str:
@@ -1033,8 +1136,25 @@ class ConfigManager:
 
     @property
     def config(self) -> AppConfig:
-        return self._config
+        return self._loaded.config
+
+    @property
+    def loaded(self) -> LoadedConfig:
+        return self._loaded
+
+    @property
+    def write_path(self) -> str:
+        """Where an edit to the *contents* of the config goes: the active
+        scene's file when one is loaded, otherwise config.json itself. The
+        scene pointer is the one thing that still goes to config.json (see
+        scenes.set_active), which is what keeps the two files from ever
+        holding two copies of the same modes list."""
+        return self._loaded.scene_path or self._path
 
     def reload(self) -> None:
-        self._config = load_config(self._path)
-        log.info("config reloaded from %s", self._path)
+        self._loaded = load_config_full(self._path)
+        scene = self._loaded.scene_id
+        log.info(
+            "config reloaded from %s%s", self._path,
+            f" (scene {scene!r})" if scene else "",
+        )

@@ -10,6 +10,11 @@ Endpoints (a future phone app should use these same routes):
     GET  /api/config              {path, raw, effective, warnings}
     PUT  /api/config              validate, atomic-write, hot-reload
     POST /api/config/reload       re-read the file (after SSH edits)
+    GET  /api/scenes              the saved scenes and which is active
+    POST /api/scenes              create one (from the current config, or blank)
+    PUT  /api/scenes/{id}         overwrite one
+    POST /api/scenes/{id}/activate  switch to it, hot
+    DELETE /api/scenes/{id}       delete one (never the active one)
     GET  /api/events?limit=50     recent log/timer events (newest first)
     POST /api/trigger/{trigger}   simulate a button press
 
@@ -17,6 +22,13 @@ Submitted configs go through the exact parser the service uses
 (config.parse_config); anything invalid falls back per-key and the
 fallback warnings are returned to the caller, so the editor can show
 what was actually accepted.
+
+With a scene active, `PUT /api/config` writes the *scene* file rather than
+config.json (`ConfigManager.write_path`) - only the scene pointer lives in
+config.json, so the two files never hold two copies of the same modes list.
+Anything a scene changes that is only read at startup comes back as
+`needs_restart`, because a switch that reloads cleanly and then quietly does
+nothing is the worst answer available.
 
 No auth: this binds to the LAN like any homelab device. Front it with a
 reverse proxy if it ever needs to face an untrusted network.
@@ -27,7 +39,6 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
-import os
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -39,14 +50,21 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__
+from . import __version__, scenes
 from .audio import ToneLibrary
-from .config import TRIGGER_TYPES, ConfigManager, as_dict, parse_config
+from .config import TRIGGER_TYPES, AppConfig, ConfigManager, as_dict, parse_with_warnings
 from .device import ButtonDevice, MockDevice, Sound, TriggerType
 from .rules import resolve
 from .store import EventStore
 
 log = logging.getLogger(__name__)
+
+# Config keys the service only reads once, at startup: the store and its lock
+# are opened, the web server is bound and the BLE name is scanned for before
+# any of this can change. A scene that changes one of them reloads perfectly
+# and then appears to do nothing, so every scene response says which ones
+# differ from what the process actually started with.
+_STARTUP_ONLY = ("ble_device_name", "database_path", "web_enabled", "web_host", "web_port")
 
 # Windows' registry sometimes maps .js to text/plain, which browsers reject
 # for <script type="module">. Pin it so the config-menu ES modules load.
@@ -71,30 +89,16 @@ class WebContext:
     # one (tests, and anything embedding the app), in which case the stop
     # endpoint reports that it cannot oblige rather than pretending it did.
     on_stop: object = None
-
-
-class _WarningCollector(logging.Handler):
-    """Captures the config parser's WARNING+ records so the API can
-    return them to the editor instead of burying them in the journal."""
-
-    def __init__(self, sink: list[str]):
-        super().__init__(level=logging.WARNING)
-        self._sink = sink
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self._sink.append(record.getMessage())
+    # The config as it was when this process started, kept only to answer
+    # "does switching to that scene need a restart?" - see _STARTUP_ONLY.
+    startup_config: AppConfig | None = None
 
 
 def _parse_with_warnings(raw: dict):
-    warnings: list[str] = []
-    config_log = logging.getLogger("aibutton.config")
-    collector = _WarningCollector(warnings)
-    config_log.addHandler(collector)
-    try:
-        cfg = parse_config(raw)
-    finally:
-        config_log.removeHandler(collector)
-    return cfg, warnings
+    """The parser's complaints, captured for the editor. Lives in config.py
+    now that the scenes CLI needs the same thing offline - one parser, one
+    place its warnings are collected."""
+    return parse_with_warnings(raw)
 
 
 def _read_raw(path: str):
@@ -103,6 +107,87 @@ def _read_raw(path: str):
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _needs_restart(ctx: WebContext) -> list[str]:
+    """Which startup-only keys the live config now disagrees with the running
+    process about. Empty is the normal answer; anything in here is a thing the
+    user changed that will not take effect until the service is restarted."""
+    started = ctx.startup_config
+    if started is None:  # embedded or under test - nothing to compare against
+        return []
+    return [
+        key for key in _STARTUP_ONLY
+        if getattr(started, key) != getattr(ctx.cm.config, key)
+    ]
+
+
+def _scene_settings(ctx: WebContext):
+    return ctx.cm.config.scenes
+
+
+def _scene_path(ctx: WebContext, scene_id: str) -> Path:
+    """The file a scene id names, or a 400 - `path_for` refuses anything that
+    could reach outside the scenes directory, and ids arrive in a URL."""
+    path = scenes.path_for(ctx.cm.path, _scene_settings(ctx), scene_id)
+    if path is None:
+        raise HTTPException(400, f"{scene_id!r} is not a usable scene name")
+    return path
+
+
+def _scene_state(ctx: WebContext, warnings: list[str] | None = None) -> dict:
+    """The standard scene response: every endpoint here returns the same
+    shape, so the editor re-renders from one payload however it got there."""
+    loaded = ctx.cm.loaded
+    settings = _scene_settings(ctx)
+    return {
+        "dir": str(scenes.dir_for(ctx.cm.path, settings)),
+        "active": loaded.scene_id,
+        # What config.json *asks* for, which differs from `active` when the
+        # named scene is missing or broken - `error` then says why.
+        "configured": settings.active,
+        "error": loaded.scene_error,
+        "write_path": ctx.cm.write_path,
+        "scenes": [
+            {
+                "id": info.id,
+                "name": info.name,
+                "path": str(info.path),
+                "mode_count": info.mode_count,
+                "error": info.error,
+                "active": info.id == loaded.scene_id,
+            }
+            for info in scenes.list_scenes(scenes.dir_for(ctx.cm.path, settings))
+        ],
+        "effective": as_dict(ctx.cm.config),
+        "warnings": warnings or [],
+        "needs_restart": _needs_restart(ctx),
+    }
+
+
+def _scene_file_body(body: dict, name: str | None) -> dict:
+    """What actually gets written to a scene file.
+
+    The editor posts the effective config, which carries a `scenes` block;
+    that block belongs to config.json alone (a scene repointing the active
+    scene is a loop - see scenes.merge), so it is dropped here rather than
+    written and then ignored on every load. `name` leads because these files
+    are read by humans.
+    """
+    payload = {key: value for key, value in body.items() if key != "scenes"}
+    return {"name": name, **payload} if name else payload
+
+
+def _write_scene(ctx: WebContext, path: Path, payload: dict) -> list[str]:
+    """Write a scene and return the warnings it would load with. Validation is
+    against the *merged* result, since that is what the service will run."""
+    base = _read_raw(ctx.cm.path) or {}
+    _, warnings = _parse_with_warnings(scenes.merge(base, payload))
+    try:
+        scenes.write_json(path, payload)
+    except OSError as exc:
+        raise HTTPException(500, f"cannot write {path}: {exc}")
+    return warnings
 
 
 def _active_modes(ctx: WebContext) -> dict[str, str | None]:
@@ -188,6 +273,11 @@ def create_app(ctx: WebContext) -> FastAPI:
             _, warnings = _parse_with_warnings(raw)
         return {
             "path": ctx.cm.path,
+            # Where a Save actually lands - the active scene's file, when
+            # there is one. The editor shows it so "saved" is never ambiguous
+            # about which of two files just changed.
+            "write_path": ctx.cm.write_path,
+            "scene": ctx.cm.loaded.scene_id,
             "raw": raw,
             "effective": as_dict(ctx.cm.config),
             "warnings": warnings,
@@ -195,22 +285,132 @@ def create_app(ctx: WebContext) -> FastAPI:
 
     @app.put("/api/config")
     async def put_config(body: dict = Body(...)):
-        _, warnings = _parse_with_warnings(body)
-        path = Path(ctx.cm.path)
-        tmp = path.with_name(path.name + ".tmp")
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
-            os.replace(tmp, path)
-        except OSError as exc:
-            raise HTTPException(500, f"cannot write {path}: {exc}")
+        """Save the edited config. With a scene active this writes the scene
+        file, not config.json - the pointer stays behind in config.json, so
+        editing a scene and switching away and back keeps your edits."""
+        scene_id = ctx.cm.loaded.scene_id
+        path = Path(ctx.cm.write_path)
+        if scene_id is not None:
+            existing = scenes.read_json(path) or {}
+            payload = _scene_file_body(body, existing.get("name"))
+            warnings = _write_scene(ctx, path, payload)
+        else:
+            _, warnings = _parse_with_warnings(body)
+            payload = body
+            try:
+                scenes.write_json(path, payload)
+            except OSError as exc:
+                raise HTTPException(500, f"cannot write {path}: {exc}")
         ctx.cm.reload()
         return {
             "path": ctx.cm.path,
-            "raw": body,
+            "write_path": ctx.cm.write_path,
+            "scene": ctx.cm.loaded.scene_id,
+            "raw": payload,
             "effective": as_dict(ctx.cm.config),
             "warnings": warnings,
+            "needs_restart": _needs_restart(ctx),
         }
+
+    # --- scenes ---------------------------------------------------------
+
+    @app.get("/api/scenes")
+    async def list_scenes_route():
+        return _scene_state(ctx)
+
+    @app.get("/api/scenes/{scene_id}")
+    async def get_scene(scene_id: str):
+        """The scene file as it sits on disk. The editor's Export button is
+        this plus a download; the standalone editor reads the same shape."""
+        path = _scene_path(ctx, scene_id)
+        raw = scenes.read_json(path)
+        if raw is None:
+            raise HTTPException(404, f"no readable scene named {scene_id!r}")
+        return {"id": scene_id, "path": str(path), "raw": raw}
+
+    @app.post("/api/scenes")
+    async def create_scene(body: dict = Body(...)):
+        """Create a scene. `config` defaults to whatever is running now, which
+        is what "save this setup as a scene" means; `activate` defaults to
+        true, because a Save-as that leaves you editing the old thing is a
+        trap every other editor has learned not to set."""
+        name = body.get("name")
+        if not (isinstance(name, str) and name.strip()):
+            raise HTTPException(422, "a scene needs a name")
+        name = name.strip()
+        source = body.get("config")
+        if source is None:
+            source = as_dict(ctx.cm.config)
+        if not isinstance(source, dict):
+            raise HTTPException(422, "'config' must be an object")
+
+        settings = _scene_settings(ctx)
+        directory = scenes.dir_for(ctx.cm.path, settings)
+        taken = {info.id for info in scenes.list_scenes(directory)}
+        scene_id = scenes.unique_id(taken, scenes.slugify(name))
+        path = directory / f"{scene_id}{scenes.SUFFIX}"
+
+        warnings = _write_scene(ctx, path, _scene_file_body(source, name))
+        if body.get("activate", True):
+            try:
+                scenes.set_active(ctx.cm.path, scene_id)
+            except (OSError, ValueError) as exc:
+                raise HTTPException(500, f"saved {scene_id!r} but could not switch to it: {exc}")
+        ctx.cm.reload()
+        return {"id": scene_id, **_scene_state(ctx, warnings)}
+
+    @app.put("/api/scenes/{scene_id}")
+    async def put_scene(scene_id: str, body: dict = Body(...)):
+        """Overwrite a scene - including one that isn't active, so the editor
+        can fix a scene without switching to it first."""
+        path = _scene_path(ctx, scene_id)
+        source = body.get("config", body)
+        if not isinstance(source, dict):
+            raise HTTPException(422, "'config' must be an object")
+        name = body.get("name")
+        if not (isinstance(name, str) and name.strip()):
+            existing = scenes.read_json(path) or {}
+            name = existing.get("name")
+        warnings = _write_scene(ctx, path, _scene_file_body(source, name))
+        if ctx.cm.loaded.scene_id == scene_id:
+            ctx.cm.reload()
+        return {"id": scene_id, **_scene_state(ctx, warnings)}
+
+    @app.post("/api/scenes/{scene_id}/activate")
+    async def activate_scene(scene_id: str):
+        """Switch scenes, hot. `null` is a legitimate destination: it runs the
+        base config on its own, which is what a config with no scenes does."""
+        if scene_id != "none":
+            path = _scene_path(ctx, scene_id)
+            if not path.exists():
+                raise HTTPException(404, f"no scene named {scene_id!r}")
+        try:
+            scenes.set_active(ctx.cm.path, None if scene_id == "none" else scene_id)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(500, f"cannot switch scene: {exc}")
+        ctx.cm.reload()
+        loaded = ctx.cm.loaded
+        # The palette is pushed by the main loop's tick when it changes, so
+        # nothing to do here; the LED follows within a second of the switch.
+        log.info("scene switched to %r", loaded.scene_id or "none")
+        _, warnings = _parse_with_warnings(_read_raw(ctx.cm.write_path) or {})
+        return _scene_state(ctx, warnings if loaded.scene_id is None else [])
+
+    @app.delete("/api/scenes/{scene_id}")
+    async def delete_scene(scene_id: str):
+        """Refuses the active one. Deleting what the button is currently
+        running would leave the service on a config whose file is gone - the
+        user switches away first, deliberately."""
+        path = _scene_path(ctx, scene_id)
+        if not path.exists():
+            raise HTTPException(404, f"no scene named {scene_id!r}")
+        if ctx.cm.loaded.scene_id == scene_id:
+            raise HTTPException(409, "that scene is active - switch to another one first")
+        try:
+            path.unlink()
+        except OSError as exc:
+            raise HTTPException(500, f"cannot delete {path}: {exc}")
+        return _scene_state(ctx)
 
     @app.post("/api/service/stop")
     async def stop_service():

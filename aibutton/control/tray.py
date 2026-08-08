@@ -34,6 +34,11 @@ POLL_MS = 1000
 # and re-reads each item's text/visibility, so the slots exist up front and
 # the unused ones hide themselves.
 _STATUS_SLOTS = 6
+# Scene slots, for the same reason and by the same trick: a list that changes
+# length has to be fixed slots that hide themselves. Eight is past the point
+# where a flat radio list stops being a good way to choose anyway - the web UI
+# is where a large collection gets managed.
+_SCENE_SLOTS = 8
 
 
 class ControlPanel:
@@ -146,10 +151,72 @@ class ControlPanel:
             visible=lambda *_: index < len(summary_lines(self.health)),
         )
 
+    # --- the scene submenu --------------------------------------------
+
+    def _scene_at(self, index: int):
+        """The scene in slot `index`, or None when there are fewer than that.
+        Reads through the supervisor's cache, so calling it once per menu
+        repaint per slot costs one directory read every few seconds."""
+        entries, _ = self.sup.scene_state()
+        return entries[index] if index < len(entries) else None
+
+    def _scene_slot(self, index: int) -> pystray.MenuItem:
+        def label() -> str:
+            entry = self._scene_at(index)
+            if entry is None:
+                return ""
+            return f"{entry.name} (broken)" if entry.error else entry.name
+
+        def is_active() -> bool:
+            entry = self._scene_at(index)
+            _, active = self.sup.scene_state()
+            return entry is not None and entry.id == active
+
+        def choose() -> None:
+            entry = self._scene_at(index)
+            if entry is not None and not entry.error:
+                self.switch_scene(entry.id)
+
+        return pystray.MenuItem(
+            label,
+            self._on(choose),
+            checked=lambda _item: is_active(),
+            radio=True,
+            # A scene whose file is broken is shown but not selectable:
+            # hiding it would make a typo look like a deleted file.
+            enabled=lambda _item: (self._scene_at(index) or None) is not None
+            and not self._scene_at(index).error,
+            visible=lambda _item: self._scene_at(index) is not None,
+        )
+
+    def _scene_menu(self) -> pystray.Menu:
+        base = pystray.MenuItem(
+            "No scene - base config",
+            self._on(lambda: self.switch_scene(None)),
+            checked=lambda _item: self.sup.scene_state()[1] is None,
+            radio=True,
+        )
+        return pystray.Menu(
+            base,
+            pystray.Menu.SEPARATOR,
+            *[self._scene_slot(i) for i in range(_SCENE_SLOTS)],
+        )
+
+    def switch_scene(self, scene_id: str | None) -> None:
+        self.sup.switch_scene(scene_id)
+        self._tick(reschedule=False)
+
     def _menu(self) -> pystray.Menu:
         return pystray.Menu(
             *[self._status_slot(i) for i in range(_STATUS_SLOTS)],
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "Scene",
+                self._scene_menu(),
+                # A config with no scenes directory should not grow a menu
+                # that only ever says "base config".
+                visible=lambda _item: bool(self.sup.scene_state()[0]),
+            ),
             pystray.MenuItem(
                 "Start",
                 self._on(self.start),

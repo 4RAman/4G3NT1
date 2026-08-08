@@ -95,6 +95,25 @@
   #vsound { color: var(--dim); font-size: 13px; }
 
   .main-pane { min-height: 0; display: flex; flex-direction: column; }
+  /* The scene bar sits above the tabs and reads as chrome, not content:
+     same raised tone as the header, so switching what the button *is* never
+     looks like editing one of the things it does. */
+  .scene-bar { flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+               flex-wrap: wrap; padding: 8px 20px; background: var(--panel);
+               border-bottom: 1px solid var(--line); }
+  .scene-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+                 color: var(--dim); font-weight: 600; }
+  .scene-pick { min-width: 220px; }
+  .scene-btn { padding: 5px 10px; font-size: 13px; }
+  .scene-btn:disabled { color: var(--dim); cursor: default; background: #14171c; }
+  .scene-msg { font-size: 12px; color: var(--dim); margin: 0; }
+  /* Full-width so a warning wraps under the controls instead of squeezing
+     the picker - these two lines are the ones people have to actually read. */
+  .scene-bar > p.scene-msg { flex-basis: 100%; }
+  .scene-msg.ok { color: var(--green); }
+  .scene-msg.warn { color: var(--amber); }
+  .scene-msg.err { color: var(--red); }
+
   .tab-bar { flex-shrink: 0; display: flex; gap: 2px; padding: 0 20px;
              border-bottom: 1px solid var(--line); background: var(--bg); }
   .tab-btn { background: none; border: none; color: var(--dim); padding: 12px 14px;
@@ -293,6 +312,9 @@
     </aside>
 
     <main class="main-pane">
+      <!-- Above the tabs on purpose: a scene spans modes, lights and device
+           settings, so it is not a property of any one tab. -->
+      <div class="scene-bar" id="scene-bar"></div>
       <nav class="tab-bar" role="tablist">
         <button type="button" class="tab-btn" data-tab="modes" role="tab" aria-selected="true">Modes</button>
         <button type="button" class="tab-btn" data-tab="lights" role="tab" aria-selected="false">Lights</button>
