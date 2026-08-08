@@ -151,6 +151,29 @@ def test_the_built_page_fetches_nothing(tmp_path, monkeypatch):
     assert not re.search(r"/\*\{\{\w+\}\}\*/", page)  # every placeholder filled
 
 
+def test_the_editor_layout_container_carries_a_class_the_stylesheet_defines(tmp_path, monkeypatch):
+    """The shell styles its layout as a *variant* (.body-split) of the served
+    page's container (.app-body), overriding one property and inheriting the
+    rest. Carrying only the variant class was a real bug and a silent one: the
+    shared `display: grid` and `flex: 1` never applied, so .tab-panels
+    collapsed to zero height and every panel was clipped to its own padding -
+    a page that looks built but shows a sliver.
+    """
+    monkeypatch.setattr(build_editor, "OUT", tmp_path / "button-editor.html")
+    page = build_editor.build().read_text(encoding="utf-8")
+    style = build_editor.page_style()
+
+    match = re.search(r'<div class="([^"]*\bbody-split\b[^"]*)"', page)
+    assert match, "the editor shell has no .body-split layout container"
+    classes = match.group(1).split()
+    # The lifted stylesheet keeps index.html's indentation, so the selector is
+    # not at column zero.
+    assert any(re.search(rf"^\s*\.{re.escape(c)}\s*\{{", style, re.MULTILINE) for c in classes), (
+        f"the editor's layout container ({match.group(1)!r}) carries no class the "
+        "shared stylesheet defines, so it gets no grid and no height"
+    )
+
+
 def test_the_defaults_come_from_python_not_a_second_copy(tmp_path):
     """The editor seeds a new scene from these; a hand-written JS copy would
     be a mirrored table with no test behind it."""

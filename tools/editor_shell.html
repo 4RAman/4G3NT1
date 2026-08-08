@@ -15,8 +15,13 @@
 .editor-msg.warn { color: var(--amber); }
 .editor-msg.err { color: var(--red); }
 .editor-bar > p.editor-msg { flex-basis: 100%; }
-/* No device pane here, so the work surface gets the whole width. */
-.body-split { grid-template-columns: 1fr; }
+/* No device pane here, so the work surface gets the whole width. This is a
+   *variant* of .app-body and carries that class too - on its own it would be a
+   plain block, the grid and the `flex: 1` would never apply, and .tab-panels
+   would collapse to zero height with the panels clipped to their own padding.
+   Both track axes are overridden because the shared sheet's <=900px rule sets
+   `grid-template-rows: auto 1fr` for a side pane that does not exist here. */
+.body-split { grid-template-columns: 1fr; grid-template-rows: 1fr; }
 </style>
 
 <div class="app">
@@ -29,7 +34,7 @@
     <p id="last">Edits a scene file on this computer. Nothing here talks to a button or a service.</p>
   </header>
 
-  <div class="body-split">
+  <div class="app-body body-split">
     <main class="main-pane">
       <div class="editor-bar">
         <button type="button" class="primary" id="open-btn">Open scene…</button>
