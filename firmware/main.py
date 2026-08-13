@@ -83,9 +83,14 @@ class ButtonPeripheral:
         if self.buzzer.usable:
             capabilities |= protocol.CAP_BUZZER
         _info_char.write(protocol.device_info_payload(capabilities))
+        # Unpacked into names rather than starred into the format tuple:
+        # `%` with `(a, *b, c)` is valid CPython and a SyntaxError on the
+        # device, so the host tests cannot catch it and the board fails to
+        # boot. Keep firmware syntax boring.
+        major, minor, patch = protocol.FIRMWARE_VERSION
         print(
             "device: protocol v%d, firmware %d.%d.%d, capabilities 0x%04x"
-            % (protocol.PROTOCOL_VERSION, *protocol.FIRMWARE_VERSION, capabilities)
+            % (protocol.PROTOCOL_VERSION, major, minor, patch, capabilities)
         )
 
     # --- BLE ----------------------------------------------------------
