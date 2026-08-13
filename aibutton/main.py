@@ -41,6 +41,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from . import ramp
 from .device import ButtonDevice, LEDState, MockDevice, Sound, TriggerType
 from .single_instance import AlreadyRunning, SingleInstance
 
@@ -59,16 +60,27 @@ _SUCCESS_DISPLAY_S = 2.0
 # cheap scheduler scan per second. It also paces the loop's fault backoff.
 _SCHEDULER_TICK_S = 1.0
 
-# The shortest period the LED may flash at, whatever tempo is tapped: a
-# WCAG-style flash-rate safety cap of roughly 3 times a second. This is the one
-# metronome number that is *not* config - how many taps to average and how fast
-# the tempo may go are MetronomeBehavior's business, but a light that can
-# trigger a seizure is not a preference. (Item 4 in TODO.md formalizes the
-# number for the palette editor generally; this is where it already applies.)
-# run_metronome works around it by marking every Nth beat rather than clamping
-# the tempo, so raising max_bpm makes the button faster without making the
-# light more dangerous.
-_METRONOME_MIN_PERIOD_S = 1 / 3
+# The shortest period the LED may flash at, for anything: a WCAG-style
+# flash-rate cap of roughly 3 times a second. This is the one light-timing
+# number that is *not* config - how many taps to average, how fast a tempo may
+# go and how long a countdown runs are all the mode's business, but a light
+# that can trigger a seizure is not a preference.
+#
+# Two consumers so far, and they work around it in different ways because they
+# mean different things: run_metronome marks every Nth beat (so raising max_bpm
+# makes the button faster without making the light more dangerous), while
+# run_countdown simply floors its configured period. Item 4 in TODO.md still
+# owns picking the exact number, and notes that once effects become stop lists
+# the floor has to be defined over *transitions* rather than over a period.
+_MIN_FLASH_PERIOD_S = 1 / 3
+
+# How often a running countdown re-evaluates its ramp. The colour is only
+# actually pushed when it has visibly moved (ramp.differs), so this is a
+# wake-up rate, not a write rate.
+_COUNTDOWN_TICK_S = 1.0
+# Per-channel difference before a new ramp colour is worth a palette write.
+# ~1.5% of the range: below this it is not a colour change, it is traffic.
+_COUNTDOWN_COLOR_STEP = 4
 
 
 def metronome_flash(bpm: float) -> tuple[float, int]:
@@ -86,7 +98,7 @@ def metronome_flash(bpm: float) -> tuple[float, int]:
     back inside the floor.
     """
     beat_s = 60.0 / bpm
-    per_flash = max(1, math.ceil(_METRONOME_MIN_PERIOD_S / beat_s))
+    per_flash = max(1, math.ceil(_MIN_FLASH_PERIOD_S / beat_s))
     return beat_s * per_flash, per_flash
 
 
@@ -224,6 +236,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     from .config import (
         AlarmBehavior,
         ConfigManager,
+        CountdownBehavior,
         CounterBehavior,
         EnterModeAction,
         MetronomeBehavior,
@@ -665,7 +678,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
         How this goes fast. The tempo and the flash rate are different limits.
         `max_bpm` bounds the tempo and is yours to raise;
-        _METRONOME_MIN_PERIOD_S bounds how often the light may blink and is a
+        _MIN_FLASH_PERIOD_S bounds how often the light may blink and is a
         photosensitivity floor, not a preference. Above roughly 180 BPM those
         two collide, so rather than clamp the tempo (a lie) or flash through
         the floor (a hazard), the light marks every Nth beat - the smallest N
@@ -740,6 +753,104 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         finally:
             device.set_palette(cm.config.led_palette)  # drop the live tempo override
 
+    async def run_countdown(behavior: CountdownBehavior, mode_name: str) -> ActionResult:
+        """Takeover countdown: a fixed run to zero with the LED's *colour*
+        walking `behavior.ramp` as the time goes, then the alarm.
+
+        Style and colour are driven separately, which is the whole point - the
+        light flashes at a fixed period the entire time while the colour moves
+        from one end of the ramp to the other, so "flash" and "fade over the
+        timer" are not two settings fighting over the same light.
+
+        Long press leaves early (a takeover mode must be escapable with a
+        press); any other press acknowledges without stopping the clock, since
+        the time left is already on the status line.
+
+        **This is host-side, and knowingly so.** The colour walk is rendered by
+        rewriting the TIMING palette entry live - the same reach-around
+        run_metronome uses, and for the same reason: pushing a one-off look
+        costs a global `LEDState` today and 0x0B of a one-byte namespace is
+        already spent. ROADMAP **D4**'s ephemeral effects are what replaces
+        this, at which point the ramp moves onto the device and stops costing a
+        radio write every few seconds. Until then it needs the host awake.
+        TIMING is borrowed rather than a new code allocated; only one takeover
+        mode runs at a time, so it cannot collide with a stopwatch.
+        """
+        loop = asyncio.get_running_loop()
+        total = behavior.minutes * 60
+        deadline = loop.time() + total
+        label = behavior.label or mode_name
+        period = max(_MIN_FLASH_PERIOD_S, behavior.period_s)
+        pushed: str | None = None
+
+        def paint(progress: float) -> None:
+            """Push the ramp's colour for `progress`, if it has visibly moved."""
+            nonlocal pushed
+            colour = ramp.color_at(behavior.ramp, progress)
+            if pushed is not None and not ramp.differs(
+                pushed, colour, _COUNTDOWN_COLOR_STEP
+            ):
+                return
+            base = cm.config.led_palette.get(LEDState.TIMING.value)
+            if base is None:
+                return
+            pushed = colour
+            device.set_palette({
+                **cm.config.led_palette,
+                LEDState.TIMING.value: replace(
+                    base, style=behavior.style, color=colour, period_s=period
+                ),
+            })
+
+        def left() -> float:
+            return max(0.0, deadline - loop.time())
+
+        set_led(LEDState.TIMING)
+        set_status("TIMING")
+        status.last_mode = mode_name
+
+        try:
+            if args.demo:
+                # --demo is unattended: show the ramp's opening colour briefly
+                # rather than sitting here for the whole countdown.
+                paint(0.0)
+                await asyncio.sleep(_SUCCESS_DISPLAY_S)
+                return ActionResult(True, f"{label} (demo: {behavior.minutes:g} min)")
+
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
+                paint(1.0 - remaining / total)
+                status.last_message = f"{label} - {_fmt_elapsed(remaining)} left"
+                trigger = await _wait_for_trigger(
+                    device.events, stop, timeout=min(remaining, _COUNTDOWN_TICK_S)
+                )
+                if stop.is_set():
+                    return ActionResult(
+                        True, f"{label} - {_fmt_elapsed(left())} left (shutdown)"
+                    )
+                if trigger is TriggerType.LONG_PRESS:
+                    return ActionResult(
+                        True, f"{label} - cancelled with {_fmt_elapsed(left())} left"
+                    )
+                if trigger is not None:
+                    play_sound(Sound.ACK)
+
+            # Ran out. Logged before the ring, so a countdown that is finished
+            # but not yet dismissed still counts as finished.
+            store.log_event(behavior.log_as, mode=mode_name, value=behavior.minutes)
+            if not behavior.ring_on_finish:
+                play_sound(Sound.SUCCESS)
+                return ActionResult(True, f"{label} finished")
+            # A finished countdown *is* an alarm going off, so it rings like
+            # one rather than growing a second copy of that loop.
+            return await ring_alarm(
+                AlarmBehavior(message=f"{label} finished"), mode_name
+            )
+        finally:
+            device.set_palette(cm.config.led_palette)  # drop the live ramp override
+
     async def enter_takeover(mode) -> None:
         """Enter a takeover mode (reached via a schedule fire or an enter_mode
         gesture) and surface its result, then drop back to the ambient layer
@@ -762,6 +873,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 result = await run_pomodoro(mode.behavior, mode.name)
             elif isinstance(mode.behavior, MetronomeBehavior):
                 result = await run_metronome(mode.behavior, mode.name)
+            elif isinstance(mode.behavior, CountdownBehavior):
+                result = await run_countdown(mode.behavior, mode.name)
             else:
                 result = ActionResult(False, f"mode {mode.name!r} is not a takeover mode")
         except Exception as exc:  # a takeover bug must never kill the loop
@@ -799,7 +912,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             if target is not None and isinstance(
                 target.behavior,
                 (AlarmBehavior, StopwatchBehavior, CounterBehavior, PomodoroBehavior,
-                 MetronomeBehavior),
+                 MetronomeBehavior, CountdownBehavior),
             ):
                 await enter_takeover(target)
             else:

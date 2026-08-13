@@ -264,6 +264,15 @@
   .inp-color { width: 46px; height: 30px; padding: 2px; cursor: pointer; }
   .fld-hex { color: var(--dim); font-size: 12px; font-family: ui-monospace, monospace; }
 
+  /* --- ramp editor: the gradient first, the numbers under it --- */
+  .ramp-edit { display: flex; flex-direction: column; gap: 8px; }
+  /* Not round: this depicts a span of time, not the physical LED. */
+  .ramp-preview { height: 16px; border: 1px solid var(--line); background: #20262e; }
+  .ramp-rows { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+  .ramp-row { display: flex; align-items: center; gap: 6px; }
+  .ramp-at { width: 66px; }
+  .ramp-pct { color: var(--dim); font-size: 12px; }
+
   .settings-wrap { display: flex; flex-direction: column; gap: 18px; }
   .settings-title { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
                     color: var(--dim); margin: 0 0 8px; }

@@ -78,7 +78,24 @@ rediscovering:
 - **A ramp is a different axis from a stop list**, and also reusable: the same
   stops driven by *progress 0→1* instead of by the clock serve a countdown's
   red→violet walk, a Pomodoro block, and the hold-level indicator. Write it
-  once, four consumers.
+  once, four consumers. ✔ **Built and proven** — [ramp.py](aibutton/ramp.py),
+  with the countdown as its first consumer. What the prototype settled, before
+  any of it reaches the wire:
+  - **Ramp and effect stay separate objects.** The countdown flashes at a fixed
+    period the whole way through while the colour travels. Folding progress
+    into `LedEffect` would have made "flash" and "fade over the timer" two
+    settings fighting over one light.
+  - **Positions, not durations.** A stop is pinned at a fraction, so the same
+    ramp serves a two-minute egg timer and a two-hour deadline, and nothing in
+    the module mentions seconds. That is what lets hold levels reuse it.
+  - **Push on change, not on tick.** `ramp.differs` bounds a full sweep to a
+    couple of hundred palette writes whatever the duration — the number that
+    makes a host-side ramp affordable at all, and the one to keep when this
+    moves on-device.
+  - **Even spacing is the default, not the rule.** Bare colours spread
+    themselves; pinning one keeps it. That is the "make one colour
+    shorter/longer" ask, and the editor only re-spaces a ramp that was already
+    even.
 - **N-tap does not cost latency.** A single tap already waits out the 0.4 s
   double-tap window before it emits ([trigger.py](firmware/trigger.py)).
   Counting to N and firing on a quiet gap is the same wait, measured from the
@@ -359,7 +376,9 @@ localStorage helpers (storage *raises* in private browsing and off
 **Item 0a first, or most of these are unreachable** — three gestures means
 two launchable apps until a launcher exists.
 
-**One was specified and is done** - Tap metronome (see Done below). The
+**Two are done** - Tap metronome and Countdown (see Done below); the countdown
+was on the candidate list at the bottom of this item and is now a real
+template, which leaves eight. The
 Morse code logger that was the other specified mode is on hold in favor of a
 bigger idea - see "Recorded/translated communication mode" in the parking
 lot below. Build it as originally scoped (short press = dot, long press =
@@ -768,6 +787,29 @@ before the look editor exists means deciding it twice.
 
 ## Done
 
+- ~~**Colour ramps, and a countdown to prove them**~~ -
+  [ramp.py](aibutton/ramp.py) is the pure half: a list of stops, each a colour
+  pinned at a fraction, and `color_at` blending between the two either side. No
+  clock, no device, nothing that mentions seconds - which is what lets a
+  Pomodoro block and a hold level reuse it later. It blends the same way
+  [firmware/led.py](firmware/led.py)'s `_fade` does, with a test that fails if
+  the two ever disagree.
+
+  The `countdown` template is its first consumer: a fixed run to zero where the
+  light's *colour* walks the ramp while style and period hold still, ending in
+  the alarm. Verified end to end - red to blue over twelve seconds, the flash
+  period unmoved at 0.5 s throughout, the palette handed back on exit, and one
+  `log` row carrying the length it ran for.
+
+  Two things it does *not* do, on purpose. It burns no wire code: it rewrites
+  the TIMING palette entry live, the same reach-around `run_metronome` uses,
+  which is safe only because one takeover mode runs at a time. And it needs the
+  host awake. **D4**'s ephemeral effects are what fix both.
+
+  The editor got a `ramp` widget - a gradient strip over a row per stop, colour
+  and position side by side, sitting at the *top* of the countdown's form.
+  Adding or removing re-spaces the ramp only when it was already evenly spaced,
+  so a hand-tuned ramp is never silently flattened by a click.
 - ~~**The metronome can go fast, and has settings**~~ - it had no config at
   all (the tempo is session state, so the dataclass was empty), and its
   ceiling was not a number anyone had chosen: `_METRONOME_MIN_PERIOD_S` is a

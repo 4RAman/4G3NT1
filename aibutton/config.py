@@ -75,7 +75,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import time
 
-from . import scenes
+from . import ramp, scenes
 from .device import LED_STYLES, LEDState
 from .scenes import SceneSettings
 
@@ -295,9 +295,55 @@ class MetronomeBehavior:
         return "metronome"
 
 
+def _default_countdown_ramp() -> tuple[ramp.Stop, ...]:
+    """Red at the start, walking to violet as the time runs out, then the
+    alarm. Warm-to-cool rather than the usual green-to-red: the colour tracks
+    *how much is left*, so a full timer is the loud end and the quiet violet is
+    the one that means "about to go off"."""
+    return ramp.even([
+        "#ff0000",  # red
+        "#ff8800",  # orange
+        "#ffff00",  # yellow
+        "#00ff00",  # green
+        "#4b0082",  # indigo
+        "#8f00ff",  # violet
+    ])
+
+
+@dataclass(frozen=True)
+class CountdownBehavior:
+    """The takeover countdown template: a fixed run to zero, started by hand,
+    with the LED's *colour* walking a ramp as the time goes. Handled by
+    main.py's run_countdown loop, not actions.execute().
+
+    Style and colour are separated on purpose. `style`/`period_s` say how the
+    light moves (flash, breathe, solid); `ramp` says what colour it is right
+    now. That is what makes "set it to flash, but fade the colour over the
+    whole timer" one setting each rather than two that fight.
+
+    The ramp is stored here rather than in `led_palette` because it belongs to
+    *this* countdown - a five-minute tea timer and a two-hour deadline want
+    different colours, and the global palette has one entry per LED state for
+    everyone to share. When per-mode looks land (TODO item 3) this is the shape
+    they generalise to.
+    """
+
+    minutes: float = 10.0
+    label: str = ""
+    style: str = "flash"  # how the light moves while counting
+    period_s: float = 1.0  # ...and how fast, floored for flash safety
+    ramp: tuple[ramp.Stop, ...] = field(default_factory=_default_countdown_ramp)
+    ring_on_finish: bool = True
+    log_as: str = "countdown"  # a finished run logs its length under this
+
+    @property
+    def template(self) -> str:
+        return "countdown"
+
+
 Behavior = (
     ActionsBehavior | AlarmBehavior | StopwatchBehavior | CounterBehavior
-    | PomodoroBehavior | MetronomeBehavior
+    | PomodoroBehavior | MetronomeBehavior | CountdownBehavior
 )
 
 # Which activation types each template accepts (per-template allow-list,
@@ -310,6 +356,9 @@ _ALLOWED_ACTIVATIONS = {
     "counter": (ManualActivation,),
     "pomodoro": (ManualActivation,),
     "metronome": (ManualActivation,),
+    # Manual, not schedule: a countdown that starts itself at a clock time is
+    # an alarm, and that template already exists.
+    "countdown": (ManualActivation,),
 }
 
 
@@ -420,6 +469,51 @@ def _parse_effect(raw, where: str, default: LedEffect) -> LedEffect:
         color2=_parse_color(raw.get("color2", default.color2), f"{where}.color2", default.color2),
         period_s=float(period),
     )
+
+
+def _parse_ramp(raw, where: str, default: tuple[ramp.Stop, ...]) -> tuple[ramp.Stop, ...]:
+    """A colour ramp: a list of stops, each either a bare colour or an object
+    with a `color` and an optional `at` (0..1).
+
+        "ramp": ["#ff0000", "#00ff00"]
+        "ramp": [{"color": "#00ff00"}, {"color": "#ff0000", "at": 0.8}]
+
+    Bare colours are spread evenly, which is what almost everyone wants. An
+    entry that pins `at` keeps that position; one that doesn't keeps the even
+    slot it would have had, so the two forms mix without a second syntax.
+    Positions need not be sorted or span 0..1 - ramp.color_at handles both.
+
+    Same per-key rule as everything else: one bad stop costs you that stop's
+    colour, not the ramp.
+    """
+    if not isinstance(raw, list) or not raw:
+        log.error("config: %s must be a non-empty list of colours - using the default", where)
+        return default
+
+    last = len(raw) - 1
+    stops: list[ramp.Stop] = []
+    for index, entry in enumerate(raw):
+        slot = 0.0 if last == 0 else index / last
+        if isinstance(entry, str):
+            stops.append(ramp.Stop(slot, _parse_color(entry, f"{where}[{index}]", "#000000")))
+            continue
+        if not isinstance(entry, dict):
+            log.error("config: %s[%d] must be a colour or an object - ignored", where, index)
+            continue
+        color = _parse_color(entry.get("color"), f"{where}[{index}].color", "#000000")
+        at = entry.get("at", slot)
+        if not (isinstance(at, (int, float)) and not isinstance(at, bool) and 0.0 <= at <= 1.0):
+            log.error(
+                "config: %s[%d].at must be a number from 0 to 1 - using %s",
+                where, index, slot,
+            )
+            at = slot
+        stops.append(ramp.Stop(float(at), color))
+
+    if not stops:
+        log.error("config: %s has no usable stops - using the default", where)
+        return default
+    return tuple(stops)
 
 
 def _parse_palette(raw) -> dict[str, LedEffect]:
@@ -815,6 +909,55 @@ def _parse_metronome_body(raw: dict, where: str) -> MetronomeBehavior:
     )
 
 
+def _parse_countdown_body(raw: dict, where: str) -> CountdownBehavior:
+    """Parse the flat countdown-template fields, falling back per key."""
+    defaults = CountdownBehavior()
+
+    minutes = raw.get("minutes", defaults.minutes)
+    if not (isinstance(minutes, (int, float)) and not isinstance(minutes, bool) and minutes > 0):
+        log.error("config: %s.minutes must be a number > 0 - using %s", where, defaults.minutes)
+        minutes = defaults.minutes
+
+    label = raw.get("label", defaults.label)
+    if not isinstance(label, str):
+        log.error("config: %s.label must be a string - using default", where)
+        label = defaults.label
+
+    style = raw.get("style", defaults.style)
+    if not (isinstance(style, str) and style in LED_STYLES):
+        log.error(
+            "config: %s.style must be one of %s - using %r",
+            where, "/".join(LED_STYLES), defaults.style,
+        )
+        style = defaults.style
+
+    period = raw.get("period_s", defaults.period_s)
+    if not (isinstance(period, (int, float)) and not isinstance(period, bool) and period > 0):
+        log.error("config: %s.period_s must be a number > 0 - using %s", where, defaults.period_s)
+        period = defaults.period_s
+
+    ring = raw.get("ring_on_finish", defaults.ring_on_finish)
+    if not isinstance(ring, bool):
+        log.error("config: %s.ring_on_finish must be true or false - using %s",
+                  where, defaults.ring_on_finish)
+        ring = defaults.ring_on_finish
+
+    log_as = raw.get("log_as", defaults.log_as)
+    if not (isinstance(log_as, str) and log_as):
+        log.error("config: %s.log_as must be a non-empty string - using %r",
+                  where, defaults.log_as)
+        log_as = defaults.log_as
+
+    stops = defaults.ramp
+    if "ramp" in raw:
+        stops = _parse_ramp(raw["ramp"], f"{where}.ramp", defaults.ramp)
+
+    return CountdownBehavior(
+        minutes=float(minutes), label=label, style=style, period_s=float(period),
+        ramp=stops, ring_on_finish=ring, log_as=log_as,
+    )
+
+
 def _parse_mode(raw, idx: int) -> Mode | None:
     """Parse one mode. A mode with a broken activation, a template<->
     activation nature mismatch, or no usable body is skipped entirely
@@ -853,6 +996,8 @@ def _parse_mode(raw, idx: int) -> Mode | None:
         behavior = _parse_pomodoro_body(raw, where)
     elif template == "metronome":
         behavior = _parse_metronome_body(raw, where)
+    elif template == "countdown":
+        behavior = _parse_countdown_body(raw, where)
     else:  # pragma: no cover - allow-list keys and this dispatch stay in sync
         log.error("config: %s (%r) has unknown template %r - skipped", where, name, template)
         return None
@@ -1160,6 +1305,19 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["log_as"] = mode.behavior.log_as
         for trigger, command in mode.behavior.gestures.items():
             entry[trigger] = command
+    elif isinstance(mode.behavior, CountdownBehavior):
+        entry["minutes"] = mode.behavior.minutes
+        entry["label"] = mode.behavior.label
+        entry["style"] = mode.behavior.style
+        entry["period_s"] = mode.behavior.period_s
+        # Positions are always written out, even when they came in as a bare
+        # list of colours: the round-trip has to be exact, and a reader should
+        # not have to know the even-spacing rule to see where a stop sits.
+        entry["ramp"] = [
+            {"color": stop.color, "at": stop.at} for stop in mode.behavior.ramp
+        ]
+        entry["ring_on_finish"] = mode.behavior.ring_on_finish
+        entry["log_as"] = mode.behavior.log_as
     elif isinstance(mode.behavior, MetronomeBehavior):
         entry["start_bpm"] = mode.behavior.start_bpm
         entry["tap_history"] = mode.behavior.tap_history

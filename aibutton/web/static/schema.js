@@ -28,7 +28,17 @@ export const DAYS = [
 
 // Names of the templates whose modes are takeovers - the only valid targets
 // for an `enter_mode` action. Mirrors each template's `nature: 'takeover'`.
-const TAKEOVER_TEMPLATES = new Set(['alarm', 'stopwatch', 'counter', 'pomodoro', 'metronome']);
+const TAKEOVER_TEMPLATES = new Set([
+  'alarm', 'stopwatch', 'counter', 'pomodoro', 'metronome', 'countdown',
+]);
+
+// The default colour walk for a countdown - red while there is plenty of time,
+// through to violet as it runs out, then the alarm. Mirrors
+// _default_countdown_ramp() in config.py; positions are implied even here, and
+// the ramp widget only pins them once you move one.
+const COUNTDOWN_RAMP = [
+  '#ff0000', '#ff8800', '#ffff00', '#00ff00', '#4b0082', '#8f00ff',
+];
 
 // What a gesture can be bound to inside a running Pomodoro. Mirrors
 // POMODORO_COMMANDS in config.py; '' means the gesture does nothing.
@@ -317,6 +327,55 @@ export const TEMPLATES = [
 ];
 
 TEMPLATES.push({
+  type: 'countdown',
+  label: 'Countdown',
+  nature: 'takeover',
+  allowedActivations: ['manual'], // a countdown that starts itself is an alarm
+  body: 'fields',
+  // Colour first: what a mode looks like is how you recognise it going off
+  // from across the room, so the ramp sits above the mechanics.
+  fields: [
+    { key: 'ramp', label: 'Colour as the time runs out', kind: 'ramp',
+      hint: 'Left is a full timer, right is zero. Drag a colour to a different '
+        + 'percent to hold it for longer.' },
+    // A function, not an array: LED_STYLES is declared further down this
+    // module, so reading it while TEMPLATES is still being built would hit the
+    // temporal dead zone. Deferring to render time also keeps the two lists
+    // from drifting. Styles that ignore `color` are filtered out - a rainbow
+    // countdown would throw the ramp away.
+    { key: 'style', label: 'How the light moves', kind: 'select',
+      options: () => LED_STYLES
+        .filter((s) => s.uses.includes('color'))
+        .map((s) => ({ value: s.type, label: s.label })),
+      hint: 'The colour comes from the ramp above; this is only the movement.' },
+    { key: 'period_s', label: 'Seconds per flash', kind: 'number',
+      min: 0.1, max: 600, step: 0.1,
+      hint: 'Held steady the whole way through - the ramp moves, the rate does not.' },
+    { key: 'minutes', label: 'Minutes', kind: 'number', min: 0.1, step: 1,
+      hint: 'How long the countdown runs for.' },
+    { key: 'label', label: 'Short label', kind: 'text',
+      hint: 'Optional name for the status line. Defaults to the mode name.' },
+    { key: 'ring_on_finish', label: 'Ring at zero', kind: 'checkbox',
+      hint: 'Off = it finishes quietly, with just the light.' },
+    { key: 'log_as', label: 'Log each finished run as', kind: 'text', required: true,
+      placeholder: 'countdown',
+      hint: 'Logged with the length it ran for. A cancelled run logs nothing.' },
+  ],
+  defaults: () => ({
+    minutes: 10, label: '', style: 'flash', period_s: 1,
+    ramp: COUNTDOWN_RAMP.map((color, index) => ({
+      color, at: index / (COUNTDOWN_RAMP.length - 1),
+    })),
+    ring_on_finish: true, log_as: 'countdown',
+  }),
+  startedBy: 'gesture',
+  exits: (mode) => (mode.ring_on_finish
+    ? 'long press; at zero it rings until any press'
+    : 'long press (it finishes on its own)'),
+  describe: (mode) => `Countdown ${mode.minutes ?? 10} min`,
+});
+
+TEMPLATES.push({
   type: 'pomodoro',
   label: 'Pomodoro',
   nature: 'takeover',
@@ -400,6 +459,15 @@ export const BUILTIN_MODES = [
     mode: () => ({
       name: 'Stopwatch', template: 'stopwatch', activation: { type: 'manual' },
       log_as: 'stopwatch',
+    }),
+  },
+  {
+    id: 'countdown',
+    label: 'Countdown (10 min)',
+    blurb: 'Flashes red, fading through to violet as the time runs out.',
+    mode: () => ({
+      name: 'Countdown', template: 'countdown', activation: { type: 'manual' },
+      ...TEMPLATE_BY_TYPE.countdown.defaults(),
     }),
   },
   {

@@ -6,7 +6,7 @@
 // (Liskov). New field kinds plug into WIDGETS without touching callers
 // (Open/Closed).
 
-import { el } from './dom.js';
+import { clear, el } from './dom.js';
 
 function errLine() {
   return el('span', { className: 'fld-err' });
@@ -145,6 +145,143 @@ const WIDGETS = {
       validate() {
         const msg = /^#[0-9a-fA-F]{6}$/.test(obj[spec.key] || '')
           ? null : `${spec.label} must be a colour`;
+        err.textContent = msg ? 'Invalid' : '';
+        return msg;
+      },
+    };
+  },
+
+  // A colour ramp: an ordered list of stops, each a colour pinned somewhere
+  // between the start (0%) and the end (100%). Mirrors ramp.py's Stop, and
+  // what config.py's parser accepts.
+  //
+  // The position is editable rather than implied, because "hold this colour
+  // for longer" is most of the point of a ramp - an evenly spread list is the
+  // easy case, not the only one. A gradient strip sits above the rows so the
+  // thing being edited is the thing you see.
+  //
+  // Adding or removing re-spaces the ramp *only when it was already evenly
+  // spaced*. That way the common case (a list of colours) stays tidy on its
+  // own, and a hand-tuned ramp is never silently flattened by a click.
+  ramp(spec, obj, onInput) {
+    const preview = el('div', { className: 'ramp-preview' });
+    const rows = el('div', { className: 'ramp-rows' });
+    const err = errLine();
+
+    const evenAt = (index, count) => (count > 1 ? index / (count - 1) : 0);
+
+    // Config may hold bare colour strings (a hand-written scene) or objects;
+    // the API only ever returns objects, but reading both costs one branch.
+    const normalise = (raw) => {
+      const list = Array.isArray(raw) ? raw : [];
+      return list.map((stop, index) => {
+        const fallback = evenAt(index, list.length);
+        if (typeof stop === 'string') return { color: stop, at: fallback };
+        return {
+          color: typeof stop?.color === 'string' ? stop.color : '#000000',
+          at: typeof stop?.at === 'number' ? stop.at : fallback,
+        };
+      });
+    };
+
+    let stops = normalise(obj[spec.key]);
+
+    const evenlySpaced = () => stops.every(
+      (stop, index) => Math.abs(stop.at - evenAt(index, stops.length)) < 0.001,
+    );
+    const respace = () => stops.forEach((stop, index) => {
+      stop.at = evenAt(index, stops.length);
+    });
+
+    const commit = () => {
+      obj[spec.key] = stops.map((stop) => ({ color: stop.color, at: stop.at }));
+      onInput();
+    };
+
+    const paint = () => {
+      const ordered = [...stops].sort((a, b) => a.at - b.at);
+      if (!ordered.length) {
+        preview.style.background = 'transparent';
+      } else if (ordered.length === 1) {
+        preview.style.background = ordered[0].color;
+      } else {
+        preview.style.background = `linear-gradient(to right, ${
+          ordered.map((s) => `${s.color} ${Math.round(s.at * 100)}%`).join(', ')})`;
+      }
+    };
+
+    const render = () => {
+      clear(rows);
+      stops.forEach((stop, index) => {
+        const swatch = el('input', {
+          type: 'color', className: 'inp inp-color', value: stop.color,
+        });
+        swatch.addEventListener('input', () => {
+          stop.color = swatch.value;
+          commit();
+          paint();
+        });
+
+        const at = el('input', {
+          type: 'number', className: 'inp ramp-at', min: 0, max: 100, step: 1,
+          value: Math.round(stop.at * 100),
+        });
+        at.addEventListener('input', () => {
+          const percent = Number(at.value);
+          if (Number.isFinite(percent)) {
+            stop.at = Math.min(100, Math.max(0, percent)) / 100;
+            commit();
+            paint();
+          }
+        });
+
+        const remove = el('button', {
+          type: 'button', className: 'mini danger', textContent: '×',
+          title: 'Remove this colour',
+        });
+        remove.addEventListener('click', () => {
+          const wasEven = evenlySpaced();
+          stops.splice(index, 1);
+          if (wasEven) respace();
+          commit();
+          render();
+        });
+
+        rows.append(el('div', { className: 'ramp-row' }, [
+          swatch,
+          at,
+          el('span', { className: 'ramp-pct', textContent: '%' }),
+          // Never offer to remove the last one - an empty ramp is not a thing
+          // you can mean, and the parser would just hand back the default.
+          stops.length > 1 ? remove : null,
+        ]));
+      });
+
+      const add = el('button', {
+        type: 'button', className: 'mini', textContent: '+ Colour',
+      });
+      add.addEventListener('click', () => {
+        const wasEven = evenlySpaced();
+        const last = stops[stops.length - 1];
+        stops.push({ color: last ? last.color : '#ffffff', at: 1 });
+        if (wasEven) respace();
+        commit();
+        render();
+      });
+      rows.append(add);
+      paint();
+    };
+
+    render();
+
+    return {
+      el: wrap(spec, el('div', { className: 'ramp-edit' }, [preview, rows]), err),
+      validate() {
+        let msg = null;
+        if (!stops.length) msg = `${spec.label} needs at least one colour`;
+        else if (!stops.every((s) => /^#[0-9a-fA-F]{6}$/.test(s.color))) {
+          msg = `${spec.label} has an invalid colour`;
+        }
         err.textContent = msg ? 'Invalid' : '';
         return msg;
       },
