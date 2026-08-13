@@ -105,6 +105,11 @@ DEFAULT_PALETTE = {
 class NullBackend:
     """No LED wired. The button still works; you just can't see it."""
 
+    # Read by DEVICE_INFO: a capability bit that lies is worse than no bit at
+    # all, so "has an LED" means one actually came up, not that hardware.py
+    # asked for one.
+    usable = False
+
     def set(self, r, g, b):
         pass
 
@@ -116,6 +121,8 @@ class NeoPixelBackend:
     """WS2812s on one data line - the ring inside the button, or the onboard
     RGB on an S3/C3 dev board. Every pixel is written the same colour: the
     LED is one indicator, so a ring is a bigger indicator, not a display."""
+
+    usable = True
 
     def __init__(self, pin, brightness, order="GRB", count=1):
         from machine import Pin
@@ -149,6 +156,9 @@ class MultiBackend:
 
     def __init__(self, backends):
         self._backends = backends
+        # One working LED is enough to claim the capability, even if the other
+        # failed to come up.
+        self.usable = any(getattr(b, "usable", True) for b in backends)
 
     def set(self, r, g, b):
         for backend in self._backends:
@@ -167,6 +177,8 @@ class MultiBackend:
 
 class PWMBackend:
     """A discrete RGB LED, one PWM channel per colour (330R per channel)."""
+
+    usable = True
 
     def __init__(self, pins, active_high, freq):
         from machine import PWM, Pin
@@ -295,6 +307,11 @@ class LEDController:
         self._palette[code] = Effect(style, color, color2, period_s)
         if code == self._state:
             self._start(self._palette[code])
+
+    @property
+    def usable(self):
+        """Whether an LED actually came up - reported over DEVICE_INFO."""
+        return getattr(self._backend, "usable", True)
 
     def off(self):
         if self._task is not None:

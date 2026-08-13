@@ -2,16 +2,76 @@
 # tests/test_protocol.py imports both halves and fails if they drift, so
 # change one and change the other.
 #
+#   DEVICE_INFO   read    version + what this device can do  (ESP32 -> host)
 #   BUTTON_EVENT  notify  gesture code           (ESP32 -> host)
 #   LED_STATE     write   LED state code         (host -> ESP32)
 #   SOUND_CMD     write   sound command byte     (host -> ESP32)
 #   LED_PALETTE   write   what one state looks like
+#   OTA_CONTROL   -       reserved, not implemented (see below)
+#
+# Rules for changing any of this, because the next device may be in someone
+# else's pocket and there is no way to reflash one you do not have:
+#
+#   Add, never repurpose.   A byte that meant something must not come to mean
+#                           something else.
+#   Ask, never assume.      DEVICE_INFO exists so a host can find out what it
+#                           is talking to instead of inferring it from a
+#                           version number. Gate every new capability on a bit.
+#   Append, never insert.   DEVICE_INFO may grow fields on the end; a reader
+#                           takes what it understands and ignores the rest.
 
 SERVICE_UUID = "f3641400-00b0-4240-ba50-05ca45bf8abc"
 BUTTON_EVENT_UUID = "f3641401-00b0-4240-ba50-05ca45bf8abc"
 LED_STATE_UUID = "f3641402-00b0-4240-ba50-05ca45bf8abc"
 SOUND_CMD_UUID = "f3641403-00b0-4240-ba50-05ca45bf8abc"
 LED_PALETTE_UUID = "f3641404-00b0-4240-ba50-05ca45bf8abc"
+DEVICE_INFO_UUID = "f3641405-00b0-4240-ba50-05ca45bf8abc"
+
+# Reserved, deliberately unimplemented. Claiming the UUID now costs nothing
+# and means the day OTA is built it is not also a protocol break - which
+# matters because "you cannot fix a bug in a key fob you do not have" is the
+# whole argument for shipping the handshake before the hardware (ROADMAP D6).
+OTA_CONTROL_UUID = "f3641406-00b0-4240-ba50-05ca45bf8abc"
+
+# --- device info (read up) ---------------------------------------------
+#
+# What this device is and what it can do, so the host asks instead of
+# assuming (ROADMAP D8). Six bytes today:
+#
+#   [0]    protocol version
+#   [1:4]  firmware version   major, minor, patch
+#   [4:6]  capability bitmap, big-endian
+#
+# PROTOCOL_VERSION is mirrored on the host: both sides have to agree on what
+# version 1 *means*. FIRMWARE_VERSION is not - the host reads it off the
+# device, and a host that hard-coded it would be describing itself.
+
+PROTOCOL_VERSION = 1
+FIRMWARE_VERSION = (0, 4, 0)
+
+CAP_LED = 0x0001      # an LED came up and can be driven
+CAP_BUZZER = 0x0002   # a buzzer came up and can be driven
+CAP_PALETTE = 0x0004  # LED_PALETTE writes are understood and rendered
+
+# Reserved. Named now so two future features cannot quietly pick the same
+# bit; all report 0 until the thing behind them exists.
+CAP_HAPTICS = 0x0008
+CAP_BATTERY = 0x0010
+CAP_IMU = 0x0020
+CAP_MIC = 0x0040
+CAP_OTA = 0x0080
+
+DEVICE_INFO_LEN = 6
+
+
+def device_info_payload(capabilities, firmware=None, protocol_version=PROTOCOL_VERSION):
+    """The DEVICE_INFO value for this device."""
+    major, minor, patch = firmware if firmware is not None else FIRMWARE_VERSION
+    return bytes([
+        protocol_version & 0xFF,
+        major & 0xFF, minor & 0xFF, patch & 0xFF,
+        (capabilities >> 8) & 0xFF, capabilities & 0xFF,
+    ])
 
 # --- gestures (notified up) -------------------------------------------
 

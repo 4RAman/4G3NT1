@@ -240,6 +240,23 @@ press the button and check that a tap, a hold, and a double tap print
 `short_press`, `long_press`, and `double_tap`. nRF Connect on a phone works
 too — the gesture characteristic is `f3641401-…`.
 
+**The quickest check that a flash actually took** is what the board says about
+itself. On boot it prints one line:
+
+```
+device: protocol v1, firmware 0.4.0, capabilities 0x0007
+```
+
+and the host logs the same thing on connect (`BLE: protocol v1, firmware
+0.4.0, capabilities: led, buzzer, palette`). The capability bits describe what
+*came up*, not what `hardware.py` asked for — so `0x0005` (no `buzzer`) is the
+board telling you the PWM never initialised, and `0x0004` means the LED didn't
+either. That is usually a pin number, not a flash.
+
+A host that connects and reports `fw unknown (pre-v1)` is talking to a board
+that still has the old firmware on it: `DEVICE_INFO` is `f3641405-…`, and a
+board that lacks it is one the flash didn't reach.
+
 Half of this code is also tested on the host, since the modules that touch
 no hardware import fine under CPython:
 

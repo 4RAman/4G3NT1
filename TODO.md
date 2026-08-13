@@ -144,10 +144,23 @@ reflash and another chance to drift the mirrored tables
 ([device.py](aibutton/device.py) / [firmware/protocol.py](firmware/protocol.py),
 guarded by [test_protocol.py](tests/test_protocol.py)).
 
-1. **`DEVICE_INFO`** — a characteristic carrying firmware version plus a
-   capability bitmap (has-LED, has-buzzer, has-haptics…). Cheapest item here
-   and the one that makes every *later* protocol change non-breaking: the
-   host asks instead of assuming.
+1. ~~**`DEVICE_INFO`**~~ ✔ **shipped, and deliberately shipped first.** A read
+   carrying protocol version, firmware version and a capability bitmap
+   (`led`/`buzzer`/`palette`, with haptics/battery/imu/mic/ota reserved so two
+   future features cannot claim the same bit).
+
+   Going first is a departure from "land them as one revision", and the reason
+   is that this item's entire job is to make the other three non-breaking: with
+   it in place they are capability-gated additions an old device can decline,
+   not a flag day. Batching still applies to everything that is *not* a
+   negotiation mechanism.
+
+   Three details worth keeping when the rest lands: bits report what actually
+   *came up* (both backends degrade to Null, and a bit claiming a buzzer nobody
+   can hear is worse than no bit); a device with no `DEVICE_INFO` falls back to
+   `ASSUMED_INFO` so learning to ask never silences an un-reflashed button; and
+   `decode_device_info` ignores trailing bytes, so the payload grows by
+   appending and an older host stays able to read a newer device.
 2. **Parameterised gestures** — the wire carries three constants
    (`0x01`–`0x03`). Make it carry a kind plus a parameter (tap count, hold
    bucket) so 5-tap (already wanted, see "On/Off toggle" below), triple tap
@@ -158,8 +171,11 @@ guarded by [test_protocol.py](tests/test_protocol.py)).
    every code is mirrored four ways, and all instances of a template share
    one palette entry. `run_metronome` already reaches around the abstraction
    to rewrite the palette live; generalise that instead of copying it.
-4. **An OTA/version handshake** — reserve it now, implement before any unit
-   leaves the building. You cannot fix a bug in a key fob you don't have.
+4. **An OTA/version handshake** — ✔ *reserved*: `OTA_CONTROL_UUID` and
+   `CAP_OTA` are claimed and documented as unimplemented, and the version
+   handshake is `DEVICE_INFO`'s first byte. Implementing it is still Stage 4
+   and still gates handing a unit to anyone, including a friend. You cannot fix
+   a bug in a key fob you don't have.
 
 Rationale and the cost of deferring each: **D4**, **D5**, **D6**, **D8** in
 [ROADMAP.md](ROADMAP.md).

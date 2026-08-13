@@ -118,19 +118,23 @@ Four cheap additions now cost one reflash. The same four after units exist in
 other people's hands cost a flag day, or a permanent compatibility branch.
 Land them as one revision, then freeze:
 
-1. **`DEVICE_INFO`** — firmware version + a capability bitmap the device
-   advertises (has-LED, has-buzzer, has-haptics, has-mic…). This is what
-   makes every *later* protocol change non-breaking: a new host can ask an
-   old device what it can do instead of assuming. Cheapest item on this
-   list, highest leverage. (**D5**, **D8**)
+1. ~~**`DEVICE_INFO`**~~ ✔ **shipped.** A read carrying protocol version,
+   firmware version and a capability bitmap (led · buzzer · palette, with
+   haptics/battery/imu/mic/ota reserved). Bits report what actually came up,
+   not what `hardware.py` asked for. This is what makes every *later*
+   protocol change non-breaking — a new host asks an old device what it can
+   do instead of assuming — and it is why the remaining three below are now
+   negotiable additions rather than a flag day. (**D5**, **D8**)
 2. **Parameterised gestures** — the wire carries three magic constants today.
    Make it carry a gesture *kind plus a parameter* (tap count, hold
    duration bucket) so 5-tap, triple-tap and long-hold levels arrive as data
    rather than as new codes. (**D5**)
 3. **Ephemeral effects** — let the host push a look without burning a global
    LED state code. (**D4**)
-4. **OTA hook** — not the implementation, just the reserved characteristic
-   and the version handshake, so Stage 4 isn't a protocol break. (**D6**)
+4. **OTA hook** — ✔ *reserved*: `OTA_CONTROL_UUID` and `CAP_OTA` are claimed
+   and documented as unimplemented, and the version handshake is `DEVICE_INFO`'s
+   first byte. The implementation is still Stage 4 and still gates shipping a
+   unit to anybody. (**D6**)
 
 ---
 
@@ -347,11 +351,19 @@ back and undoing things" the brief is trying to avoid.
 | **D5** | Fixed gestures, or parameterised? | **Parameterised on the wire now** (kind + count/duration) | Stage 2 exit | A flag-day protocol break after hardware ships |
 | **D6** | Field firmware update | **Reserve the handshake in v1; implement before any unit leaves the building** | v1 now, working by Stage 4 | You cannot fix a bug in someone else's key fob |
 | **D7** | The name | **Rename before public disclosure.** `aibutton` is descriptive and inaccurate | Stage 4/5 boundary | Repo, package, BLE name, app namespace, domain and marks all re-bake |
-| **D8** | How do hosts and devices stay compatible? | **Capability negotiation via `DEVICE_INFO`** — never assume, always ask | Stage 2 exit | Permanent compatibility branches in the host |
+| **D8** ✔ | How do hosts and devices stay compatible? | **Decided and shipped: capability negotiation via `DEVICE_INFO`** — never assume, always ask. Protocol v1 | — | — |
 
-**D4, D5, D6 and D8 are one piece of work** — protocol v1, done once, then
-frozen. Doing them separately means four reflashes and four chances to break
-the mirrored tables.
+**D4, D5 and D6 were one piece of work with D8 — and D8 went first, on
+purpose.** The reason to batch protocol changes is that each one costs a
+reflash and a chance to drift the mirrored tables, which is ruinous once units
+are in other people's hands. But `DEVICE_INFO` is the one whose whole job is to
+make the *others* non-breaking. With it shipped, D4 and D5 arrive as
+capability-gated additions an old device can decline, rather than a flag day —
+so they are now a batch of two, negotiable, instead of a batch of four that had
+to be perfect first time.
+
+That reasoning does not generalise. Anything that is *not* a
+negotiation mechanism still batches.
 
 ---
 

@@ -432,7 +432,17 @@ async function refreshStatus() {
       // With a real button, say whether it is actually on the air: the app
       // runs either way, so "nothing happens when I press it" needs an answer
       // in the UI rather than in the log.
-      (d.mock ? ' · MOCK' : (d.device_connected ? ' · 🔵 BUTTON CONNECTED' : ' · ⚪ BUTTON OFFLINE'));
+      (d.mock ? ' · MOCK' : (d.device_connected ? ' · 🔵 BUTTON CONNECTED' : ' · ⚪ BUTTON OFFLINE')) +
+      // What the button reported about itself. Only shown for a real one that
+      // is actually on the air - for a mock or an absent button it would be
+      // describing something that isn't there. protocol_version 0 means the
+      // firmware predates DEVICE_INFO, so say "assumed" rather than quoting
+      // capabilities it never claimed.
+      (!d.mock && d.device_connected && d.device_info
+        ? (d.device_info.protocol_version
+            ? ` · fw ${d.device_info.firmware} · ${d.device_info.capabilities.join(' ')}`
+            : ' · fw unknown (pre-v1, capabilities assumed)')
+        : '');
     // last_trigger is null for scheduler-fired alarms - still surface the
     // outcome (mode + message) so a fired/dismissed alarm shows in the summary.
     $('#last').textContent = (d.last_trigger || d.last_mode || d.last_message)

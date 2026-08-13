@@ -69,6 +69,7 @@ class PinStub:
 class FakeCharacteristic:
     def __init__(self, *args, **kwargs):
         self.notified = []
+        self.value = b""
 
     def notify(self, connection, data):
         self.notified.append(data)
@@ -76,8 +77,12 @@ class FakeCharacteristic:
     async def written(self):
         await asyncio.Event().wait()  # never; this test drives the button only
 
+    def write(self, data):
+        """aioble: set the local value a central's read returns."""
+        self.value = bytes(data)
+
     def read(self):
-        return b""
+        return self.value
 
 
 @pytest.fixture(scope="module")
@@ -111,6 +116,26 @@ def main():
             sys.modules.pop(name, None)
         else:
             sys.modules[name] = module
+
+
+def test_a_board_with_no_led_or_buzzer_reports_exactly_that(main):
+    """This fixture stubs `machine` down to Pin, so both backends take their
+    "not wired" fallbacks - which makes it the honest place to check that
+    DEVICE_INFO describes what actually came up rather than what hardware.py
+    asked for. A capability bit that claims a buzzer nobody can hear is worse
+    than no bit at all.
+    """
+    from aibutton.device import CAP_BUZZER, CAP_LED, CAP_PALETTE, decode_device_info
+
+    main.ButtonPeripheral()
+    info = decode_device_info(main._info_char.read())
+
+    assert info is not None
+    assert info.protocol_version == main.protocol.PROTOCOL_VERSION
+    assert info.firmware_version == main.protocol.FIRMWARE_VERSION
+    assert info.has(CAP_PALETTE)      # this firmware always renders them
+    assert not info.has(CAP_LED)      # degraded to NullBackend
+    assert not info.has(CAP_BUZZER)   # degraded to NullBuzzer
 
 
 async def _run(main, transitions, until, connected=True):

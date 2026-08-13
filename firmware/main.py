@@ -42,6 +42,12 @@ _sound_char = aioble.Characteristic(
 _palette_char = aioble.Characteristic(
     _service, bluetooth.UUID(protocol.LED_PALETTE_UUID), write=True, capture=True
 )
+# Read-only, and the value is filled in once the LED and buzzer have actually
+# been constructed - see ButtonPeripheral.__init__. A host reads this to find
+# out what it is talking to instead of guessing from a version number.
+_info_char = aioble.Characteristic(
+    _service, bluetooth.UUID(protocol.DEVICE_INFO_UUID), read=True
+)
 aioble.register_services(_service)
 
 
@@ -61,6 +67,26 @@ class ButtonPeripheral:
         self.buzzer = Buzzer()
         self._detector = TriggerDetector()
         self._connection = None
+        self._publish_info()
+
+    def _publish_info(self):
+        """Fill in DEVICE_INFO from what actually came up.
+
+        Asked *after* the LED and buzzer are built, not read off hardware.py,
+        because both degrade to a Null backend when their pin is wrong or the
+        driver refuses - and a capability bit that claims a buzzer nobody can
+        hear is worse than no bit at all.
+        """
+        capabilities = protocol.CAP_PALETTE  # this firmware always renders them
+        if self.led.usable:
+            capabilities |= protocol.CAP_LED
+        if self.buzzer.usable:
+            capabilities |= protocol.CAP_BUZZER
+        _info_char.write(protocol.device_info_payload(capabilities))
+        print(
+            "device: protocol v%d, firmware %d.%d.%d, capabilities 0x%04x"
+            % (protocol.PROTOCOL_VERSION, *protocol.FIRMWARE_VERSION, capabilities)
+        )
 
     # --- BLE ----------------------------------------------------------
 

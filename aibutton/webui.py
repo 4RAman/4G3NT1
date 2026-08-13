@@ -240,6 +240,16 @@ def create_app(ctx: WebContext) -> FastAPI:
             # False while a real button is out of range or unplugged - the
             # app keeps running, so the UI has to say why nothing lights up.
             "device_connected": ctx.device.connected,
+            # What the button said it is when we last connected. Worth showing
+            # because it answers the two questions a silent button raises:
+            # which firmware is on it, and does it even have the part you are
+            # waiting to see or hear. protocol_version 0 means it predates
+            # DEVICE_INFO and these are assumptions, not answers.
+            "device_info": {
+                "protocol_version": ctx.device.info.protocol_version,
+                "firmware": ctx.device.info.firmware,
+                "capabilities": ctx.device.info.names,
+            },
             # True when the event database could not be opened and history is
             # being kept in memory. The button still works, so the UI has to
             # say why the Events tab will be empty again after a restart.

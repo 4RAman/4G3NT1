@@ -26,7 +26,11 @@ import logging
 from bleak import BleakClient, BleakScanner
 
 from .device import (
+    ASSUMED_INFO,
     BUTTON_EVENT_UUID,
+    CAP_BUZZER,
+    CAP_LED,
+    DEVICE_INFO_UUID,
     GESTURE_BY_CODE,
     LED_CODES,
     LED_PALETTE_UUID,
@@ -36,6 +40,7 @@ from .device import (
     ButtonDevice,
     LEDState,
     Sound,
+    decode_device_info,
     palette_payload,
     sound_command,
 )
@@ -109,12 +114,19 @@ class BLEDevice(ButtonDevice):
         self._send(LED_STATE_UUID, bytes([LED_CODES[state]]))
 
     def play_sound(self, sound: Sound) -> None:
+        if not self.info.has(CAP_BUZZER):
+            return  # nothing to hear it; see _adopt_info
         self._send(SOUND_CMD_UUID, sound_command(sound))
 
     def start_loop(self, sound: Sound) -> None:
+        if not self.info.has(CAP_BUZZER):
+            return
         self._send(SOUND_CMD_UUID, sound_command(sound, loop=True))
 
     def stop_loop(self) -> None:
+        # Never gated. Silencing is the safety path, it costs one byte, and a
+        # device that gained a buzzer between connections must not be left
+        # ringing because we decided in advance it had none.
         self._send(SOUND_CMD_UUID, bytes([STOP_LOOP_CMD]))
 
     def set_palette(self, palette: dict) -> None:
@@ -126,10 +138,36 @@ class BLEDevice(ButtonDevice):
             self._send(LED_PALETTE_UUID, palette_payload(state, effect))
 
     def _palette_entries(self):
+        if not self.info.has(CAP_LED):
+            return  # no LED came up; colours are a dozen pointless writes
         for state in LEDState:
             effect = self.palette.get(state.value)
             if effect is not None:
                 yield state, effect
+
+    async def _adopt_info(self, client: BleakClient) -> None:
+        """Ask the device what it is, before sending it anything.
+
+        A device with no DEVICE_INFO characteristic is this project's own
+        firmware from before the characteristic existed, so it falls back to
+        ASSUMED_INFO (LED, buzzer, palette) rather than to nothing - otherwise
+        learning to ask would silence every button that hasn't been reflashed.
+        """
+        raw = None
+        try:
+            raw = await client.read_gatt_char(DEVICE_INFO_UUID)
+        except Exception as exc:  # no such characteristic, or an unreadable one
+            log.info("BLE: no device info (%s) - assuming a pre-v1 button", exc)
+        info = decode_device_info(raw)
+        if raw is not None and info is None:
+            log.warning("BLE: device info was too short to trust - assuming a pre-v1 button")
+        self.info = info or ASSUMED_INFO
+        log.info(
+            "BLE: protocol v%d, firmware %s, capabilities: %s",
+            self.info.protocol_version,
+            self.info.firmware,
+            ", ".join(self.info.names) or "none reported",
+        )
 
     def _send(self, uuid: str, payload: bytes) -> None:
         if not self._connected:
@@ -183,6 +221,10 @@ class BLEDevice(ButtonDevice):
             await client.start_notify(BUTTON_EVENT_UUID, self._on_notify)
             self._connected = True
             log.info("BLE: connected to %s (%s)", self._name, device.address)
+            # Ask first: everything below is gated on what it says it can do,
+            # and re-asked on every reconnect because the thing on the other
+            # end may have been reflashed since.
+            await self._adopt_info(client)
             # The palette first, then the state - so the state that lights up
             # is already wearing the user's colours rather than the device's
             # built-in defaults for a frame.

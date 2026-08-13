@@ -18,6 +18,9 @@ from tones import LOOP_GAP_MS, TONES
 class NullBuzzer:
     """No buzzer wired, or PWM unavailable: silence, but never an error."""
 
+    # Read by DEVICE_INFO - see the same note in led.py's NullBackend.
+    usable = False
+
     def tone(self, freq):
         pass
 
@@ -28,6 +31,8 @@ class NullBuzzer:
 class PWMBuzzer:
     """Square wave on one pin. A piezo is loudest near 50% duty, so volume
     scales that half-range rather than the full 0..65535."""
+
+    usable = True
 
     def __init__(self, pin, volume):
         from machine import PWM, Pin
@@ -59,6 +64,11 @@ class Buzzer:
     def __init__(self, backend=None):
         self._backend = backend if backend is not None else make_backend()
         self._task = None
+
+    @property
+    def usable(self):
+        """Whether a buzzer actually came up - reported over DEVICE_INFO."""
+        return getattr(self._backend, "usable", True)
 
     def play(self, cmd):
         """Run a SOUND_CMD byte. Replaces whatever was playing, so a

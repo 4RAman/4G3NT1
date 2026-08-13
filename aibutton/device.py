@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Enum
 
 log = logging.getLogger(__name__)
@@ -74,6 +75,90 @@ BUTTON_EVENT_UUID = "f3641401-00b0-4240-ba50-05ca45bf8abc"
 LED_STATE_UUID = "f3641402-00b0-4240-ba50-05ca45bf8abc"
 SOUND_CMD_UUID = "f3641403-00b0-4240-ba50-05ca45bf8abc"
 LED_PALETTE_UUID = "f3641404-00b0-4240-ba50-05ca45bf8abc"
+DEVICE_INFO_UUID = "f3641405-00b0-4240-ba50-05ca45bf8abc"
+OTA_CONTROL_UUID = "f3641406-00b0-4240-ba50-05ca45bf8abc"  # reserved, unimplemented
+
+# --- what the device says it is ---------------------------------------
+#
+# The host asks rather than assumes (ROADMAP D8). PROTOCOL_VERSION is mirrored
+# because both sides must agree on what version 1 *means*; the firmware's own
+# version is read off the device, never mirrored, because a host that
+# hard-coded it would only be describing itself.
+
+PROTOCOL_VERSION = 1
+
+CAP_LED = 0x0001
+CAP_BUZZER = 0x0002
+CAP_PALETTE = 0x0004
+CAP_HAPTICS = 0x0008   # the five below are reserved: named so two future
+CAP_BATTERY = 0x0010   # features cannot pick the same bit, and reported as 0
+CAP_IMU = 0x0020       # until the thing behind them exists
+CAP_MIC = 0x0040
+CAP_OTA = 0x0080
+
+CAPABILITY_NAMES = {
+    CAP_LED: "led",
+    CAP_BUZZER: "buzzer",
+    CAP_PALETTE: "palette",
+    CAP_HAPTICS: "haptics",
+    CAP_BATTERY: "battery",
+    CAP_IMU: "imu",
+    CAP_MIC: "mic",
+    CAP_OTA: "ota",
+}
+
+DEVICE_INFO_LEN = 6
+
+
+@dataclass(frozen=True)
+class DeviceInfo:
+    """Version and capabilities, as reported by the thing on the other end."""
+
+    protocol_version: int = 0
+    firmware_version: tuple[int, int, int] = (0, 0, 0)
+    capabilities: int = 0
+
+    def has(self, capability: int) -> bool:
+        return bool(self.capabilities & capability)
+
+    @property
+    def firmware(self) -> str:
+        return "%d.%d.%d" % self.firmware_version
+
+    @property
+    def names(self) -> list[str]:
+        """The capabilities it claims, for logs and the web UI."""
+        return [
+            name for bit, name in CAPABILITY_NAMES.items() if self.capabilities & bit
+        ]
+
+
+# What to believe about a device that has no DEVICE_INFO characteristic. The
+# only firmware that predates it is this project's own, which has an LED, a
+# buzzer and palette rendering - so assuming all three keeps an un-reflashed
+# button behaving exactly as it did, rather than going dark and silent the
+# moment the host learns to ask.
+ASSUMED_INFO = DeviceInfo(
+    protocol_version=0,
+    firmware_version=(0, 0, 0),
+    capabilities=CAP_LED | CAP_BUZZER | CAP_PALETTE,
+)
+
+
+def decode_device_info(data) -> DeviceInfo | None:
+    """Parse a DEVICE_INFO read, or None if it is too short to trust.
+
+    Extra trailing bytes are ignored rather than rejected: the format grows by
+    appending, so a newer device must stay readable by an older host. That is
+    the half of forward compatibility the host is responsible for.
+    """
+    if data is None or len(data) < DEVICE_INFO_LEN:
+        return None
+    return DeviceInfo(
+        protocol_version=data[0],
+        firmware_version=(data[1], data[2], data[3]),
+        capabilities=(data[4] << 8) | data[5],
+    )
 
 GESTURE_CODES: dict[TriggerType, int] = {
     TriggerType.SHORT_PRESS: 0x01,
@@ -171,6 +256,11 @@ class ButtonDevice(ABC):
     def __init__(self) -> None:
         self.events: asyncio.Queue[TriggerType] = asyncio.Queue()
         self.palette: dict = {}
+        # What this device says it is. Read, not asserted - which is why it is
+        # an attribute rather than a sixth method on the seam. Anything that is
+        # its own hardware knows its own answer; BLEDevice replaces this with
+        # what it read off the wire.
+        self.info: DeviceInfo = ASSUMED_INFO
 
     def press(self, trigger: TriggerType) -> None:
         """Inject a gesture as if the hardware had detected one - what the
@@ -233,6 +323,13 @@ class MockDevice(ButtonDevice):
         self.led_state = LEDState.IDLE
         self.last_sound: Sound | None = None
         self.looping: Sound | None = None
+        # The mock's hardware is the browser, which renders the LED and plays
+        # the tones - so it genuinely has all three, and says so rather than
+        # inheriting the "assume the worst case is fine" default.
+        self.info = DeviceInfo(
+            protocol_version=PROTOCOL_VERSION,
+            capabilities=CAP_LED | CAP_BUZZER | CAP_PALETTE,
+        )
 
     def set_led(self, state: LEDState) -> None:
         self.led_state = state

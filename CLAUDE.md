@@ -101,7 +101,11 @@ mock?" to decide whether to show the virtual panel.*
 `stop_loop` out, plus lifecycle. Everything else — palettes, reconnection,
 byte encoding — is a private concern of the implementation.
 *Resist widening it. `set_palette` earned its place by being device state
-the host asserts, exactly like the LED state.*
+the host asserts, exactly like the LED state.* `info` is the counterpart and
+stayed an **attribute rather than a fifth method** for exactly that reason:
+it is device state the host *reads*, never asserts, so nothing has to be
+implemented to satisfy it — a backend that is its own hardware just knows its
+own answer.
 
 **Dependency inversion — depend on the abstraction, and mind the direction.**
 `main` depends on `ButtonDevice`, never on `BLEDevice`; the import of the
@@ -207,10 +211,22 @@ is the one surface that will exist in someone else's pocket.
 
 - **Add, don't repurpose.** A byte that once meant something must never come
   to mean something else. There is no way to reflash a device you don't have.
-- **Negotiate, don't assume.** The host must be able to *ask* a device what
-  it supports rather than inferring it from a version number. Until
-  `DEVICE_INFO` exists (ROADMAP **D8**), every new capability is a flag day —
-  which is why it should exist before more hardware does.
+- **Negotiate, don't assume.** `DEVICE_INFO` exists now (protocol v1): a read
+  giving protocol version, firmware version and a capability bitmap. So
+  **gate every new capability on a bit** rather than on a version number, and
+  let an old device answer honestly instead of being assumed into working.
+  `BLEDevice` re-reads it on every reconnect — the thing on the other end may
+  have been reflashed since.
+  - Capability bits report what *came up*, not what `hardware.py` asked for:
+    the LED and buzzer both degrade to Null backends, and a bit claiming a
+    buzzer nobody can hear is worse than no bit at all.
+  - A device with no `DEVICE_INFO` falls back to `ASSUMED_INFO`, because the
+    only firmware that predates it is ours and it has all three. Learning to
+    ask must never silence a button nobody has reflashed.
+- **Append, never insert.** `DEVICE_INFO` grows by adding fields on the end,
+  and `decode_device_info` ignores trailing bytes it doesn't know. That is the
+  half of forward compatibility the *host* owns, and it is what keeps a newer
+  device readable by an older host.
 - **Batch the breaks.** Protocol changes cost a reflash and a chance to drift
   the mirrored tables. Land them together, then freeze.
 

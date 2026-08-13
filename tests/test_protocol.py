@@ -18,15 +18,89 @@ def test_uuids_match():
     assert device.LED_STATE_UUID == fw.LED_STATE_UUID
     assert device.SOUND_CMD_UUID == fw.SOUND_CMD_UUID
     assert device.LED_PALETTE_UUID == fw.LED_PALETTE_UUID
+    assert device.DEVICE_INFO_UUID == fw.DEVICE_INFO_UUID
+    assert device.OTA_CONTROL_UUID == fw.OTA_CONTROL_UUID
 
 
 def test_uuids_are_distinct_and_share_the_project_base():
     uuids = [
         fw.SERVICE_UUID, fw.BUTTON_EVENT_UUID, fw.LED_STATE_UUID,
-        fw.SOUND_CMD_UUID, fw.LED_PALETTE_UUID,
+        fw.SOUND_CMD_UUID, fw.LED_PALETTE_UUID, fw.DEVICE_INFO_UUID,
+        fw.OTA_CONTROL_UUID,
     ]
-    assert len(set(uuids)) == 5
+    assert len(set(uuids)) == 7
     assert all(u.endswith("-00b0-4240-ba50-05ca45bf8abc") for u in uuids)
+
+
+# --- device info -------------------------------------------------------
+
+def test_protocol_version_matches():
+    """Both sides have to agree on what version 1 *means*, so this one is
+    mirrored. The firmware's own version deliberately is not - the host reads
+    it off the device."""
+    assert device.PROTOCOL_VERSION == fw.PROTOCOL_VERSION
+
+
+def test_capability_bits_match():
+    for name in (
+        "CAP_LED", "CAP_BUZZER", "CAP_PALETTE", "CAP_HAPTICS",
+        "CAP_BATTERY", "CAP_IMU", "CAP_MIC", "CAP_OTA",
+    ):
+        assert getattr(device, name) == getattr(fw, name), name
+
+
+def test_every_capability_bit_is_distinct_and_named():
+    bits = list(device.CAPABILITY_NAMES)
+    assert len(set(bits)) == len(bits)
+    # Each is a single bit: an overlapping mask would make two features
+    # indistinguishable on the wire.
+    assert all(bit and not (bit & (bit - 1)) for bit in bits)
+
+
+def test_host_decodes_what_the_firmware_reports():
+    caps = fw.CAP_LED | fw.CAP_BUZZER | fw.CAP_PALETTE
+    payload = fw.device_info_payload(caps, firmware=(1, 2, 3))
+    assert len(payload) == fw.DEVICE_INFO_LEN
+
+    info = device.decode_device_info(payload)
+    assert info.protocol_version == fw.PROTOCOL_VERSION
+    assert info.firmware_version == (1, 2, 3)
+    assert info.firmware == "1.2.3"
+    assert set(info.names) == {"led", "buzzer", "palette"}
+    assert info.has(device.CAP_LED) and not info.has(device.CAP_IMU)
+
+
+def test_a_device_reporting_no_buzzer_says_so():
+    payload = fw.device_info_payload(fw.CAP_LED | fw.CAP_PALETTE)
+    info = device.decode_device_info(payload)
+    assert info.has(device.CAP_LED)
+    assert not info.has(device.CAP_BUZZER)
+
+
+def test_a_short_device_info_is_rejected_rather_than_half_read():
+    assert device.decode_device_info(b"\x01\x00\x04") is None
+    assert device.decode_device_info(b"") is None
+    assert device.decode_device_info(None) is None
+
+
+def test_trailing_bytes_are_ignored_so_the_format_can_grow():
+    """The format grows by appending. An older host must stay able to read a
+    newer device - that is the half of forward compatibility the host owns,
+    and the reason DEVICE_INFO exists before more hardware does."""
+    payload = fw.device_info_payload(fw.CAP_LED) + b"\x99\x88\x77"
+    info = device.decode_device_info(payload)
+    assert info is not None
+    assert info.firmware_version == fw.FIRMWARE_VERSION
+    assert info.has(device.CAP_LED)
+
+
+def test_the_assumed_info_keeps_an_un_reflashed_button_working():
+    """A button with no DEVICE_INFO is this project's own older firmware,
+    which has all three. Assuming less would silence every button that hasn't
+    been reflashed the moment the host learns to ask."""
+    assert device.ASSUMED_INFO.protocol_version == 0  # "these are guesses"
+    for cap in (device.CAP_LED, device.CAP_BUZZER, device.CAP_PALETTE):
+        assert device.ASSUMED_INFO.has(cap)
 
 
 def test_gesture_codes_match():

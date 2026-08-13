@@ -12,12 +12,18 @@ is involved and the tests run in milliseconds.
 
 import asyncio
 
+import protocol as fw  # firmware/protocol.py - see conftest.py
 import pytest
 
 from aibutton import ble_device
 from aibutton.device import (
     BUTTON_EVENT_UUID,
+    CAP_BUZZER,
+    CAP_LED,
+    CAP_PALETTE,
+    DEVICE_INFO_UUID,
     LED_CODES,
+    LED_PALETTE_UUID,
     LED_STATE_UUID,
     SOUND_CMD_UUID,
     STOP_LOOP_CMD,
@@ -26,6 +32,8 @@ from aibutton.device import (
     TriggerType,
     sound_command,
 )
+
+FULL_INFO = fw.device_info_payload(fw.CAP_LED | fw.CAP_BUZZER | fw.CAP_PALETTE)
 
 
 class FakeBleakDevice:
@@ -37,14 +45,26 @@ class FakeClient:
     what happened across a reconnect."""
 
     instances: list["FakeClient"] = []
+    # What a DEVICE_INFO read returns. None means the characteristic isn't
+    # there at all - a button running firmware from before it existed. Set on
+    # the class because instances are created inside the connect loop, where a
+    # test cannot reach them beforehand.
+    info_payload: bytes | None = FULL_INFO
 
     def __init__(self, device, disconnected_callback=None, **kwargs):
         self.device = device
         self._disconnected_callback = disconnected_callback
         self.writes: list[tuple[str, bytes]] = []
+        self.reads: list[str] = []
         self.notify_handler = None
         self.write_fails = False
         FakeClient.instances.append(self)
+
+    async def read_gatt_char(self, uuid):
+        self.reads.append(uuid)
+        if FakeClient.info_payload is None:
+            raise RuntimeError("no such characteristic")
+        return bytearray(FakeClient.info_payload)
 
     async def __aenter__(self):
         return self
@@ -74,6 +94,7 @@ class FakeClient:
 @pytest.fixture(autouse=True)
 def fake_bleak(monkeypatch):
     FakeClient.instances = []
+    FakeClient.info_payload = FULL_INFO
     found = {"device": FakeBleakDevice()}
 
     async def find_device_by_name(name, timeout=None):
@@ -124,6 +145,108 @@ async def test_not_connected_until_the_link_is_up(fake_bleak):
     await _settle()
     assert device.connected is False
     await device.close()
+
+
+# --- asking what it is -------------------------------------------------
+
+async def test_the_device_is_asked_what_it_is_before_anything_is_sent():
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        assert DEVICE_INFO_UUID in client.reads
+        assert device.info.protocol_version == fw.PROTOCOL_VERSION
+        assert device.info.firmware == "%d.%d.%d" % fw.FIRMWARE_VERSION
+        assert set(device.info.names) == {"led", "buzzer", "palette"}
+    finally:
+        await device.close()
+
+
+async def test_a_button_with_no_device_info_is_assumed_to_be_a_pre_v1_one():
+    """Learning to ask must not silence every button that hasn't been
+    reflashed - so an unreadable characteristic falls back to the capabilities
+    this project's older firmware actually has."""
+    FakeClient.info_payload = None
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        device.play_sound(Sound.ACK)
+        await _settle()
+        assert device.info.protocol_version == 0  # "these are guesses"
+        assert (SOUND_CMD_UUID, sound_command(Sound.ACK)) in client.writes
+    finally:
+        await device.close()
+
+
+async def test_no_buzzer_means_no_sound_writes():
+    FakeClient.info_payload = fw.device_info_payload(fw.CAP_LED | fw.CAP_PALETTE)
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        device.play_sound(Sound.ACK)
+        device.start_loop(Sound.ALARM)
+        await _settle()
+        assert not device.info.has(CAP_BUZZER)
+        assert not [u for u, _ in client.writes if u == SOUND_CMD_UUID]
+    finally:
+        await device.close()
+
+
+async def test_silencing_is_never_gated_even_with_no_buzzer_reported():
+    """stop_loop is the safety path. A device that gained a buzzer between
+    connections must not be left ringing because we decided it had none."""
+    FakeClient.info_payload = fw.device_info_payload(fw.CAP_LED)
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        device.stop_loop()
+        await _settle()
+        assert (SOUND_CMD_UUID, bytes([STOP_LOOP_CMD])) in client.writes
+    finally:
+        await device.close()
+
+
+async def test_no_led_means_no_palette_writes():
+    from aibutton.config import LedEffect
+
+    FakeClient.info_payload = fw.device_info_payload(fw.CAP_BUZZER)
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        device.set_palette({LEDState.IDLE.value: LedEffect("solid", "#ff0000")})
+        await _settle()
+        assert not device.info.has(CAP_LED)
+        assert not [u for u, _ in client.writes if u == LED_PALETTE_UUID]
+    finally:
+        await device.close()
+
+
+async def test_an_led_capable_device_still_gets_its_palette():
+    from aibutton.config import LedEffect
+
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        device.set_palette({LEDState.IDLE.value: LedEffect("solid", "#ff0000")})
+        await _settle()
+        assert device.info.has(CAP_LED) and device.info.has(CAP_PALETTE)
+        assert [u for u, _ in client.writes if u == LED_PALETTE_UUID]
+    finally:
+        await device.close()
+
+
+async def test_capabilities_are_re_asked_on_every_reconnect():
+    """The thing on the other end may have been reflashed since - or be a
+    different button entirely."""
+    device = await _connected_device()
+    try:
+        FakeClient.instances[0].drop()
+        for _ in range(200):
+            if len(FakeClient.instances) > 1 and device.connected:
+                break
+            await asyncio.sleep(0.005)
+        assert DEVICE_INFO_UUID in FakeClient.instances[-1].reads
+    finally:
+        await device.close()
 
 
 # --- gestures in -------------------------------------------------------
