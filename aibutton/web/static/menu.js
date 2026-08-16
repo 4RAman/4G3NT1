@@ -8,7 +8,8 @@
 import { el, clear } from './dom.js';
 import { ConfigApi } from './api.js';
 import {
-  BUILTIN_MODES, GESTURES, LED_FIELDS, LED_STATES, LED_STYLE_BY_TYPE,
+  BUILTIN_MODES, GESTURES, LED_FIELDS, LED_STYLE_BY_TYPE,
+  MODE_LED_STATES, SYSTEM_LED_STATES,
   MODE_GROUPS, SETTINGS_GROUPS, TEMPLATE_BY_TYPE, describeEffect, describeTemplate,
 } from './schema.js';
 import { ModeEditor } from './modeEditor.js';
@@ -274,6 +275,10 @@ export class ConfigMenu {
       // (filtered to takeover templates) live, without ModeEditor knowing
       // where the modes list lives.
       getModes: () => this.model.modes,
+      // Same injection for the look pickers: the pool is config-wide and
+      // edited in the Lights tab, so the mode editor reads it rather than
+      // owning it.
+      getLooks: () => this.model.looks || {},
     });
     this.modeDetailEl.append(this.detailEditor.el);
   }
@@ -340,22 +345,95 @@ export class ConfigMenu {
   // One row per device state: a live swatch, what the state means, and the
   // fields the chosen style actually uses. Changing the style re-renders just
   // that row, so the irrelevant fields disappear as you switch.
+  // Three groups, and the split is the point rather than tidiness: the
+  // button's own vocabulary is edited once and globally, a mode-owned state's
+  // entry is only the *default* a mode falls back to, and a named look is a
+  // mode's own appearance. Mirrors SYSTEM_LED_STATES / MODE_LED_STATES in
+  // config.py.
   _renderPaletteSection() {
     if (!this.model.led_palette) this.model.led_palette = {};
+    if (!this.model.looks) this.model.looks = {};
     this.paletteValidators = [];
-    const wrap = el('div', { className: 'palette-wrap' });
-    for (const state of LED_STATES) {
-      if (!this.model.led_palette[state.key]) continue; // server decides the set
-      wrap.append(this._renderPaletteRow(state, wrap));
-    }
+
+    const group = (states) => {
+      const wrap = el('div', { className: 'palette-wrap' });
+      for (const state of states) {
+        if (!this.model.led_palette[state.key]) continue; // server decides the set
+        wrap.append(this._renderEffectRow({
+          get: () => this.model.led_palette[state.key],
+          label: state.label,
+          meaning: state.meaning,
+        }, wrap));
+      }
+      return wrap;
+    };
+
+    this.looksWrap = el('div', { className: 'palette-wrap' });
+    this._renderLooks();
+
+    const add = el('button', { type: 'button', textContent: '+ Add a look' });
+    add.addEventListener('click', () => {
+      let name = 'look';
+      for (let n = 2; this.model.looks[name]; n += 1) name = `look ${n}`;
+      this.model.looks[name] = { style: 'breathe', color: '#ff8800', color2: '#000000', period_s: 2 };
+      this._renderLooks();
+      this._markDirty();
+    });
+
     return el('div', {}, [
       el('p', { className: 'menu-hint', 'data-help': true, textContent: 'The colours the button itself shows. Saving sends them straight to the device - no reflash, no restart. The preview swatches animate the same way the LED does.' }),
-      wrap,
+      group(SYSTEM_LED_STATES),
+      el('h3', { className: 'palette-group', textContent: 'Mode colours' }),
+      el('p', { className: 'menu-hint', 'data-help': true, textContent: 'What a mode shows when it has not picked a look of its own. Edit these to change every mode of that kind at once.' }),
+      group(MODE_LED_STATES),
+      el('h3', { className: 'palette-group', textContent: 'Named looks' }),
+      el('p', { className: 'menu-hint', 'data-help': true, textContent: 'Give a look a name here, then pick it at the top of a mode in the Modes tab. This is how two Pomodoros can look different, and how one colour can be shared by several modes.' }),
+      this.looksWrap,
+      add,
     ]);
   }
 
-  _renderPaletteRow(state, wrap) {
-    const effect = this.model.led_palette[state.key];
+  _renderLooks() {
+    clear(this.looksWrap);
+    const names = Object.keys(this.model.looks).sort();
+    if (!names.length) {
+      this.looksWrap.append(el('p', { className: 'menu-hint', textContent: 'No named looks yet.' }));
+      return;
+    }
+    for (const name of names) {
+      this.looksWrap.append(this._renderEffectRow({
+        get: () => this.model.looks[name],
+        label: name,
+        meaning: '',
+        // Renaming rewrites every mode pointing here, so the pool and the
+        // references can never drift into a dangling name from the UI. The
+        // Python parser still warns about one, because a hand-edited config
+        // can always produce it.
+        rename: (next) => {
+          if (!next || next === name || this.model.looks[next]) return false;
+          this.model.looks[next] = this.model.looks[name];
+          delete this.model.looks[name];
+          for (const mode of this.model.modes || []) {
+            for (const [state, look] of Object.entries(mode.looks || {})) {
+              if (look === name) mode.looks[state] = next;
+            }
+          }
+          return true;
+        },
+        remove: () => {
+          delete this.model.looks[name];
+          // Deliberately leaves the references. The mode editor shows a
+          // "(missing)" entry and the parser warns, which is more honest than
+          // silently changing what several modes look like.
+          this._renderLooks();
+          this._markDirty();
+        },
+      }, this.looksWrap));
+    }
+  }
+
+  _renderEffectRow(spec, wrap) {
+    const effect = spec.get();
     const style = LED_STYLE_BY_TYPE[effect.style] || LED_STYLE_BY_TYPE.solid;
     const row = el('div', { className: 'palette-row' });
 
@@ -363,17 +441,16 @@ export class ConfigMenu {
     applySwatch(swatch, effect);
 
     const fields = el('div', { className: 'settings-grid' });
-    for (const spec of LED_FIELDS) {
+    for (const fieldSpec of LED_FIELDS) {
       // Hide what this style ignores: a rainbow has no colour to pick.
-      if (spec.key !== 'style' && !style.uses.includes(spec.key)) continue;
-      const field = createField(spec, effect, () => {
+      if (fieldSpec.key !== 'style' && !style.uses.includes(fieldSpec.key)) continue;
+      const field = createField(fieldSpec, effect, () => {
         this._markDirty();
         applySwatch(swatch, effect);
         summary.textContent = describeEffect(effect);
         // Switching style changes which fields belong here.
-        if (spec.key === 'style') {
-          const replacement = this._renderPaletteRow(state, wrap);
-          wrap.replaceChild(replacement, row);
+        if (fieldSpec.key === 'style') {
+          wrap.replaceChild(this._renderEffectRow(spec, wrap), row);
         }
       });
       this.paletteValidators.push(field.validate);
@@ -381,15 +458,30 @@ export class ConfigMenu {
     }
 
     const summary = el('span', { className: 'palette-summary', textContent: describeEffect(effect) });
-    row.append(
-      el('div', { className: 'palette-head' }, [
-        swatch,
-        el('span', { className: 'palette-name', textContent: state.label }),
-        el('span', { className: 'palette-meaning', textContent: state.meaning }),
-        summary,
-      ]),
-      fields,
-    );
+    const head = [swatch];
+    if (spec.rename) {
+      const input = el('input', { className: 'inp palette-name', value: spec.label });
+      input.addEventListener('change', () => {
+        if (spec.rename(input.value.trim())) {
+          this._renderLooks();
+          this._markDirty();
+        } else {
+          input.value = spec.label; // taken, empty, or unchanged
+        }
+      });
+      head.push(input);
+    } else {
+      head.push(el('span', { className: 'palette-name', textContent: spec.label }));
+    }
+    if (spec.meaning) head.push(el('span', { className: 'palette-meaning', textContent: spec.meaning }));
+    head.push(summary);
+    if (spec.remove) {
+      const del = el('button', { type: 'button', className: 'danger', textContent: 'Delete' });
+      del.addEventListener('click', spec.remove);
+      head.push(del);
+    }
+
+    row.append(el('div', { className: 'palette-head' }, head), fields);
     return row;
   }
 
@@ -421,7 +513,10 @@ export class ConfigMenu {
     for (const mode of this.model.modes) {
       const editor = (mode === this.selectedMode && this.detailEditor)
         ? this.detailEditor
-        : new ModeEditor(mode, { getModes: () => this.model.modes });
+        : new ModeEditor(mode, {
+          getModes: () => this.model.modes,
+          getLooks: () => this.model.looks || {},
+        });
       const label = mode.name || '(unnamed mode)';
       for (const err of editor.validate()) errors.push(`${label}: ${err}`);
     }

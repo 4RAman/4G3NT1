@@ -365,6 +365,33 @@ _ALLOWED_ACTIVATIONS = {
     "countdown": (ManualActivation,),
 }
 
+# Which LED states belong to a *mode* rather than to the button.
+#
+# The split this encodes: IDLE/LISTENING/THINKING/SUCCESS/ERROR describe what
+# the button is doing and are edited once, globally, in the Lights tab. The
+# states below describe what a particular mode is doing, so their appearance
+# is edited next to the mode - and, since a mode names a look rather than
+# owning the global entry, two Pomodoros can finally look different.
+#
+# Mirrored by `ledStates` on each template descriptor in schema.js;
+# test_webui.py fails if they drift.
+MODE_LED_STATES: dict[str, tuple[str, ...]] = {
+    "actions": (),  # ambient: it never takes the light over
+    "alarm": (LEDState.ALERT.value,),
+    "stopwatch": (LEDState.TIMING.value,),
+    "counter": (LEDState.COUNTING.value,),
+    "pomodoro": (LEDState.WORKING.value, LEDState.RESTING.value),
+    "metronome": (LEDState.METRONOME.value,),
+    "countdown": (LEDState.TIMING.value,),
+}
+
+# The rest: the button's own vocabulary, which no mode owns.
+SYSTEM_LED_STATES: tuple[str, ...] = tuple(
+    state.value
+    for state in LEDState
+    if not any(state.value in states for states in MODE_LED_STATES.values())
+)
+
 
 @dataclass(frozen=True)
 class Mode:
@@ -374,6 +401,12 @@ class Mode:
     name: str
     behavior: Behavior
     activation: Activation
+    # Which named look this mode wears for each LED state it owns, e.g.
+    # {"WORKING": "focus-warm"}. A state left out falls back to the global
+    # palette entry, which is what every mode did before looks existed - so an
+    # empty map is exactly today's behaviour. Keys are validated against
+    # MODE_LED_STATES for the template; values against the config's look pool.
+    looks: dict[str, str] = field(default_factory=dict)
 
     @property
     def template(self) -> str:
@@ -561,6 +594,69 @@ def _parse_palette(raw) -> dict[str, LedEffect]:
     return palette
 
 
+def _parse_looks(raw) -> dict[str, LedEffect]:
+    """The named-look pool: `{"focus-warm": {...}}`.
+
+    A pool rather than an inline effect per mode, for three reasons that all
+    point the same way: two Pomodoros can want different colours, two *modes*
+    can want the same colour, and a name is the thing an ephemeral effect
+    already pushes down the wire (ROADMAP D4). Empty by default - a pool of
+    invented names would be noise, and a mode with no look falls back to the
+    global palette exactly as it always has.
+
+    Per-key fallback like everything else: one broken look costs you that
+    look, not the pool.
+    """
+    looks: dict[str, LedEffect] = {}
+    if "looks" not in raw:
+        return looks
+    entries = raw["looks"]
+    if not isinstance(entries, dict):
+        log.error("config: 'looks' must be an object - ignored")
+        return looks
+    for name, entry in entries.items():
+        if not (isinstance(name, str) and name.strip()):
+            log.error("config: looks has an unusable name %r - ignored", name)
+            continue
+        looks[name] = _parse_effect(entry, f"looks.{name}", LedEffect())
+    return looks
+
+
+def _parse_mode_looks(raw, where: str, template: str, known: set[str]) -> dict[str, str]:
+    """One mode's state -> look-name map, dropping anything unusable.
+
+    Never fatal: a mode whose look is misspelled should light up in its
+    default colour and say so, not vanish. That is the same fail-soft rule
+    every other key follows, and it matters more here because a look is
+    cosmetic - losing the mode over it would be wildly disproportionate.
+    """
+    entry = raw.get("looks")
+    if entry is None:
+        return {}
+    if not isinstance(entry, dict):
+        log.error("config: %s.looks must be an object - ignored", where)
+        return {}
+
+    owned = MODE_LED_STATES.get(template, ())
+    chosen: dict[str, str] = {}
+    for state, look in entry.items():
+        if state not in owned:
+            log.warning(
+                "config: %s.looks names %r, which a %r mode does not own (%s) - ignored",
+                where, state, template, "/".join(owned) or "no LED states",
+            )
+            continue
+        if not (isinstance(look, str) and look in known):
+            log.warning(
+                "config: %s.looks[%r] is %r, which is not in 'looks' - "
+                "using the palette colour for %s",
+                where, state, look, state,
+            )
+            continue
+        chosen[state] = look
+    return chosen
+
+
 @dataclass(frozen=True)
 class AppConfig:
     # The name the ESP32 advertises; the host scans for it (see DESIGN-ESP32.md).
@@ -574,6 +670,10 @@ class AppConfig:
     # What each LED state looks like. Pushed to the device on connect and on
     # every edit, so the button and the web UI's virtual device agree.
     led_palette: dict[str, LedEffect] = field(default_factory=_default_palette)
+    # Named looks a mode can wear instead of the palette entry for the state
+    # it is showing (see `look_for`). Empty means every mode uses the palette,
+    # which is what they all did before this existed.
+    looks: dict[str, LedEffect] = field(default_factory=dict)
     # Where the swappable scene files live and which one is active. The scene
     # itself is merged in before parsing (see load_config_full), so nothing
     # downstream of here knows a scene was involved.
@@ -984,7 +1084,7 @@ def _parse_countdown_body(raw: dict, where: str) -> CountdownBehavior:
     )
 
 
-def _parse_mode(raw, idx: int) -> Mode | None:
+def _parse_mode(raw, idx: int, looks: set[str] | None = None) -> Mode | None:
     """Parse one mode. A mode with a broken activation, a template<->
     activation nature mismatch, or no usable body is skipped entirely
     (logged) - the fail-soft floor is the built-in default modes."""
@@ -1030,7 +1130,12 @@ def _parse_mode(raw, idx: int) -> Mode | None:
 
     if behavior is None:
         return None
-    return Mode(name=name, behavior=behavior, activation=activation)
+    return Mode(
+        name=name,
+        behavior=behavior,
+        activation=activation,
+        looks=_parse_mode_looks(raw, where, template, looks or set()),
+    )
 
 
 def _migrate_rule(raw, idx: int) -> Mode | None:
@@ -1100,14 +1205,20 @@ def _migrate_rule(raw, idx: int) -> Mode | None:
     )
 
 
-def _parse_modes(raw: dict) -> tuple[Mode, ...]:
+def _parse_modes(raw: dict, looks: set[str] | None = None) -> tuple[Mode, ...]:
     """Resolve the modes list, applying the migration ladder:
-    modes (v0.3) -> rules (v0.2) -> commands (v0.1) -> built-in defaults."""
+    modes (v0.3) -> rules (v0.2) -> commands (v0.1) -> built-in defaults.
+
+    `looks` is the pool of names a mode may reference; it is parsed first so a
+    dangling reference is caught here and reported, rather than discovered at
+    the moment the light should have changed colour. The legacy ladders below
+    predate looks entirely and never produce one.
+    """
     if isinstance(raw.get("modes"), list):
         modes = tuple(
             mode
             for idx, entry in enumerate(raw["modes"])
-            if (mode := _parse_mode(entry, idx)) is not None
+            if (mode := _parse_mode(entry, idx, looks)) is not None
         )
         if not modes:
             log.error("config: no valid modes - using defaults")
@@ -1151,11 +1262,16 @@ def parse_config(raw: dict) -> AppConfig:
     known = {
         "ble_device_name", "sounds_enabled", "database_path",
         "web_enabled", "web_host", "web_port",
-        "modes", "rules", "commands", "led_palette", "scenes",
+        "modes", "rules", "commands", "led_palette", "looks", "scenes",
     }
     for key in raw:
         if key not in known:
             log.warning("config: unknown key %r - ignored", key)
+
+    # The look pool is parsed before the modes so a mode naming a look that
+    # does not exist is reported here rather than at the moment the light
+    # should have changed colour.
+    looks = _parse_looks(raw)
 
     return AppConfig(
         ble_device_name=_take(raw, "ble_device_name", str, defaults.ble_device_name),
@@ -1164,10 +1280,25 @@ def parse_config(raw: dict) -> AppConfig:
         web_enabled=_take(raw, "web_enabled", bool, defaults.web_enabled),
         web_host=_take(raw, "web_host", str, defaults.web_host),
         web_port=_take(raw, "web_port", int, defaults.web_port),
-        modes=_parse_modes(raw),
+        modes=_parse_modes(raw, set(looks)),
         led_palette=_parse_palette(raw),
+        looks=looks,
         scenes=scenes.parse_settings(raw.get("scenes")),
     )
+
+
+def look_for(config: AppConfig, mode: Mode | None, state: LEDState) -> LedEffect | None:
+    """The look `mode` wears for `state`, or None to use the palette entry.
+
+    None rather than the palette entry on purpose: None is what `set_led`
+    already means by "no override", so a mode that has not chosen a look costs
+    nothing - no effect write, no borrowed palette entry, and a device that
+    predates ephemeral effects behaves exactly as it did.
+    """
+    if mode is None:
+        return None
+    name = mode.looks.get(state.value)
+    return config.looks.get(name) if name else None
 
 
 def parse_with_warnings(raw: dict) -> tuple[AppConfig, list[str]]:
@@ -1301,12 +1432,23 @@ def _activation_to_dict(activation: Activation) -> dict:
     raise TypeError(f"unknown activation type {type(activation).__name__}")
 
 
+def _effect_to_dict(effect: LedEffect) -> dict:
+    return {
+        "style": effect.style,
+        "color": effect.color,
+        "color2": effect.color2,
+        "period_s": effect.period_s,
+    }
+
+
 def _mode_to_dict(mode: Mode) -> dict:
     entry: dict = {
         "name": mode.name,
         "template": mode.template,
         "activation": _activation_to_dict(mode.activation),
     }
+    if mode.looks:  # omitted when empty, so a mode that uses the palette
+        entry["looks"] = dict(mode.looks)  # round-trips as the plain object it was
     if isinstance(mode.behavior, ActionsBehavior):
         if mode.behavior.unless_logged_today is not None:
             entry["unless_logged_today"] = mode.behavior.unless_logged_today
@@ -1370,14 +1512,9 @@ def as_dict(cfg: AppConfig) -> dict:
         "scenes": scenes.settings_to_dict(cfg.scenes),
         "modes": [_mode_to_dict(mode) for mode in cfg.modes],
         "led_palette": {
-            name: {
-                "style": effect.style,
-                "color": effect.color,
-                "color2": effect.color2,
-                "period_s": effect.period_s,
-            }
-            for name, effect in cfg.led_palette.items()
+            name: _effect_to_dict(effect) for name, effect in cfg.led_palette.items()
         },
+        "looks": {name: _effect_to_dict(effect) for name, effect in cfg.looks.items()},
     }
 
 

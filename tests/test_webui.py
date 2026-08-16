@@ -212,6 +212,20 @@ def test_lights_editor_offers_every_led_style():
     assert _descriptor_values("LED_STYLES", "type") == set(LED_STYLES)
 
 
+def test_every_template_claims_the_same_led_states_on_both_sides():
+    """Which states a mode owns decides two things that must agree: which
+    pickers the mode editor shows, and which references the Python parser will
+    accept. Drift here means the editor offers a look the parser then drops."""
+    from aibutton.config import MODE_LED_STATES
+
+    source = _SCHEMA_JS.read_text(encoding="utf-8")
+    pairs = re.findall(r"type: '(\w+)',\s*\n\s*ledStates: \[([^\]]*)\]", source)
+    from_js = {
+        name: tuple(re.findall(r"'([^']+)'", states)) for name, states in pairs
+    }
+    assert from_js == {name: tuple(v) for name, v in MODE_LED_STATES.items()}
+
+
 async def test_config_reload_endpoint(client, ctx):
     with open(ctx.cm.path, "w", encoding="utf-8") as f:
         json.dump({"ble_device_name": "EditedViaSSH"}, f)

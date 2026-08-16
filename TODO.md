@@ -62,15 +62,16 @@ the mirrored tables.
 
 | Body of work | Items it spans | Gate |
 |---|---|---|
-| **The colour engine** — a stop list instead of `{style, 2 colours, period}`; progress ramps; named looks a mode picks from | 0b·3 ✔, **3**, **4**, 0a's per-app colour | ~~Wire change~~ — **ungated**, effects shipped |
+| **The colour engine** — a stop list instead of `{style, 2 colours, period}`; progress ramps; named looks a mode picks from | 0b·3 ✔, **3** ✔, **4**, 0a's per-app colour ✔ | ~~Wire change~~ — **ungated**; only item 4 (the slider + safety floor) is left |
 | **The gesture engine** — N taps, hold levels, the ramp that renders them | 0b·2 ✔, the 5-tap toggle | ~~Wire change~~ — **ungated** for taps; hold levels still need firmware |
 | **Depth without the wire** — metronome config ✔, event values ✔, Tinker mode, filtering/export | **1**, **9**, **12** | None — ship freely |
 | **Reach and hosting** — launcher, remote UI | **0a**, **7**, **8** | 0a gates 7 |
 
 **The gate column is the news.** Two of these four were blocked on a reflash
-and are not any more, which makes item **3** (named looks per mode) the
-obvious next thing: it is the last piece 0a's launcher needs, and it is now
-pure host-side work.
+and are not any more. With item 3 shipped, **0a's launcher is the next thing
+on the critical path** and its only remaining dependency is a core change in
+`main.py` — a takeover mode that can enter another one. Colour, gestures and
+config are all in place for it.
 
 Three things fall out of that table and are worth stating rather than
 rediscovering:
@@ -139,16 +140,19 @@ thing to add, and it wants care — a launcher that can launch itself, or an
 app that enters the launcher that enters the app, needs a depth guard or an
 explicit "replace, don't nest" rule. Decide which and write it down.
 
-**Depends on** per-app colour (item 3), or the LED shows the same thing for
-every entry in the list, which defeats the cycling. That dependency is now
-**entirely host-side**: 0b's ephemeral effects shipped, so showing a
-different colour per entry is a `set_led(state, effect)` call in the
-launcher's loop and needs nothing from the firmware. Item 3 is what decides
-where those colours are *stored*.
+~~**Depends on** per-app colour (item 3)~~ — **that dependency is discharged.**
+Ephemeral effects shipped (0b·3) and named looks shipped (item 3), so a
+launcher cycling through apps can show each one's colour by reading
+`mode.looks` and calling `set_led(state, effect)`. Nothing in the firmware and
+nothing in config is missing for it.
 
 **Also cheaper than it was:** `triple_tap` is a real gesture now, so the
-launcher can be reached without spending one of the original three. The
-arithmetic in the first paragraph was written when there were three.
+launcher can be reached without spending one of the original three.
+
+**What is actually left**, and it is now the only thing: the core change in
+the next paragraph — a takeover mode that can enter another takeover mode,
+plus the depth guard or the explicit "replace, don't nest" rule.
+
 
 ### 0b. Freeze the wire protocol as v1 ✔ done
 
@@ -287,7 +291,52 @@ File anything broken as its own item here rather than fixing inline if it's
 non-trivial - this item is about finding gaps, not necessarily closing them
 all in one sitting.
 
-### 3. Put mode-relevant LED pickers inside the Modes tab
+### 3. Put mode-relevant LED pickers inside the Modes tab ✔ shipped
+
+**All three parts of the stronger version landed.** A top-level `looks` pool
+in config, referenced by name per LED state from a mode; the picker at the
+*top* of a mode's form, above the behaviour fields; and the Lights tab split
+into the button's own colours, the mode defaults, and the named-look pool.
+
+The shape, and why it is this and not a per-mode inline effect:
+
+- **A mode names a look; it does not own one.** `looks: {"focus-warm": {...}}`
+  at the top level, `"looks": {"WORKING": "focus-warm"}` on the mode. That
+  solves "two Pomodoros cannot look different" *and* gives reuse across modes
+  *and* is already the shape D4 pushes down the wire - a named look is a thing
+  you can send without allocating a global `LEDState`.
+- **Which states a mode may colour is data.** `MODE_LED_STATES` in
+  `config.py`, mirrored as `ledStates` on each template descriptor in
+  `schema.js`, with `test_webui.py` failing on drift. Adding a template means
+  adding a descriptor, not a branch in the editor.
+- **A missing look costs a colour, never a mode.** A dangling name is dropped
+  with a warning and the mode runs on the palette entry. Deleting a look from
+  the pool deliberately leaves the references pointing at nothing - the editor
+  shows `(missing)` and the parser warns, which is more honest than silently
+  changing what several modes look like. Renaming *does* rewrite references,
+  because there the intent is unambiguous.
+- **The global entry is the fallback, not dead weight.** A mode that picks
+  nothing resolves to `None`, which is what `set_led` already means by "no
+  override" - so it costs no effect write at all, and a device with no
+  `CAP_EFFECT` behaves exactly as it did.
+- **Where a live effect gets its shape.** `run_countdown` and `run_metronome`
+  build on the mode's look when it has one and on the palette otherwise. That
+  makes the countdown's own `style`/`period_s` fields redundant when a look is
+  set, and the look wins - having the template's fields quietly override a
+  chosen look would make picking one do nothing. Those two fields are now a
+  deprecation candidate.
+
+**Verified** in a throwaway instance on port 8099: the Lights tab renders the
+three groups, a Pomodoro's form shows one picker per owned state at the top,
+picking a look updates the summary live, Save round-trips through the real
+parser with no warnings, and renaming a look rewrote the references in two
+other modes. Suite: `test_looks.py`, plus the drift guard in `test_webui.py`.
+
+**Left open:** item 14 (Tinker mode) was waiting on this and can now decide
+what "basic" contains - the look picker is the thing that should be at the top
+of a basic form. The old scope of this item follows.
+
+---
 
 **Current state.** The Lights tab ([menu.js](aibutton/web/static/menu.js)
 `_renderPaletteSection`/`_renderPaletteRow`) lists all 10 `LED_STATES`

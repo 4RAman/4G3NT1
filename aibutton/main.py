@@ -254,6 +254,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         PomodoroBehavior,
         StopwatchBehavior,
         bound_triggers,
+        look_for,
     )
     from .rules import resolve
     from .scheduler import due_alarm
@@ -295,13 +296,35 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     tones = ToneLibrary()
     store = EventStore(cm.config.database_path)
 
+    # The takeover mode that currently owns the button, if any. Kept here so
+    # `set_led` can find the look it wears without every run_* loop having to
+    # be handed its own Mode and pass it along on every call.
+    active_mode = None
+
     def set_led(state: LEDState, effect=None) -> None:
         """Show `state`, optionally wearing a one-off `effect` instead of its
         palette entry - which is how a mode gets its own look without
-        allocating a global LEDState (ROADMAP D4)."""
+        allocating a global LEDState (ROADMAP D4).
+
+        With no explicit effect, the *active mode's* look for this state is
+        used if it has chosen one. That is what makes two Pomodoros able to
+        look different: the state stays `WORKING` for both, and only its
+        appearance differs. A mode that has chosen nothing resolves to None and
+        the device falls back to the palette, exactly as before looks existed.
+        """
+        if effect is None:
+            effect = look_for(cm.config, active_mode, state)
         device.set_led(state, effect)
         status.led_state = state.value
         status.led_effect = effect
+
+    def base_look(state: LEDState):
+        """The look a mode should build its live effect on top of - its own if
+        it has one, the palette entry otherwise. What `run_countdown` walks the
+        colour of, and what `run_metronome` rewrites the period of."""
+        return look_for(cm.config, active_mode, state) or cm.config.led_palette.get(
+            state.value
+        )
 
     def play_sound(sound: Sound) -> None:
         """Feedback tone + the web UI's mirror of it. sounds_enabled is read
@@ -452,20 +475,23 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 store.log_event(behavior.dismiss_event, mode=mode_name)
             return ActionResult(True, f"Dismissed: {label}")
 
-    async def fire_alarm(mode_name: str, behavior: AlarmBehavior) -> None:
+    async def fire_alarm(mode) -> None:
         """Run a scheduled alarm's ring loop and surface its result, then
         drop back to the ambient layer (IDLE)."""
+        nonlocal active_mode
         play_sound(Sound.ACK)
         status.last_trigger = None
-        status.last_mode = mode_name
-        log.info("scheduled alarm %r firing", mode_name)
-        entered_at = store.log_mode_enter(mode_name)
+        status.last_mode = mode.name
+        log.info("scheduled alarm %r firing", mode.name)
+        entered_at = store.log_mode_enter(mode.name)
+        active_mode = mode  # so ALERT wears this alarm's look, if it has one
         try:
-            result = await ring_alarm(behavior, mode_name)
+            result = await ring_alarm(mode.behavior, mode.name)
         except Exception as exc:  # an alarm bug must never kill the loop
             log.exception("alarm crashed")
             result = ActionResult(False, f"internal error: {exc}")
-        store.log_mode_exit(mode_name, entered_at)
+        store.log_mode_exit(mode.name, entered_at)
+        active_mode = None
         status.last_ok = result.ok
         status.last_message = result.message
         set_led(LEDState.IDLE)
@@ -720,9 +746,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         status.last_mode = mode_name
 
         def push_tempo(tempo: float) -> int:
-            """Show METRONOME beating at `tempo`. The configured entry supplies
-            the colour and style; only the period is the session's business."""
-            base = cm.config.led_palette.get(LEDState.METRONOME.value)
+            """Show METRONOME beating at `tempo`. The mode's look (or the
+            palette entry) supplies the colour and style; only the period is
+            the session's business."""
+            base = base_look(LEDState.METRONOME)
             period, per_flash = metronome_flash(tempo)
             if base is not None:
                 set_led(LEDState.METRONOME, replace(base, period_s=period))
@@ -804,7 +831,17 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         total = behavior.minutes * 60
         deadline = loop.time() + total
         label = behavior.label or mode_name
-        period = max(_MIN_FLASH_PERIOD_S, behavior.period_s)
+        # Where the *shape* of the light comes from. A named look wins when the
+        # mode has one - looks exist to be a mode's appearance, so having the
+        # template's own fields quietly override one would make choosing a look
+        # do nothing here. With no look these are the template's fields, which
+        # is what a countdown has always used.
+        look = look_for(cm.config, active_mode, LEDState.TIMING)
+        style = look.style if look is not None else behavior.style
+        period = max(
+            _MIN_FLASH_PERIOD_S,
+            look.period_s if look is not None else behavior.period_s,
+        )
         pushed: str | None = None
 
         def paint(progress: float) -> None:
@@ -815,13 +852,13 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 pushed, colour, _COUNTDOWN_COLOR_STEP
             ):
                 return
-            base = cm.config.led_palette.get(LEDState.TIMING.value)
+            base = base_look(LEDState.TIMING)
             if base is None:
                 return
             pushed = colour
             set_led(
                 LEDState.TIMING,
-                replace(base, style=behavior.style, color=colour, period_s=period),
+                replace(base, style=style, color=colour, period_s=period),
             )
 
         def left() -> float:
@@ -874,11 +911,16 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         (IDLE). Dispatches by behaviour type: alarm rings, stopwatch times,
         counter counts. Exception-guarded so a handler bug never kills the
         main loop (mirrors fire_alarm)."""
+        nonlocal active_mode
         play_sound(Sound.ACK)
         status.last_trigger = None
         status.last_mode = mode.name
         log.info("entering takeover mode %r (%s)", mode.name, mode.template)
         entered_at = store.log_mode_enter(mode.name)
+        # Set before dispatch so the first set_led inside the loop already
+        # wears this mode's look, and cleared after so the ambient layer's
+        # IDLE below is the palette's again.
+        active_mode = mode
         try:
             if isinstance(mode.behavior, AlarmBehavior):
                 result = await ring_alarm(mode.behavior, mode.name)
@@ -898,6 +940,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             log.exception("takeover %r crashed", mode.name)
             result = ActionResult(False, f"internal error: {exc}")
         store.log_mode_exit(mode.name, entered_at)
+        active_mode = None
         status.last_ok = result.ok
         status.last_message = result.message
         set_led(LEDState.IDLE)
@@ -1029,7 +1072,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 if due is not None:
                     mode, key = due
                     fired.add(key)
-                    await fire_alarm(mode.name, mode.behavior)
+                    await fire_alarm(mode)
             except asyncio.CancelledError:
                 raise  # shutdown, not a fault
             except Exception as exc:

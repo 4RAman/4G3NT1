@@ -216,6 +216,7 @@ export function describeActivation(activation) {
 export const TEMPLATES = [
   {
     type: 'actions',
+    ledStates: [],
     label: 'Actions',
     nature: 'ambient',
     allowedActivations: ['always', 'window'],
@@ -238,6 +239,7 @@ export const TEMPLATES = [
   },
   {
     type: 'alarm',
+    ledStates: ['ALERT'],
     label: 'Alarm',
     nature: 'takeover',
     allowedActivations: ['schedule'],
@@ -264,6 +266,7 @@ export const TEMPLATES = [
   },
   {
     type: 'stopwatch',
+    ledStates: ['TIMING'],
     label: 'Stopwatch',
     nature: 'takeover',
     allowedActivations: ['manual'], // started by an enter_mode gesture only
@@ -280,6 +283,7 @@ export const TEMPLATES = [
   },
   {
     type: 'counter',
+    ledStates: ['COUNTING'],
     label: 'Counter',
     nature: 'takeover',
     allowedActivations: ['manual'], // started by an enter_mode gesture only
@@ -296,6 +300,7 @@ export const TEMPLATES = [
   },
   {
     type: 'metronome',
+    ledStates: ['METRONOME'],
     label: 'Metronome',
     nature: 'takeover',
     allowedActivations: ['manual'], // started by an enter_mode gesture only
@@ -332,6 +337,7 @@ export const TEMPLATES = [
 
 TEMPLATES.push({
   type: 'countdown',
+  ledStates: ['TIMING'],
   label: 'Countdown',
   nature: 'takeover',
   allowedActivations: ['manual'], // a countdown that starts itself is an alarm
@@ -381,6 +387,7 @@ TEMPLATES.push({
 
 TEMPLATES.push({
   type: 'pomodoro',
+  ledStates: ['WORKING', 'RESTING'],
   label: 'Pomodoro',
   nature: 'takeover',
   allowedActivations: ['manual'], // started by an enter_mode gesture only
@@ -595,6 +602,22 @@ export const LED_STATES = [
   { key: 'RESTING', label: 'Pomodoro resting', meaning: 'a break is running' },
   { key: 'METRONOME', label: 'Metronome running', meaning: 'pulses at the tapped tempo' },
 ];
+
+// The split the Lights tab and the mode editor divide on, derived from the
+// templates rather than listed again: a state named by some template's
+// `ledStates` belongs to whichever mode is running, and the rest belong to the
+// button itself. Mirrors MODE_LED_STATES / SYSTEM_LED_STATES in config.py;
+// test_webui.py fails if they drift.
+export const MODE_LED_STATE_KEYS = new Set(
+  TEMPLATES.flatMap((t) => t.ledStates || []),
+);
+export const SYSTEM_LED_STATES = LED_STATES.filter(
+  (s) => !MODE_LED_STATE_KEYS.has(s.key),
+);
+export const MODE_LED_STATES = LED_STATES.filter(
+  (s) => MODE_LED_STATE_KEYS.has(s.key),
+);
+export const LED_STATE_BY_KEY = Object.fromEntries(LED_STATES.map((s) => [s.key, s]));
 
 export const LED_FIELDS = [
   { key: 'style', label: 'Style', kind: 'select',

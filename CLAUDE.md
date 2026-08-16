@@ -219,6 +219,14 @@ Three consequences for code written today:
 - **A takeover mode must be escapable with a press.** Alarm, stopwatch,
   counter, pomodoro and metronome all exit on a gesture; the Pomodoro parser
   warns if you unbind its only exit.
+- **A mode names a look; it never owns one.** The pool is `AppConfig.looks`
+  and a mode holds `{state: look-name}`. Which states a mode may colour is
+  `MODE_LED_STATES` in [config.py](aibutton/config.py), mirrored as
+  `ledStates` on each template descriptor in
+  [schema.js](aibutton/web/static/schema.js) —
+  [test_webui.py](tests/test_webui.py) fails on drift. A mode that names
+  nothing resolves to `None`, which is what `set_led` already means by "no
+  override", so the palette stays the fallback and costs no wire traffic.
 
 ### When you change the protocol
 

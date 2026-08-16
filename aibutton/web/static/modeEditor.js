@@ -17,7 +17,9 @@ import {
   TEMPLATES, TEMPLATE_BY_TYPE,
   ACTIVATIONS, ACTIVATION_BY_TYPE, describeActivation,
   describeExit, findEntryPoints,
+  LED_STATE_BY_KEY, describeEffect,
 } from './schema.js';
+import { paint as applySwatch } from './ledPreview.js';
 import { createField } from './widgets.js';
 
 export class ModeEditor {
@@ -73,11 +75,88 @@ export class ModeEditor {
     // A stable container so refreshExplainers() can rewrite the how-to-get-in
     // / how-to-get-out lines without rebuilding the fields you are editing.
     this.howtoEl = el('div', { className: 'howto' });
+    // Colour above the mechanics, deliberately: what a mode looks like is how
+    // you recognise it going off from across the room, not an afterthought
+    // setting. Only takeover modes have one - an everyday mode never owns the
+    // light long enough to have an appearance of its own.
     this.bodyEl.append(
-      this._header(), this.howtoEl, this._templatePicker(), this._activationPicker(),
+      this._header(), this.howtoEl, this._looksPicker(),
+      this._templatePicker(), this._activationPicker(),
     );
     this.refreshExplainers();
     return this.bodyEl;
+  }
+
+  /**
+   * One picker per LED state this template owns, choosing a named look from
+   * the pool (or the standard colour). A *reference*, not an inline effect:
+   * that is what lets two Pomodoros differ while `WORKING` stays one shared
+   * state, and it is the same shape the wire already pushes (ROADMAP D4).
+   */
+  _looksPicker() {
+    const descriptor = TEMPLATE_BY_TYPE[this.mode.template];
+    const states = descriptor?.ledStates || [];
+    const wrap = el('div', { className: 'looks-row' });
+    if (!states.length) {
+      wrap.hidden = true;
+      return wrap;
+    }
+    const pool = this.handlers.getLooks?.() || {};
+    const names = Object.keys(pool).sort();
+
+    wrap.append(el('span', { className: 'fld-label', textContent: 'How it looks' }));
+    for (const key of states) {
+      const state = LED_STATE_BY_KEY[key] || { key, label: key, meaning: '' };
+      const select = el('select', { className: 'inp' }, [
+        el('option', { value: '', textContent: '- standard colour -' }),
+        ...names.map((n) => el('option', { value: n, textContent: n })),
+      ]);
+      const chosen = this.mode.looks?.[key] || '';
+      // A look deleted from the pool leaves a dangling name. Show it rather
+      // than silently snapping to the standard colour - the Python parser
+      // warns about exactly this, and the two should agree.
+      if (chosen && !names.includes(chosen)) {
+        select.append(el('option', { value: chosen, textContent: `${chosen} (missing)` }));
+      }
+      select.value = chosen;
+
+      const swatch = el('span', { className: 'palette-swatch' });
+      const summary = el('span', { className: 'palette-summary' });
+      const paint = () => {
+        const effect = pool[select.value];
+        if (effect) {
+          applySwatch(swatch, effect);
+          summary.textContent = describeEffect(effect);
+        } else {
+          swatch.style.background = '';
+          summary.textContent = select.value ? 'no such look' : 'uses the Lights tab colour';
+        }
+      };
+      paint();
+
+      select.addEventListener('change', () => {
+        if (!this.mode.looks) this.mode.looks = {};
+        if (select.value) this.mode.looks[key] = select.value;
+        else delete this.mode.looks[key];
+        // An empty map is how "uses the palette" round-trips, and the Python
+        // serialiser omits the key entirely - so drop it here too.
+        if (!Object.keys(this.mode.looks).length) delete this.mode.looks;
+        paint();
+        this._changed();
+      });
+
+      wrap.append(el('div', { className: 'looks-pick' }, [
+        el('span', { className: 'palette-name', textContent: state.label }),
+        swatch, select, summary,
+      ]));
+    }
+    if (!names.length) {
+      wrap.append(el('span', {
+        className: 'menu-hint', 'data-help': true,
+        textContent: 'No named looks yet - add one in the Lights tab to give this mode its own colour.',
+      }));
+    }
+    return wrap;
   }
 
   /**
@@ -184,7 +263,10 @@ export class ModeEditor {
     if (!descriptor) return;
     // Strip old template-specific flat fields off the mode, keep core keys.
     for (const key of [...GESTURES.map((g) => g.key), 'unless_logged_today',
-      'message', 'label', 'snooze_minutes', 'dismiss_event', 'log_as', 'event']) {
+      'message', 'label', 'snooze_minutes', 'dismiss_event', 'log_as', 'event',
+      // A Pomodoro's WORKING look means nothing on a stopwatch, and the Python
+      // parser would warn that the mode does not own that state.
+      'looks']) {
       delete this.mode[key];
     }
     this.mode.template = type;
