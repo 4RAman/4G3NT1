@@ -1,7 +1,7 @@
 # AI Button
 
-One physical button, three gestures (short press / long press / double
-tap), routed through a **mode machine** — the button is always in exactly
+One physical button, four gestures (short press / long press / double tap /
+triple tap), routed through a **mode machine** — the button is always in exactly
 one mode (the Default, a time-windowed override, a ringing alarm, a
 running stopwatch, an open counter), and the mode decides what each
 gesture means. An RGB LED and feedback sounds show device state.
@@ -219,8 +219,8 @@ in JavaScript that nothing tests.
 With `MockDevice` behind the seam, the browser *is* the button — you drive
 everything from the page:
 
-- **Simulate buttons** fire short press / long press / double tap
-  through the real rules → actions → status pipeline.
+- **Simulate buttons** fire every gesture through the real rules →
+  actions → status pipeline.
 - **Virtual device panel** mirrors the LED (same animations: blue
   breathe, white pulse, …) and plays the device's actual feedback
   tones in the browser.

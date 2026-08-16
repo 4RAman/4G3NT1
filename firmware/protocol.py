@@ -2,12 +2,14 @@
 # tests/test_protocol.py imports both halves and fails if they drift, so
 # change one and change the other.
 #
-#   DEVICE_INFO   read    version + what this device can do  (ESP32 -> host)
-#   BUTTON_EVENT  notify  gesture code           (ESP32 -> host)
-#   LED_STATE     write   LED state code         (host -> ESP32)
-#   SOUND_CMD     write   sound command byte     (host -> ESP32)
-#   LED_PALETTE   write   what one state looks like
-#   OTA_CONTROL   -       reserved, not implemented (see below)
+#   DEVICE_INFO     read    version + what this device can do  (ESP32 -> host)
+#   BUTTON_EVENT    notify  gesture code (+ parameter)         (ESP32 -> host)
+#   LED_STATE       write   LED state code         (host -> ESP32)
+#   SOUND_CMD       write   sound command byte     (host -> ESP32)
+#   LED_PALETTE     write   what one state looks like
+#   LED_EFFECT      write   render *this look*, now, without naming a state
+#   GESTURE_CONFIG  write   how many taps to look for
+#   OTA_CONTROL     -       reserved, not implemented (see below)
 #
 # Rules for changing any of this, because the next device may be in someone
 # else's pocket and there is no way to reflash one you do not have:
@@ -26,6 +28,8 @@ LED_STATE_UUID = "f3641402-00b0-4240-ba50-05ca45bf8abc"
 SOUND_CMD_UUID = "f3641403-00b0-4240-ba50-05ca45bf8abc"
 LED_PALETTE_UUID = "f3641404-00b0-4240-ba50-05ca45bf8abc"
 DEVICE_INFO_UUID = "f3641405-00b0-4240-ba50-05ca45bf8abc"
+LED_EFFECT_UUID = "f3641407-00b0-4240-ba50-05ca45bf8abc"
+GESTURE_CONFIG_UUID = "f3641408-00b0-4240-ba50-05ca45bf8abc"
 
 # Reserved, deliberately unimplemented. Claiming the UUID now costs nothing
 # and means the day OTA is built it is not also a protocol break - which
@@ -47,7 +51,7 @@ OTA_CONTROL_UUID = "f3641406-00b0-4240-ba50-05ca45bf8abc"
 # device, and a host that hard-coded it would be describing itself.
 
 PROTOCOL_VERSION = 1
-FIRMWARE_VERSION = (0, 4, 0)
+FIRMWARE_VERSION = (0, 5, 0)
 
 CAP_LED = 0x0001      # an LED came up and can be driven
 CAP_BUZZER = 0x0002   # a buzzer came up and can be driven
@@ -60,6 +64,9 @@ CAP_BATTERY = 0x0010
 CAP_IMU = 0x0020
 CAP_MIC = 0x0040
 CAP_OTA = 0x0080
+
+CAP_EFFECT = 0x0100          # LED_EFFECT: a look can be pushed without a state code
+CAP_GESTURE_PARAMS = 0x0200  # gestures carry a parameter, and GESTURE_CONFIG is read
 
 DEVICE_INFO_LEN = 6
 
@@ -74,10 +81,30 @@ def device_info_payload(capabilities, firmware=None, protocol_version=PROTOCOL_V
     ])
 
 # --- gestures (notified up) -------------------------------------------
+#
+# A notify is one byte, or two:
+#
+#   [code]         the classic three, unchanged and unchangeable
+#   [kind, param]  a gesture kind plus a number - N taps, hold level N
+#
+# The three legacy codes are *not* repurposed and never will be, so a host
+# that only understands one-byte notifies keeps working exactly as it did.
+# The firmware emits the legacy form whenever one exists (1 tap, 2 taps, a
+# hold) and the parameterised form only past that, which means an old host
+# does not receive gestures it could not have named anyway. That is the
+# degradation the "add, never repurpose" rule is for (ROADMAP D5).
 
 SHORT_PRESS = 0x01
 LONG_PRESS = 0x02
 DOUBLE_TAP = 0x03
+
+# Kinds, which take a parameter byte. Deliberately in a range the legacy
+# codes will never reach.
+GESTURE_TAP = 0x10   # param: how many taps
+# Reserved, deliberately unimplemented - the detector emits one hold level
+# today. Claiming the kind now is what makes hold levels a host-side change
+# later instead of a reflash, which is the same bet OTA_CONTROL_UUID makes.
+GESTURE_HOLD = 0x11  # param: which hold level
 
 # Keyed by the host's TriggerType values: the wire carries exactly what the
 # mode machine consumes.
@@ -86,6 +113,68 @@ GESTURE_CODES = {
     "long_press": LONG_PRESS,
     "double_tap": DOUBLE_TAP,
 }
+
+# Taps beyond this are a fidget, not a gesture, and the limit keeps the name
+# table finite so nothing has to parse a string on the device.
+MAX_TAPS_LIMIT = 9
+
+# What N taps is called. The first two are the names the mode machine has
+# always used; the rest exist so a new tap count is a host-side data change
+# and never another reflash - which is the entire point of parameterising.
+TAP_NAMES = {1: "short_press", 2: "double_tap", 3: "triple_tap"}
+for _count in range(4, MAX_TAPS_LIMIT + 1):
+    TAP_NAMES[_count] = "tap_%d" % _count
+TAP_COUNTS = {}
+for _count in TAP_NAMES:
+    TAP_COUNTS[TAP_NAMES[_count]] = _count
+
+
+def gesture_payload(name):
+    """The BUTTON_EVENT notify for a gesture, or None if it has no encoding.
+
+    Legacy one-byte where one exists, [GESTURE_TAP, count] past that.
+    """
+    code = GESTURE_CODES.get(name)
+    if code is not None:
+        return bytes([code])
+    count = TAP_COUNTS.get(name)
+    if count is None:
+        return None
+    return bytes([GESTURE_TAP, count])
+
+
+# --- gesture config (written down) ------------------------------------
+#
+# How many taps the detector should look for. The host derives it from what
+# is actually bound and writes it on connect, so the cost of counting is paid
+# only by a button that has a long tap bound to something:
+#
+#   at 2 the detector behaves exactly as it always has - a double tap fires
+#   the instant the second press lands;
+#   at 3+ a double tap has to wait out the 0.4 s window to prove it is not
+#   the start of a triple.
+#
+#   [0]  max taps  (2..MAX_TAPS_LIMIT)
+#
+# One byte today. It grows by appending - hold levels are the next field -
+# so decode takes what it understands and ignores the rest.
+
+DEFAULT_MAX_TAPS = 2
+
+
+def decode_gesture_config(data):
+    """max_taps for a GESTURE_CONFIG write, or None if there is nothing to
+    read. Out-of-range values are clamped rather than rejected: a host asking
+    for something impossible should get the closest thing that works, not a
+    detector that silently kept the old setting."""
+    if not data:
+        return None
+    count = data[0]
+    if count < DEFAULT_MAX_TAPS:
+        return DEFAULT_MAX_TAPS
+    if count > MAX_TAPS_LIMIT:
+        return MAX_TAPS_LIMIT
+    return count
 
 # --- LED states (written down) ----------------------------------------
 # One code per host LEDState; led.py renders the animation. An unknown code
@@ -176,20 +265,47 @@ STYLE_CODES = {
     "fade": STYLE_FADE,
 }
 
-PALETTE_ENTRY_LEN = 10
+EFFECT_LEN = 9
+PALETTE_ENTRY_LEN = EFFECT_LEN + 1
+
+
+def decode_effect(data, offset=0):
+    """(style, (r,g,b), (r2,g2,b2), period_s) from `offset`, or None if there
+    are not enough bytes - a truncated write should change nothing rather
+    than render whatever the missing bytes would have been."""
+    if data is None or len(data) - offset < EFFECT_LEN:
+        return None
+    period_s = ((data[offset + 7] << 8) | data[offset + 8]) / 100
+    return (
+        data[offset],
+        (data[offset + 1], data[offset + 2], data[offset + 3]),
+        (data[offset + 4], data[offset + 5], data[offset + 6]),
+        period_s,
+    )
 
 
 def decode_palette_entry(data):
     """(led_code, style, (r,g,b), (r2,g2,b2), period_s) for one write, or
-    None if the payload is the wrong length - a truncated write should
-    leave the palette alone rather than render garbage."""
-    if data is None or len(data) < PALETTE_ENTRY_LEN:
+    None if the payload is the wrong length.
+
+    A palette entry is a state code followed by exactly an effect, so the
+    layout is defined once and this reads it one byte along - the two cannot
+    drift into disagreeing about where the period is.
+    """
+    effect = decode_effect(data, 1)
+    if effect is None:
         return None
-    period_s = ((data[8] << 8) | data[9]) / 100
-    return (
-        data[0],
-        data[1],
-        (data[2], data[3], data[4]),
-        (data[5], data[6], data[7]),
-        period_s,
-    )
+    return (data[0],) + effect
+
+
+# --- ephemeral effect (written down) ----------------------------------
+#
+# "Render this look, now." Same nine bytes as a palette entry minus the state
+# code, because there is no state: it is not stored, not named, and lasts
+# until the next LED_STATE write replaces it.
+#
+# This is what stops every one-off look costing a byte of the LED_STATE
+# namespace (ROADMAP D4). 0x0B of 255 is spent, every code is mirrored in
+# four places, and all instances of a template share one palette entry - so a
+# countdown that walks its colour, or two Pomodoros that want to look
+# different, are not worth a global code each. They are worth a write.

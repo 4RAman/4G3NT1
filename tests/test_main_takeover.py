@@ -127,3 +127,37 @@ async def test_run_enter_mode_stopwatch_then_counter(tmp_path, monkeypatch):
     assert kinds_names.count(("mode_exit", "Focus")) == 1
     assert kinds_names.count(("mode_enter", "Water")) == 1
     assert kinds_names.count(("mode_exit", "Water")) == 1
+
+
+@pytest.mark.parametrize(
+    "extra_binding,expected",
+    [(None, 2), ({"triple_tap": {"action": "log", "event": "note"}}, 3)],
+    ids=["nothing longer than a double is bound", "a triple tap is bound"],
+)
+async def test_the_device_is_told_how_far_to_count_taps(
+    tmp_path, extra_binding, expected
+):
+    """Binding a triple tap is what makes the button count that far. The
+    number is derived from the config rather than set by hand, because it is
+    not a preference: counting to three is what delays a double tap, so a
+    button pays that only once something is listening for one.
+    """
+    modes = [dict(m) for m in CONFIG["modes"]]
+    if extra_binding:
+        modes[0] = dict(modes[0], **extra_binding)
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(
+        json.dumps(dict(CONFIG, modes=modes, database_path=str(tmp_path / "e.db"))),
+        encoding="utf-8",
+    )
+
+    device = MockDevice()
+    args = main._parse_args(["--no-web", "--config", str(cfg_path)])
+    run_task = asyncio.create_task(main.run(args, device=device))
+    try:
+        await asyncio.sleep(0.1)
+        assert device.max_taps == expected
+    finally:
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task

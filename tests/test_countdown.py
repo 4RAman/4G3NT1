@@ -81,7 +81,16 @@ async def _run(tmp_path, script, settle=0.15, **countdown):
 
 
 def _timing(device):
-    return device.palette["TIMING"]
+    """What the LED is actually showing: the one-off look the countdown is
+    pushing if there is one, and the palette entry for its state otherwise.
+
+    Deliberately *not* `device.palette["TIMING"]`. A countdown used to walk its
+    colour by rewriting that entry; it now pushes an ephemeral effect and
+    leaves the stored palette alone (ROADMAP D4). Asserting on what is on
+    screen rather than on which mechanism put it there is what let these tests
+    survive that change unedited below the helper.
+    """
+    return device.led_effect or device.palette[device.led_state.value]
 
 
 # --- the ramp actually moves ----------------------------------------------
@@ -127,8 +136,9 @@ async def test_style_and_period_hold_still_while_the_colour_moves(tmp_path):
 
 
 async def test_a_countdown_borrows_the_timing_light(tmp_path):
-    """No new wire code was allocated for this (ROADMAP D4) - it rewrites
-    TIMING, which is safe because one takeover mode runs at a time."""
+    """No new wire code was allocated for this: it shows TIMING wearing a
+    pushed look (ROADMAP D4). The state still means something - it is what the
+    status line and the web UI report - and only its appearance is borrowed."""
     seen = {}
 
     async def script(device):
@@ -167,23 +177,32 @@ async def _drain_after(device, trigger):
     await asyncio.sleep(0.1)
 
 
-async def test_leaving_restores_the_configured_palette(tmp_path):
-    """The live override must never outlive the session, or every later
-    stopwatch inherits a countdown's colour."""
+async def test_the_ramp_never_touches_the_stored_palette(tmp_path):
+    """The override must never outlive the session, or every later stopwatch
+    inherits a countdown's colour.
+
+    It now cannot, and that is the point of the change rather than a detail of
+    it: the look is pushed as an ephemeral effect, so TIMING's stored entry
+    still reads as configured *while the countdown is running*. Nothing has to
+    remember to put anything back."""
     seen = {}
 
     async def script(device):
         seen["during"] = _timing(device).color
+        seen["stored_during"] = device.palette["TIMING"].color
         await _drain_after(device, TriggerType.LONG_PRESS)
-        seen["after"] = _timing(device).color
-        seen["style_after"] = _timing(device).style
+        seen["effect_after"] = device.led_effect
+        seen["stored_after"] = (
+            device.palette["TIMING"].color, device.palette["TIMING"].style
+        )
 
     await _run(tmp_path, script, minutes=5, style="flash",
                ramp=[RED, BLUE], ring_on_finish=False)
 
-    assert seen["during"] == RED
-    assert seen["after"] == "#00ffff"    # the palette default for TIMING
-    assert seen["style_after"] == "breathe"
+    assert seen["during"] == RED                       # the ramp is on screen
+    assert seen["stored_during"] == "#00ffff"          # and not in the palette
+    assert seen["effect_after"] is None                # gone on the way out
+    assert seen["stored_after"] == ("#00ffff", "breathe")
 
 
 async def test_a_cancelled_countdown_logs_nothing(tmp_path):
@@ -259,18 +278,19 @@ async def test_a_silent_countdown_does_not_ring(tmp_path):
 
 async def test_the_colour_is_only_pushed_when_it_visibly_moves(tmp_path):
     """A ramp evaluated every second over a long countdown must not push a
-    palette write every second - the radio's contract is fire-and-forget, and
-    the queue is the thing that suffers."""
+    write every second - the radio's contract is fire-and-forget, and the
+    queue is the thing that suffers."""
     pushes = []
 
     async def script(device):
-        original = device.set_palette
+        original = device.set_led
 
-        def counting(palette):
-            pushes.append(palette["TIMING"].color)
-            original(palette)
+        def counting(state, effect=None):
+            if effect is not None:
+                pushes.append(effect.color)
+            original(state, effect)
 
-        device.set_palette = counting
+        device.set_led = counting
         await asyncio.sleep(1.0)
 
     await _run(tmp_path, script, settle=0.02,

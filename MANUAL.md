@@ -20,16 +20,23 @@ restart.
 
 ---
 
-## 2. The three gestures
+## 2. The gestures
 
 | Gesture | How |
 |---|---|
 | **Short press** | a single quick press and release |
 | **Long press** | press and hold (~1 second) |
 | **Double tap** | two quick presses |
+| **Triple tap** | three quick presses |
 
 That is the entire physical vocabulary. Everything the device does is one of
-these three gestures, interpreted by whatever mode is active.
+these gestures, interpreted by whatever mode is active.
+
+**A note on the triple tap.** Bind it and you get a fourth gesture; the
+price is that the *double* tap gets slower. The button cannot know a double
+tap is finished until it has waited long enough to be sure a third press
+isn't coming — about 0.4 seconds. It only waits when something is actually
+listening for a triple, so leave it unbound and double taps stay instant.
 
 ---
 

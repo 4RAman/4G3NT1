@@ -125,7 +125,14 @@ def test_a_board_with_no_led_or_buzzer_reports_exactly_that(main):
     asked for. A capability bit that claims a buzzer nobody can hear is worse
     than no bit at all.
     """
-    from aibutton.device import CAP_BUZZER, CAP_LED, CAP_PALETTE, decode_device_info
+    from aibutton.device import (
+        CAP_BUZZER,
+        CAP_EFFECT,
+        CAP_GESTURE_PARAMS,
+        CAP_LED,
+        CAP_PALETTE,
+        decode_device_info,
+    )
 
     main.ButtonPeripheral()
     info = decode_device_info(main._info_char.read())
@@ -133,12 +140,17 @@ def test_a_board_with_no_led_or_buzzer_reports_exactly_that(main):
     assert info is not None
     assert info.protocol_version == main.protocol.PROTOCOL_VERSION
     assert info.firmware_version == main.protocol.FIRMWARE_VERSION
-    assert info.has(CAP_PALETTE)      # this firmware always renders them
-    assert not info.has(CAP_LED)      # degraded to NullBackend
-    assert not info.has(CAP_BUZZER)   # degraded to NullBuzzer
+    assert info.has(CAP_PALETTE)          # this firmware always renders them
+    assert info.has(CAP_GESTURE_PARAMS)   # counting taps needs no hardware
+    assert not info.has(CAP_LED)          # degraded to NullBackend
+    assert not info.has(CAP_BUZZER)       # degraded to NullBuzzer
+    # A look is a thing you can only be *shown*, so with no LED this bit is
+    # off for the same reason CAP_BUZZER is: claiming it would be a lie the
+    # host would then act on.
+    assert not info.has(CAP_EFFECT)
 
 
-async def _run(main, transitions, until, connected=True):
+async def _run(main, transitions, until, connected=True, max_taps=None):
     """Run the button loop over a scripted pin until `until` virtual
     seconds, and return the gesture codes it notified."""
     clock = VirtualClock()
@@ -146,6 +158,8 @@ async def _run(main, transitions, until, connected=True):
 
     peripheral = main.ButtonPeripheral()
     peripheral._connection = object() if connected else None
+    if max_taps is not None:  # what a GESTURE_CONFIG write does
+        peripheral._detector.set_max_taps(max_taps)
     main._button_char.notified.clear()
 
     original_now, original_poll = main.now_s, main._POLL_S
@@ -235,5 +249,36 @@ async def test_button_already_held_at_boot_is_not_a_press(main):
 
 
 async def test_notified_codes_are_single_bytes(main):
+    """The compatibility promise, checked rather than asserted in a comment: a
+    button doing what it has always done still says so the way it always has,
+    so a host that only understands one-byte notifies is unaffected by v1."""
     await _run(main, [(0.1, True), (0.2, False)], until=1.0)
     assert all(len(data) == 1 for data in main._button_char.notified)
+
+
+async def test_a_triple_tap_notifies_a_kind_and_a_count(main):
+    """And the other half: a gesture with no legacy code travels as one, which
+    is what stops the next tap count from costing a byte of a 255-value
+    namespace and a reflash."""
+    codes = await _run(
+        main,
+        [(0.1, True), (0.2, False), (0.3, True), (0.4, False),
+         (0.5, True), (0.6, False)],
+        until=1.5,
+        max_taps=3,
+    )
+    assert codes == [main.protocol.GESTURE_TAP]
+    assert main._button_char.notified == [bytes([main.protocol.GESTURE_TAP, 3])]
+
+
+async def test_the_same_taps_are_a_double_when_nothing_counts_that_far(main):
+    """Same three taps, default settings: the device stops at two and the
+    third starts a fresh burst. Counting further is opt-in because it is what
+    makes a double tap wait."""
+    codes = await _run(
+        main,
+        [(0.1, True), (0.2, False), (0.3, True), (0.4, False),
+         (0.5, True), (0.6, False)],
+        until=1.5,
+    )
+    assert codes == [main.protocol.DOUBLE_TAP, main.protocol.SHORT_PRESS]

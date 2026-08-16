@@ -62,10 +62,15 @@ the mirrored tables.
 
 | Body of work | Items it spans | Gate |
 |---|---|---|
-| **The colour engine** — a stop list instead of `{style, 2 colours, period}`; progress ramps; named looks a mode picks from | 0b·3, **3**, **4**, 0a's per-app colour | Wire change → protocol v1 |
-| **The gesture engine** — N taps, hold levels, the ramp that renders them | 0b·2, the 5-tap toggle | Wire change → protocol v1 |
+| **The colour engine** — a stop list instead of `{style, 2 colours, period}`; progress ramps; named looks a mode picks from | 0b·3 ✔, **3**, **4**, 0a's per-app colour | ~~Wire change~~ — **ungated**, effects shipped |
+| **The gesture engine** — N taps, hold levels, the ramp that renders them | 0b·2 ✔, the 5-tap toggle | ~~Wire change~~ — **ungated** for taps; hold levels still need firmware |
 | **Depth without the wire** — metronome config ✔, event values ✔, Tinker mode, filtering/export | **1**, **9**, **12** | None — ship freely |
 | **Reach and hosting** — launcher, remote UI | **0a**, **7**, **8** | 0a gates 7 |
+
+**The gate column is the news.** Two of these four were blocked on a reflash
+and are not any more, which makes item **3** (named looks per mode) the
+obvious next thing: it is the last piece 0a's launcher needs, and it is now
+pure host-side work.
 
 Three things fall out of that table and are worth stating rather than
 rediscovering:
@@ -101,12 +106,14 @@ rediscovering:
   Counting to N and firing on a quiet gap is the same wait, measured from the
   last tap instead of the first.
 
-**Do not ship the colour work as host-side palette rewrites in the meantime.**
-`run_metronome` already reaches around the abstraction that way, and CLAUDE.md
-names it a workaround to generalise rather than copy. The one exception worth
-making is a countdown ramp: it steps every few seconds, so pushing it from the
-host is honest, and it is the cheapest way to prove the ramp's shape *before*
-it is frozen into the wire.
+~~**Do not ship the colour work as host-side palette rewrites in the
+meantime.**~~ **Moot — pushing a look is now the supported path.** Pass an
+effect to `set_led` and the device renders it without storing it; both former
+reach-arounds (`run_metronome`, `run_countdown`) were converted and the
+stored palette is no longer written by either. What is still host-side is the
+*ramp*, which is evaluated on the PC and pushed on change — honest for a
+countdown that steps every few seconds, and the thing that moves on-device
+later.
 
 ## Sprint
 
@@ -133,10 +140,31 @@ app that enters the launcher that enters the app, needs a depth guard or an
 explicit "replace, don't nest" rule. Decide which and write it down.
 
 **Depends on** per-app colour (item 3), or the LED shows the same thing for
-every entry in the list, which defeats the cycling. Treat 0a + 3 + 0b's
-ephemeral-effects piece as one body of work, not three.
+every entry in the list, which defeats the cycling. That dependency is now
+**entirely host-side**: 0b's ephemeral effects shipped, so showing a
+different colour per entry is a `set_led(state, effect)` call in the
+launcher's loop and needs nothing from the firmware. Item 3 is what decides
+where those colours are *stored*.
 
-### 0b. Freeze the wire protocol as v1
+**Also cheaper than it was:** `triple_tap` is a real gesture now, so the
+launcher can be reached without spending one of the original three. The
+arithmetic in the first paragraph was written when there were three.
+
+### 0b. Freeze the wire protocol as v1 ✔ done
+
+**All four landed.** Two shipped (`DEVICE_INFO`, then effects + gestures
+together) and two are reserved-and-documented (`OTA_CONTROL`,
+`GESTURE_HOLD`). Kept here rather than moved to **Done** because the
+reasoning is the map for the next wire change.
+
+What the freeze actually bought, and the reason to state it as a bar rather
+than a milestone: **everything on this list below is now reachable without a
+reflash.** Per-app looks, more tap counts, a launcher's per-entry colour — all
+of them are host-side data changes now. So the bar for the next protocol
+revision is a capability the device physically cannot express today, not a
+feature that would merely be tidier on the wire.
+
+The original framing follows, because it is why the shape is what it is:
 
 Four additions that are cheap now, and a flag day once units exist outside
 this room. Land them as one revision — each one separately means another
@@ -161,16 +189,38 @@ guarded by [test_protocol.py](tests/test_protocol.py)).
    `ASSUMED_INFO` so learning to ask never silences an un-reflashed button; and
    `decode_device_info` ignores trailing bytes, so the payload grows by
    appending and an older host stays able to read a newer device.
-2. **Parameterised gestures** — the wire carries three constants
-   (`0x01`–`0x03`). Make it carry a kind plus a parameter (tap count, hold
-   bucket) so 5-tap (already wanted, see "On/Off toggle" below), triple tap
-   and hold-levels arrive as data rather than as new codes. Mirrors into
-   [trigger.py](firmware/trigger.py) and [button.py](aibutton/button.py).
-3. **Ephemeral effects** — a way to push "render *this look*" without
-   allocating a global `LEDState`. `0x0B` of a one-byte namespace is spent,
-   every code is mirrored four ways, and all instances of a template share
-   one palette entry. `run_metronome` already reaches around the abstraction
-   to rewrite the palette live; generalise that instead of copying it.
+2. ~~**Parameterised gestures**~~ ✔ **shipped.** The wire carries
+   `[kind, param]` alongside the three legacy codes — `GESTURE_TAP` with a
+   count, `GESTURE_HOLD` reserved for levels. The classic three still go out
+   as one byte and always will, so an un-reflashed host is unaffected; only a
+   gesture with no legacy code takes the new form, and `decode_gesture` reads
+   both. `triple_tap` is the first host-side gesture to arrive this way, which
+   takes the button from three bindable gestures to four — 5-tap and the rest
+   are now a data change in `TriggerType`/`GESTURES` with **no reflash under
+   them**, which was the whole point.
+
+   The one real decision inside it: counting to N means a double tap can no
+   longer fire the instant the second press lands — it has to outlive the
+   0.4 s window to prove it is not the start of a triple. Rather than charge
+   every button that latency, the host writes `max_taps` over
+   `GESTURE_CONFIG`, derived from what the config actually binds
+   (`bound_triggers` → `max_taps_for`). At 2 — the default, and what a
+   button with nothing longer bound gets — the detector is byte-for-byte the
+   one that shipped before, which is why every existing detector test passes
+   unedited.
+3. ~~**Ephemeral effects**~~ ✔ **shipped.** `LED_EFFECT` takes the same nine
+   bytes as a palette entry minus the state code, renders immediately, stores
+   nothing, and ends at the next `LED_STATE` write. On the host it is an
+   optional second argument to `set_led` rather than a fifth seam method,
+   because it is the same assertion carrying more detail.
+
+   `run_metronome` and `run_countdown` were the two reach-arounds and are now
+   the two consumers: neither touches the stored palette, so neither needs a
+   `finally` to put anything back. A device without `CAP_EFFECT` still shows
+   the look — `BLEDevice` borrows the state's palette entry and gives it back
+   when the look ends — so the run loops never learn which kind of device they
+   are talking to. **No new `LEDState` was allocated; `0x0B` is still the
+   highest code.**
 4. **An OTA/version handshake** — ✔ *reserved*: `OTA_CONTROL_UUID` and
    `CAP_OTA` are claimed and documented as unimplemented, and the version
    handshake is `DEVICE_INFO`'s first byte. Implementing it is still Stage 4
@@ -285,10 +335,16 @@ Modes tab without solving this means two Pomodoros still can't look
 different, which defeats the point of putting the picker next to the mode.
 Solving it needs a per-mode override stored on the `Mode`/behaviour itself
 (`config.py`), not just the global `led_palette` dict, with the global entry
-becoming the fallback when a mode has no override. Touches `config.py`
-(parsing/validation), `device.py` (still keyed by `LEDState`, so a per-mode
-override needs its own wire path or gets folded into what's sent on connect),
-and `main.py` (`set_led` calls would need to also push the override).
+becoming the fallback when a mode has no override.
+
+**The wire half of that is done.** It used to also need "its own wire path,
+or folded into what's sent on connect"; it doesn't, because a per-mode look
+*is* an ephemeral effect — `set_led(state, effect)` already pushes one and
+`run_countdown` already does exactly this with a colour it computes per
+tick. So what is left is `config.py` (parsing and validation for a named
+`looks` pool, or a per-mode override), the editor, and having the takeover
+loops pass the mode's look to `set_led` instead of nothing. **No firmware, no
+reflash.**
 
 ### 4. Turn "seconds per cycle" into a slider, with a safety floor
 
@@ -409,17 +465,24 @@ costs:**
   events), a dice/random picker, a countdown timer built from `alarm`'s
   shape with `manual` activation instead of `schedule`.
 - *Expensive*: a genuinely new template - a new `*Behavior` dataclass in
-  `config.py`, a `run_*` loop in `main.py`, a `schema.js` `TEMPLATES` entry,
-  and usually a new `LEDState` (protocol.py/device.py/led.py, next free code
-  is `0x0C` now that metronome took `0x0B` - see item 3's cross-file rule).
+  `config.py`, a `run_*` loop in `main.py`, a `schema.js` `TEMPLATES` entry.
+  It used to also usually mean a new `LEDState` mirrored four ways; it does
+  not any more. Push a look with `set_led(state, effect)` and borrow whichever
+  existing state best describes what the button is *doing*. Allocating `0x0C`
+  now needs an argument for why the whole system should have a name for it.
 
-**Known hardware constraint, worth knowing before proposing more ideas:**
-the LED renders one animation *per state*, entirely on-device
-(`firmware/led.py`); the host can only select which state and edit that
-state's static effect. There is no way to push an arbitrary one-off
-animation (e.g. "flash this exact sequence") - so ideas like a Simon-Says
-memory game are not straightforwardly buildable on the current firmware
-without a new wire concept.
+**Known hardware constraint, and it moved:** the LED still renders one
+animation at a time, entirely on-device (`firmware/led.py`), but the host can
+now push *any* one of them at any moment without it being a named state -
+`set_led(state, effect)`, as often as it likes. So a mode can drive a
+sequence of looks by pushing them one after another, which is what a
+Simon-Says memory game needs and could not do before.
+
+What is still true: the *shape* of an animation is one of the six styles, so
+"flash this exact arbitrary waveform" is not expressible, and a sequence
+driven from the host needs the host awake and costs a radio write per step.
+A stop list (the colour-engine work above) is what makes a sequence one push
+instead of many.
 
 **Other candidates to pick from** (adjust freely, this is a starting list,
 not a spec): reaction-timer (random-delay flash, logs response time),
@@ -535,11 +598,10 @@ the "real alarm clock" case - don't touch it. Add a new template,
 generalizing, or a parallel `due_reminder`, to also match the new behaviour),
 but the feedback is a flash rather than a ring - a distinct look rather than
 reusing `ALERT`, since `ALERT` already means "alarm is ringing" and a
-reminder shouldn't look identical to one. If item 0b has landed, that look is
-an ephemeral effect and costs nothing; if it hasn't, it is a new `LEDState`
-(next free wire code `0x0C`, metronome took `0x0B`) mirrored per item 3's
-cross-file rule, plus a `test_firmware_feedback.py`/`test_protocol.py` entry -
-which is exactly the tax 0b exists to remove. No looping sound (a single chime, or none).
+reminder shouldn't look identical to one. **0b has landed, so that look is an
+ephemeral effect and costs nothing** - push it with `set_led(ALERT, effect)`
+and it looks like a reminder rather than an alarm without a wire code, a
+mirror, or a reflash. No looping sound (a single chime, or none).
 Clearing it (any press, or a specific gesture - decide) logs a
 "cleared today" event and stops the flash, mirroring how
 `unless_logged_today` already lets an *ambient* mode stand down once
@@ -760,11 +822,14 @@ before the look editor exists means deciding it twice.
   Research" (from Obsidian) and replace the placeholder tone tables carried
   over from the Pi build. A matching sound palette, pushed the same way the
   LED palette now is, is the obvious shape.
-- **On/Off toggle** *(firmware)* - "5 taps" as a global toggle, needs a new
-  gesture in [trigger.py](firmware/trigger.py) *and* its mirror in
-  [button.py](aibutton/button.py), plus a wire code. **Fold into item 0b** -
-  a parameterised gesture gives you this and triple-tap and hold-levels for
-  the same reflash.
+- **On/Off toggle** - "5 taps" as a global toggle. **No longer firmware.**
+  0b·2 shipped, so this is now: add `TAP_5 = "tap_5"` to `TriggerType`, the
+  matching entry to `GESTURES` in `schema.js`, and an action to bind it to.
+  The detector already counts that far and the wire already carries it; the
+  host writes `max_taps=5` by itself the moment something binds it. Worth
+  knowing that binding it *does* cost the double tap its instant response -
+  that is the trade `max_taps` makes explicit, and the reason not to bind a
+  long tap by default.
 
 ## Parking lot (deliberately later)
 
@@ -803,6 +868,32 @@ before the look editor exists means deciding it twice.
 
 ## Done
 
+- ~~**Protocol v1, finished: a look you can push and a gesture that carries a
+  number**~~ - the second and last revision of the wire (see item 0b for the
+  detail). Two capability bits, two characteristics, no `LEDState` spent, and
+  `0x0B` is still the highest code.
+
+  **Effects.** `LED_EFFECT` is a palette entry without the state byte: render
+  it now, store nothing, end at the next `LED_STATE` write. The two run loops
+  that used to rewrite the palette live no longer touch it, so neither needs a
+  `finally` to put anything back - and the tests that pinned those overrides
+  now assert on *what the light shows* rather than on which mechanism put it
+  there, which is why they survived the change with one helper edited.
+
+  **Gestures.** `[kind, param]` alongside the frozen three one-byte codes. The
+  degradation goes both ways on purpose: the firmware emits the legacy form
+  whenever one exists, so an old host never sees anything new, and
+  `decode_gesture` reads both, so a new host still understands an un-reflashed
+  button. `triple_tap` is the first gesture to arrive this way and takes the
+  button to four bindable gestures.
+
+  **The one judgement call**, and it is a product one rather than a protocol
+  one: counting to N costs a double tap its instant response, because it has
+  to outlive the 0.4 s window to prove it is not the start of a triple. So the
+  host writes `max_taps`, derived from what the config binds rather than set
+  by hand. At 2 the detector is the one that shipped before, line for line -
+  the evidence being that every pre-existing detector test passes unedited,
+  against both implementations, with nothing in the code special-casing two.
 - ~~**Colour ramps, and a countdown to prove them**~~ -
   [ramp.py](aibutton/ramp.py) is the pure half: a list of stops, each a colour
   pinned at a fraction, and `color_at` blending between the two either side. No

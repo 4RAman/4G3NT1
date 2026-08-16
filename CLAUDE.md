@@ -100,12 +100,21 @@ mock?" to decide whether to show the virtual panel.*
 `ButtonDevice` is `events` in; `set_led` / `play_sound` / `start_loop` /
 `stop_loop` out, plus lifecycle. Everything else — palettes, reconnection,
 byte encoding — is a private concern of the implementation.
-*Resist widening it. `set_palette` earned its place by being device state
-the host asserts, exactly like the LED state.* `info` is the counterpart and
-stayed an **attribute rather than a fifth method** for exactly that reason:
-it is device state the host *reads*, never asserts, so nothing has to be
-implemented to satisfy it — a backend that is its own hardware just knows its
-own answer.
+*Resist widening it. `set_palette` and `set_gesture_config` earned their
+places by being device state the host asserts, exactly like the LED state.*
+`info` is the counterpart and stayed an **attribute rather than a method**
+for exactly that reason: it is device state the host *reads*, never asserts,
+so nothing has to be implemented to satisfy it — a backend that is its own
+hardware just knows its own answer.
+
+Ephemeral effects are the worked example of *not* widening it.
+"Show this look right now" became an optional second argument to `set_led`,
+not a fifth method, because it is the same assertion the seam already makes
+carrying more detail. The state argument stays required and still means
+something — it is what the status line and the web UI report, and what a
+device too old for effects falls back to rendering. **That fallback lives
+inside `BLEDevice`, not in the run loop**: a mode asks for a look, and
+whether showing it costs a borrowed palette entry is the device's business.
 
 **Dependency inversion — depend on the abstraction, and mind the direction.**
 `main` depends on `ButtonDevice`, never on `BLEDevice`; the import of the
@@ -124,14 +133,18 @@ tomorrow, and the direction of travel is that **adding one touches the app's
 own files and nothing else**. Full plan in [ROADMAP.md](ROADMAP.md); what it
 means while writing code today:
 
-**Know what an app currently costs.** A rich template with its own light is a
-6-to-9 file change — `config.py` (dataclass, parser, allow-list, serialiser,
-union), `main.py` (a `run_*` loop and two `isinstance` chains), `schema.js`
-(template, takeover set, built-in), plus `device.py` /
-`firmware/protocol.py` / `firmware/led.py` / `_default_palette` /
-`LED_STATES` for the LED state, plus tests. Every one of those is a place a
-third-party app author cannot reach. If you are adding an app and find
+**Know what an app currently costs.** A rich template is a 4-to-6 file
+change — `config.py` (dataclass, parser, allow-list, serialiser, union),
+`main.py` (a `run_*` loop and two `isinstance` chains), `schema.js`
+(template, takeover set, built-in), plus tests. Every one of those is a place
+a third-party app author cannot reach. If you are adding an app and find
 yourself editing the core, that is the tax — note it, don't normalise it.
+
+*Its own light used to add three more files* (`device.py` /
+`firmware/protocol.py` / `firmware/led.py`, plus the palette and the
+editor's state list) and no longer does: push an effect. That is one of the
+two taxes protocol v1 removed. The other is a new gesture — a longer tap is
+now a data change in `TriggerType` and `GESTURES`, with no reflash under it.
 
 **Prefer a preset to a template.** A new entry in `BUILTIN_MODES` costs zero
 Python. Reach for a new `*Behavior` only when the behaviour genuinely cannot
@@ -140,9 +153,12 @@ be expressed by an existing one.
 **Don't burn a wire code.** `LEDState` is a one-byte global namespace,
 mirrored in four places, and `0x0B` is already spent. It is also *shared* —
 every Pomodoro gets the same colours. A new app wanting its own look is a
-reason to push an effect, not to allocate a state. `run_metronome` already
-does this by rewriting the palette live; that is a workaround, and
-generalising it is the fix.
+reason to push an effect, not to allocate a state — and since protocol v1
+that is a supported thing to do rather than a workaround: pass an effect to
+`set_led` and the device renders it until the next state change, storing
+nothing. `run_metronome` and `run_countdown` are the two consumers to copy.
+**Allocating a new `LEDState` now needs an argument for why the app's look is
+a thing the whole system should have a name for.**
 
 **Keep new logic out of the run loop.** The takeover loops in `main.py` are
 the one place the "pure core, injected I/O" rule is *not* followed — they
@@ -229,6 +245,22 @@ is the one surface that will exist in someone else's pocket.
   device readable by an older host.
 - **Batch the breaks.** Protocol changes cost a reflash and a chance to drift
   the mirrored tables. Land them together, then freeze.
+- **Protocol v1 is frozen.** `DEVICE_INFO`, ephemeral effects and
+  parameterised gestures all shipped; `OTA_CONTROL` and `GESTURE_HOLD` are
+  claimed and unimplemented. Everything below v1 needs is now reachable
+  without a reflash, so the bar for the *next* wire change is a capability the
+  device physically cannot express today — not a feature that would merely be
+  tidier on the wire.
+- **The host must read everything a device might send; the device sends the
+  oldest form that will do.** That asymmetry is deliberate — the host is the
+  half that is easy to update. So the classic three gestures still go out as
+  one byte and always will, and only a gesture with no legacy code travels as
+  `[kind, param]`. `decode_gesture` accepts both.
+- **Cost that changes how the button feels is opt-in, and derived.**
+  Counting to three taps is what stops a double tap firing on contact, so
+  `max_taps` is written down the wire from what the config actually binds
+  (`bound_triggers` → `max_taps_for`) rather than being a setting. A button
+  with nothing longer than a double bound behaves exactly as it always has.
 
 ## Conventions
 

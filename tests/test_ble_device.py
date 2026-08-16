@@ -22,7 +22,10 @@ from aibutton.device import (
     CAP_LED,
     CAP_PALETTE,
     DEVICE_INFO_UUID,
+    GESTURE_CONFIG_UUID,
+    GESTURE_TAP,
     LED_CODES,
+    LED_EFFECT_UUID,
     LED_PALETTE_UUID,
     LED_STATE_UUID,
     SOUND_CMD_UUID,
@@ -30,10 +33,29 @@ from aibutton.device import (
     LEDState,
     Sound,
     TriggerType,
+    effect_payload,
+    palette_payload,
     sound_command,
 )
 
-FULL_INFO = fw.device_info_payload(fw.CAP_LED | fw.CAP_BUZZER | fw.CAP_PALETTE)
+# What this firmware actually reports, so the fake stands in for the board on
+# the bench rather than for one nobody has any more. The reduced payloads
+# below are the *older* devices, and they are what the fallback paths are
+# tested against.
+FULL_INFO = fw.device_info_payload(
+    fw.CAP_LED | fw.CAP_BUZZER | fw.CAP_PALETTE | fw.CAP_EFFECT | fw.CAP_GESTURE_PARAMS
+)
+PRE_V1_INFO = fw.device_info_payload(fw.CAP_LED | fw.CAP_BUZZER | fw.CAP_PALETTE)
+
+
+class _Look:
+    """A stand-in for config.LedEffect - palette_payload duck-types it, and
+    this module has no business importing config to say "orange, flashing"."""
+
+    def __init__(self, style="flash", color="#ff8800", color2="#000000", period_s=0.5):
+        self.style, self.color, self.color2, self.period_s = (
+            style, color, color2, period_s
+        )
 
 
 class FakeBleakDevice:
@@ -131,9 +153,9 @@ async def test_connects_subscribes_and_asserts_the_led():
     try:
         client = FakeClient.instances[0]
         assert client.notify_handler is not None  # subscribed to gestures
-        # The first write is the current LED state, so the device is never
+        # The current LED state goes down on connect, so the device is never
         # left showing an animation from a previous session.
-        assert client.writes[0] == (LED_STATE_UUID, bytes([LED_CODES[LEDState.IDLE]]))
+        assert (LED_STATE_UUID, bytes([LED_CODES[LEDState.IDLE]])) in client.writes
     finally:
         await device.close()
 
@@ -156,7 +178,9 @@ async def test_the_device_is_asked_what_it_is_before_anything_is_sent():
         assert DEVICE_INFO_UUID in client.reads
         assert device.info.protocol_version == fw.PROTOCOL_VERSION
         assert device.info.firmware == "%d.%d.%d" % fw.FIRMWARE_VERSION
-        assert set(device.info.names) == {"led", "buzzer", "palette"}
+        assert set(device.info.names) == {
+            "led", "buzzer", "palette", "effect", "gesture-params",
+        }
     finally:
         await device.close()
 
@@ -261,13 +285,57 @@ async def test_notification_becomes_a_press():
         await device.close()
 
 
+async def test_a_parameterised_notification_becomes_a_press():
+    """The other half of the wire's gesture vocabulary: a tap count arrives as
+    a kind plus a parameter rather than as a code of its own."""
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        client.notify_handler(None, bytearray([GESTURE_TAP, 3]))
+        assert device.events.get_nowait() is TriggerType.TRIPLE_TAP
+    finally:
+        await device.close()
+
+
 async def test_unknown_and_empty_notifications_are_ignored():
     device = await _connected_device()
     try:
         client = FakeClient.instances[0]
         client.notify_handler(None, bytearray([0x7F]))
         client.notify_handler(None, bytearray())
+        client.notify_handler(None, bytearray([GESTURE_TAP, 8]))  # past our vocabulary
+        client.notify_handler(None, bytearray([GESTURE_TAP]))     # no parameter
         assert device.events.empty()
+    finally:
+        await device.close()
+
+
+# --- how far to count --------------------------------------------------
+
+async def test_the_tap_count_is_written_on_connect():
+    device = await _connected_device()
+    try:
+        device.set_gesture_config(3)
+        await _settle()
+        client = FakeClient.instances[0]
+        assert (GESTURE_CONFIG_UUID, bytes([2])) in client.writes  # the default
+        assert (GESTURE_CONFIG_UUID, bytes([3])) in client.writes
+    finally:
+        await device.close()
+
+
+async def test_a_device_that_cannot_count_further_is_not_told_to():
+    """Writing to a characteristic an un-reflashed button does not have would
+    only log a failure. It keeps counting to two, which is what it has always
+    done and what the host will therefore keep receiving."""
+    FakeClient.info_payload = PRE_V1_INFO
+    device = await _connected_device()
+    try:
+        device.set_gesture_config(3)
+        await _settle()
+        client = FakeClient.instances[0]
+        assert not [w for w in client.writes if w[0] == GESTURE_CONFIG_UUID]
+        assert device.max_taps == 3  # the host still knows what it wanted
     finally:
         await device.close()
 
@@ -278,17 +346,112 @@ async def test_feedback_reaches_the_device():
     device = await _connected_device()
     try:
         client = FakeClient.instances[0]
+        opening = len(client.writes)  # whatever the connect handshake sent
         device.set_led(LEDState.THINKING)
         device.play_sound(Sound.ACK)
         device.start_loop(Sound.ALARM)
         device.stop_loop()
         await _settle()
-        assert client.writes[1:] == [
+        assert client.writes[opening:] == [
             (LED_STATE_UUID, bytes([LED_CODES[LEDState.THINKING]])),
             (SOUND_CMD_UUID, sound_command(Sound.ACK)),
             (SOUND_CMD_UUID, sound_command(Sound.ALARM, loop=True)),
             (SOUND_CMD_UUID, bytes([STOP_LOOP_CMD])),
         ]
+    finally:
+        await device.close()
+
+
+# --- showing a look nothing has a name for -----------------------------
+
+async def test_a_one_off_look_is_pushed_without_touching_the_palette():
+    """ROADMAP D4, stated as behaviour: the look goes down as an effect, and
+    the stored palette entry for that state is not written at all."""
+    look = _Look()
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        opening = len(client.writes)
+        device.set_led(LEDState.TIMING, look)
+        await _settle()
+        assert client.writes[opening:] == [
+            (LED_STATE_UUID, bytes([LED_CODES[LEDState.TIMING]])),
+            (LED_EFFECT_UUID, effect_payload(look)),
+        ]
+    finally:
+        await device.close()
+
+
+async def test_refreshing_a_look_does_not_restate_the_led():
+    """A countdown pushes a colour every few seconds. Re-sending LED_STATE
+    each time would restart the state's animation on the device, so the flash
+    would stutter every time the colour moved."""
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        device.set_led(LEDState.TIMING, _Look(color="#ff0000"))
+        await _settle()
+        opening = len(client.writes)
+        device.set_led(LEDState.TIMING, _Look(color="#00ff00"))
+        device.set_led(LEDState.TIMING, _Look(color="#0000ff"))
+        await _settle()
+        assert [uuid for uuid, _ in client.writes[opening:]] == [
+            LED_EFFECT_UUID, LED_EFFECT_UUID,
+        ]
+    finally:
+        await device.close()
+
+
+async def test_a_device_without_effects_borrows_the_palette_entry_and_gives_it_back():
+    """The fallback for an un-reflashed button, and the reason it lives here
+    rather than in the run loop: the loop asks for a look, and whether that
+    costs a borrowed palette entry is the device's business. Borrowing without
+    giving back would leave the next stopwatch wearing a countdown's colour."""
+    FakeClient.info_payload = PRE_V1_INFO
+    configured = _Look(style="breathe", color="#00ffff", period_s=1.6)
+    look = _Look(color="#ff0000")
+    device = await _connected_device()
+    try:
+        device.set_palette({LEDState.TIMING.value: configured})
+        await _settle()
+        client = FakeClient.instances[0]
+        opening = len(client.writes)
+
+        device.set_led(LEDState.TIMING, look)
+        await _settle()
+        assert client.writes[opening:] == [
+            (LED_STATE_UUID, bytes([LED_CODES[LEDState.TIMING]])),
+            (LED_PALETTE_UUID, palette_payload(LEDState.TIMING, look)),
+        ]
+
+        borrowed = len(client.writes)
+        device.set_led(LEDState.IDLE)  # the look ends
+        await _settle()
+        assert client.writes[borrowed:] == [
+            (LED_STATE_UUID, bytes([LED_CODES[LEDState.IDLE]])),
+            (LED_PALETTE_UUID, palette_payload(LEDState.TIMING, configured)),
+        ]
+    finally:
+        await device.close()
+
+
+async def test_reconnect_restores_a_look_in_progress():
+    """A countdown that loses the link mid-sweep must not sit on the wrong
+    colour until its next change - which, late in a long ramp, is minutes."""
+    look = _Look(color="#ff0000")
+    device = await _connected_device()
+    try:
+        device.set_led(LEDState.TIMING, look)
+        await _settle()
+        FakeClient.instances[0].drop()
+        for _ in range(200):
+            if len(FakeClient.instances) > 1 and device.connected:
+                break
+            await asyncio.sleep(0.005)
+        await _settle()
+        fresh = FakeClient.instances[-1]
+        assert (LED_STATE_UUID, bytes([LED_CODES[LEDState.TIMING]])) in fresh.writes
+        assert (LED_EFFECT_UUID, effect_payload(look)) in fresh.writes
     finally:
         await device.close()
 
@@ -312,8 +475,10 @@ async def test_writes_while_disconnected_are_dropped_not_queued(fake_bleak):
     await _settle()
     try:
         client = FakeClient.instances[-1]
-        # Only the LED re-assert; no stale sounds.
-        assert client.payloads == [bytes([LED_CODES[LEDState.IDLE]])]
+        # The LED re-assert, and no stale sounds - the two tones queued while
+        # nothing was listening are gone rather than replayed on connect.
+        assert (LED_STATE_UUID, bytes([LED_CODES[LEDState.IDLE]])) in client.writes
+        assert not [w for w in client.writes if w[0] == SOUND_CMD_UUID]
     finally:
         await device.close()
 
@@ -361,9 +526,8 @@ async def test_reconnect_restores_the_current_led_state():
         # The new session opens on TIMING, not on IDLE: the host still
         # believes a stopwatch is running, and the LED should say so.
         second = FakeClient.instances[-1]
-        assert second.writes[0] == (
-            LED_STATE_UUID, bytes([LED_CODES[LEDState.TIMING]])
-        )
+        assert (LED_STATE_UUID, bytes([LED_CODES[LEDState.TIMING]])) in second.writes
+        assert (LED_STATE_UUID, bytes([LED_CODES[LEDState.IDLE]])) not in second.writes
     finally:
         await device.close()
 

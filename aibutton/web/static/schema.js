@@ -10,10 +10,14 @@
 // hint?, placeholder?, min?, max?, step?, options? }. Action/template
 // `defaults()` must mirror the shapes the Python parser accepts in config.py.
 
+// Mirrors config.py's TRIGGER_TYPES, which mirrors device.py's TriggerType.
+// A longer tap is a data change here and on the Python side: the wire has
+// carried a tap count since protocol v1, so nothing needs reflashing.
 export const GESTURES = [
   { key: 'short_press', label: 'Short press' },
   { key: 'long_press', label: 'Long press' },
   { key: 'double_tap', label: 'Double tap' },
+  { key: 'triple_tap', label: 'Triple tap' },
 ];
 
 export const DAYS = [

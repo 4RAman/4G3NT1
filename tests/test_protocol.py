@@ -20,15 +20,17 @@ def test_uuids_match():
     assert device.LED_PALETTE_UUID == fw.LED_PALETTE_UUID
     assert device.DEVICE_INFO_UUID == fw.DEVICE_INFO_UUID
     assert device.OTA_CONTROL_UUID == fw.OTA_CONTROL_UUID
+    assert device.LED_EFFECT_UUID == fw.LED_EFFECT_UUID
+    assert device.GESTURE_CONFIG_UUID == fw.GESTURE_CONFIG_UUID
 
 
 def test_uuids_are_distinct_and_share_the_project_base():
     uuids = [
         fw.SERVICE_UUID, fw.BUTTON_EVENT_UUID, fw.LED_STATE_UUID,
         fw.SOUND_CMD_UUID, fw.LED_PALETTE_UUID, fw.DEVICE_INFO_UUID,
-        fw.OTA_CONTROL_UUID,
+        fw.OTA_CONTROL_UUID, fw.LED_EFFECT_UUID, fw.GESTURE_CONFIG_UUID,
     ]
-    assert len(set(uuids)) == 7
+    assert len(set(uuids)) == 9
     assert all(u.endswith("-00b0-4240-ba50-05ca45bf8abc") for u in uuids)
 
 
@@ -45,6 +47,7 @@ def test_capability_bits_match():
     for name in (
         "CAP_LED", "CAP_BUZZER", "CAP_PALETTE", "CAP_HAPTICS",
         "CAP_BATTERY", "CAP_IMU", "CAP_MIC", "CAP_OTA",
+        "CAP_EFFECT", "CAP_GESTURE_PARAMS",
     ):
         assert getattr(device, name) == getattr(fw, name), name
 
@@ -107,6 +110,98 @@ def test_gesture_codes_match():
     assert {t.value: c for t, c in device.GESTURE_CODES.items()} == fw.GESTURE_CODES
 
 
+def test_gesture_kinds_match():
+    assert device.GESTURE_TAP == fw.GESTURE_TAP
+    assert device.GESTURE_HOLD == fw.GESTURE_HOLD
+    # A kind byte and a legacy code must never collide, or a two-byte notify
+    # would be readable as a one-byte one.
+    assert not set(fw.GESTURE_CODES.values()) & {fw.GESTURE_TAP, fw.GESTURE_HOLD}
+
+
+def test_the_classic_three_still_travel_as_one_byte():
+    """The whole compatibility bet. A host that only understands one-byte
+    notifies keeps working, because the gestures it knows about are still sent
+    the way it has always received them - parameterised codes are additions,
+    not replacements."""
+    for name in ("short_press", "long_press", "double_tap"):
+        assert fw.gesture_payload(name) == bytes([fw.GESTURE_CODES[name]])
+
+
+def test_a_longer_tap_travels_as_a_kind_plus_a_count():
+    assert fw.gesture_payload("triple_tap") == bytes([fw.GESTURE_TAP, 3])
+    assert fw.gesture_payload("tap_5") == bytes([fw.GESTURE_TAP, 5])
+
+
+def test_the_host_reads_a_pre_v1_button():
+    """One-byte notifies are what an un-reflashed button sends, and the host
+    is the half that has to keep understanding them - it is the half that is
+    easy to update."""
+    for trigger, code in device.GESTURE_CODES.items():
+        assert device.decode_gesture(bytes([code])) is trigger
+
+
+def test_a_gesture_the_host_cannot_name_is_dropped_rather_than_guessed():
+    # A tap count past the host's vocabulary, a reserved kind, a truncated
+    # parameterised notify, and nothing at all.
+    assert device.decode_gesture(bytes([fw.GESTURE_TAP, 7])) is None
+    assert device.decode_gesture(bytes([fw.GESTURE_HOLD, 2])) is None
+    assert device.decode_gesture(bytes([fw.GESTURE_TAP])) is None
+    assert device.decode_gesture(b"\x99") is None
+    assert device.decode_gesture(b"") is None
+    assert device.decode_gesture(None) is None
+
+
+def test_every_gesture_survives_the_round_trip():
+    """A gesture the host can name must be one the firmware can send and the
+    host can read back.
+
+    This replaced "every enum member has a code", and had to: since v1 not
+    every gesture *has* a code. A tap count past two travels as a kind plus a
+    parameter, so what matters is that the encoding round-trips, not that a
+    byte was allocated.
+    """
+    for trigger in device.TriggerType:
+        payload = fw.gesture_payload(trigger.value)
+        assert payload is not None, trigger
+        assert device.decode_gesture(payload) is trigger
+
+
+def test_the_host_vocabulary_fits_inside_what_the_wire_will_carry():
+    assert device.MAX_TAPS <= fw.MAX_TAPS_LIMIT
+    assert device.DEFAULT_MAX_TAPS == fw.DEFAULT_MAX_TAPS
+    for count, trigger in device.TAP_TRIGGERS.items():
+        assert fw.TAP_NAMES[count] == trigger.value
+
+
+# --- gesture config ----------------------------------------------------
+
+def test_the_device_reads_the_tap_count_the_host_asks_for():
+    for count in range(device.DEFAULT_MAX_TAPS, device.MAX_TAPS + 1):
+        payload = device.gesture_config_payload(count)
+        assert fw.decode_gesture_config(payload) == count
+
+
+def test_an_impossible_tap_count_is_clamped_at_both_ends():
+    """Clamped rather than rejected, on both sides: a host asking for
+    something out of range should get the nearest thing that works, not a
+    detector that silently kept its old setting."""
+    assert fw.decode_gesture_config(bytes([0])) == fw.DEFAULT_MAX_TAPS
+    assert fw.decode_gesture_config(bytes([250])) == fw.MAX_TAPS_LIMIT
+    assert fw.decode_gesture_config(b"") is None
+    assert device.gesture_config_payload(1) == bytes([device.DEFAULT_MAX_TAPS])
+    assert device.gesture_config_payload(99) == bytes([device.MAX_TAPS])
+
+
+def test_max_taps_is_derived_from_what_is_actually_bound():
+    """Counting past two costs a double tap its instant response, so the
+    number follows the bindings rather than being a setting."""
+    T = device.TriggerType
+    assert device.max_taps_for([]) == 2
+    assert device.max_taps_for([T.SHORT_PRESS, T.LONG_PRESS]) == 2
+    assert device.max_taps_for([T.DOUBLE_TAP]) == 2
+    assert device.max_taps_for([T.SHORT_PRESS, T.TRIPLE_TAP]) == 3
+
+
 def test_led_codes_match():
     assert {s.value: c for s, c in device.LED_CODES.items()} == fw.LED_CODES
 
@@ -121,8 +216,9 @@ def test_loop_flag_matches():
 
 
 def test_every_enum_member_has_a_code():
-    # A new LEDState or Sound without a code would be unsendable.
-    assert set(device.GESTURE_CODES) == set(device.TriggerType)
+    # A new LEDState or Sound without a code would be unsendable. Gestures are
+    # no longer in this list - see test_every_gesture_survives_the_round_trip,
+    # which is the stronger check that replaced it.
     assert set(device.LED_CODES) == set(device.LEDState)
     assert set(device.SOUND_CODES) == set(device.Sound)
 
@@ -207,3 +303,45 @@ def test_unparseable_colour_encodes_as_black_rather_than_raising():
         device.LEDState.IDLE, LedEffect("solid", "not-a-colour")
     )
     assert fw.decode_palette_entry(payload)[2] == (0, 0, 0)
+
+
+# --- ephemeral effects -------------------------------------------------
+
+def test_an_ephemeral_effect_survives_the_round_trip():
+    from aibutton.config import LedEffect
+
+    effect = LedEffect(style="fade", color="#112233", color2="#445566", period_s=1.25)
+    payload = device.effect_payload(effect)
+    assert len(payload) == fw.EFFECT_LEN
+
+    style, color, color2, period_s = fw.decode_effect(payload)
+    assert style == fw.STYLE_FADE
+    assert color == (0x11, 0x22, 0x33)
+    assert color2 == (0x44, 0x55, 0x66)
+    assert period_s == 1.25
+
+
+def test_a_palette_entry_is_a_state_byte_then_exactly_an_effect():
+    """One layout, defined once. If the two ever disagreed about where the
+    period sits, a palette write and an effect write would render differently
+    from the same nine bytes."""
+    from aibutton.config import LedEffect
+
+    effect = LedEffect(style="flash", color="#ff0000", period_s=0.5)
+    entry = device.palette_payload(device.LEDState.ALERT, effect)
+    assert entry[0] == device.LED_CODES[device.LEDState.ALERT]
+    assert entry[1:] == device.effect_payload(effect)
+    assert fw.decode_palette_entry(entry)[1:] == fw.decode_effect(entry, 1)
+
+
+def test_a_short_effect_write_is_rejected_rather_than_half_read():
+    assert fw.decode_effect(b"\x01\x02\x03") is None
+    assert fw.decode_effect(b"") is None
+    assert fw.decode_effect(None) is None
+
+
+def test_an_effect_costs_no_led_state_code():
+    """The point of the whole thing (ROADMAP D4): a one-off look is a write,
+    not a byte out of a 255-value namespace that is mirrored four ways."""
+    assert fw.EFFECT_LEN == fw.PALETTE_ENTRY_LEN - 1
+    assert max(device.LED_CODES.values()) == 0x0B  # unchanged by this revision

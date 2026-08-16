@@ -72,18 +72,22 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import time
 
 from . import ramp, scenes
-from .device import LED_STYLES, LEDState
+from .device import LED_STYLES, LEDState, TriggerType
 from .scenes import SceneSettings
 
 log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = "config.json"
 
-TRIGGER_TYPES = ("short_press", "long_press", "double_tap")
+# Every gesture a mode may bind. Mirrors device.TriggerType, which is the
+# vocabulary the wire and the mode machine share - test_config.py fails if the
+# two drift. Adding a longer tap here is a data change: the wire has carried a
+# tap *count* since protocol v1 (ROADMAP D5), so nothing needs reflashing.
+TRIGGER_TYPES = tuple(t.value for t in TriggerType)
 
 _DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")  # index = datetime.weekday()
 
@@ -374,6 +378,28 @@ class Mode:
     @property
     def template(self) -> str:
         return self.behavior.template
+
+
+def bound_triggers(modes) -> set[str]:
+    """Every gesture name `modes` binds to anything.
+
+    What it is for: counting past two taps costs a double tap its instant
+    response (see [button.py](button.py)), so the host tells the device how far
+    to count and derives the number from what is actually bound.
+
+    Read off the dataclass fields rather than by asking each behaviour what it
+    binds. A behaviour's gesture map is always a dict keyed by trigger name -
+    `actions` on the everyday template, `gestures` on Pomodoro - so scanning
+    for that shape stays correct for a template nobody has written yet, which
+    an isinstance chain per template would not.
+    """
+    names: set[str] = set()
+    for mode in modes:
+        for field_ in fields(mode.behavior):
+            value = getattr(mode.behavior, field_.name)
+            if isinstance(value, dict):
+                names |= {key for key in value if key in TRIGGER_TYPES}
+    return names
 
 
 def _default_modes() -> tuple[Mode, ...]:

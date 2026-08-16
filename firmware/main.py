@@ -3,7 +3,7 @@
 # MicroPython runs this on boot. It does exactly three things:
 #
 #   1. debounce the button and turn edges into gestures (trigger.py),
-#   2. notify each gesture to the connected host as one byte,
+#   2. notify each gesture to the connected host,
 #   3. run the LED animation and buzzer tone the host writes back.
 #
 # Everything else - modes, schedules, the event log, the web UI - is the
@@ -42,6 +42,12 @@ _sound_char = aioble.Characteristic(
 _palette_char = aioble.Characteristic(
     _service, bluetooth.UUID(protocol.LED_PALETTE_UUID), write=True, capture=True
 )
+_effect_char = aioble.Characteristic(
+    _service, bluetooth.UUID(protocol.LED_EFFECT_UUID), write=True, capture=True
+)
+_gesture_config_char = aioble.Characteristic(
+    _service, bluetooth.UUID(protocol.GESTURE_CONFIG_UUID), write=True, capture=True
+)
 # Read-only, and the value is filled in once the LED and buzzer have actually
 # been constructed - see ButtonPeripheral.__init__. A host reads this to find
 # out what it is talking to instead of guessing from a version number.
@@ -77,9 +83,12 @@ class ButtonPeripheral:
         driver refuses - and a capability bit that claims a buzzer nobody can
         hear is worse than no bit at all.
         """
-        capabilities = protocol.CAP_PALETTE  # this firmware always renders them
+        # Palette rendering and gesture parameters are pure firmware, so this
+        # build always has them whatever came up on the pins. CAP_EFFECT is
+        # not: an ephemeral look is something you can only be shown.
+        capabilities = protocol.CAP_PALETTE | protocol.CAP_GESTURE_PARAMS
         if self.led.usable:
-            capabilities |= protocol.CAP_LED
+            capabilities |= protocol.CAP_LED | protocol.CAP_EFFECT
         if self.buzzer.usable:
             capabilities |= protocol.CAP_BUZZER
         _info_char.write(protocol.device_info_payload(capabilities))
@@ -152,11 +161,41 @@ class ButtonPeripheral:
             except Exception as exc:  # noqa: BLE001
                 print("palette write failed:", exc)
 
+    async def serve_effect(self):
+        """A look to render right now, belonging to no state. Not stored:
+        the next LED_STATE write ends it."""
+        while True:
+            try:
+                effect = protocol.decode_effect(await _next_write(_effect_char))
+                if effect is None:
+                    print("effect: short write - ignored")
+                    continue
+                self.led.show_effect(*effect)
+            except Exception as exc:  # noqa: BLE001
+                print("effect write failed:", exc)
+
+    async def serve_gesture_config(self):
+        """How long a tap burst to look for. The host derives it from what it
+        actually binds, so a button with nothing past a double tap keeps the
+        instant double tap it has always had."""
+        while True:
+            try:
+                max_taps = protocol.decode_gesture_config(
+                    await _next_write(_gesture_config_char)
+                )
+                if max_taps is None:
+                    print("gesture config: empty write - ignored")
+                    continue
+                self._detector.set_max_taps(max_taps)
+                print("gesture config: counting up to", max_taps, "taps")
+            except Exception as exc:  # noqa: BLE001
+                print("gesture config write failed:", exc)
+
     def _emit(self, event):
         if event is None:
             return
-        code = protocol.GESTURE_CODES.get(event)
-        if code is None:  # a gesture with no wire code - a bug, not a press
+        payload = protocol.gesture_payload(event)
+        if payload is None:  # a gesture with no wire encoding - a bug, not a press
             print("no code for gesture", event)
             return
         print("button:", event)
@@ -166,7 +205,7 @@ class ButtonPeripheral:
             # buffering needs a time sync the device does not have.
             return
         try:
-            _button_char.notify(self._connection, bytes([code]))
+            _button_char.notify(self._connection, payload)
         except Exception as exc:  # noqa: BLE001 - e.g. the central vanished mid-notify
             print("notify failed:", exc)
 
@@ -227,13 +266,15 @@ async def main():
     peripheral = ButtonPeripheral()
     peripheral.led.set_state(protocol.LED_IDLE)
     print("AI Button firmware ready - advertising as", hardware.DEVICE_NAME)
-    # Three background tasks; the button poll is the one we stay in. (Not
+    # One task per characteristic; the button poll is the one we stay in. (Not
     # gather(): its coverage across MicroPython builds is patchier than
     # create_task, and there is nothing here to collect results from.)
     asyncio.create_task(peripheral.advertise_forever())
     asyncio.create_task(peripheral.serve_led())
     asyncio.create_task(peripheral.serve_sound())
     asyncio.create_task(peripheral.serve_palette())
+    asyncio.create_task(peripheral.serve_effect())
+    asyncio.create_task(peripheral.serve_gesture_config())
     await peripheral.read_button_forever()
 
 

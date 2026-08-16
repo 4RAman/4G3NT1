@@ -94,6 +94,20 @@ class WebContext:
     startup_config: AppConfig | None = None
 
 
+def _effect_dict(effect):
+    """A LedEffect as JSON, or None. One definition, because the palette and
+    the ephemeral effect are the same nine bytes on the wire and the browser
+    paints them with the same function."""
+    if effect is None:
+        return None
+    return {
+        "style": effect.style,
+        "color": effect.color,
+        "color2": effect.color2,
+        "period_s": effect.period_s,
+    }
+
+
 def _parse_with_warnings(raw: dict):
     """The parser's complaints, captured for the editor. Lives in config.py
     now that the scenes CLI needs the same thing offline - one parser, one
@@ -257,21 +271,20 @@ def create_app(ctx: WebContext) -> FastAPI:
             "now": ctx.clock.now().isoformat(timespec="seconds"),
             "clock_override": ctx.clock.overridden,
             "led_state": s.led_state,
+            # The one-off look a takeover mode is pushing, if any (a metronome's
+            # live tempo, a countdown's ramp colour). Sent separately from the
+            # palette because that is what it is on the wire: something shown,
+            # not something stored. Null the rest of the time, and the virtual
+            # device falls back to the palette.
+            "led_effect": _effect_dict(s.led_effect),
             "last_sound": s.last_sound,
             "sound_seq": s.sound_seq,
             # Small enough to ride along on the status poll, and doing so is
             # what keeps the virtual device honest: it renders the palette the
             # hardware was actually sent (ctx.device.palette), not the config
-            # snapshot - the two briefly disagree while e.g. a metronome
-            # session is pushing a live tempo override.
+            # snapshot.
             "led_palette": {
-                name: {
-                    "style": e.style,
-                    "color": e.color,
-                    "color2": e.color2,
-                    "period_s": e.period_s,
-                }
-                for name, e in ctx.device.palette.items()
+                name: _effect_dict(e) for name, e in ctx.device.palette.items()
             },
         }
 

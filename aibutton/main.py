@@ -42,7 +42,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import ramp
-from .device import ButtonDevice, LEDState, MockDevice, Sound, TriggerType
+from .device import (
+    ButtonDevice,
+    LEDState,
+    MockDevice,
+    Sound,
+    TriggerType,
+    max_taps_for,
+)
 from .single_instance import AlreadyRunning, SingleInstance
 
 log = logging.getLogger("aibutton")
@@ -143,6 +150,10 @@ class DeviceStatus:
     started_at: float = field(default_factory=time.time)
     # Virtual-hardware mirror for the web UI's dev panel:
     led_state: str = "IDLE"
+    # The ephemeral look overriding led_state's palette entry, if a mode is
+    # pushing one. The virtual LED renders it in preference to the palette,
+    # which is what keeps the browser showing what the real button shows.
+    led_effect: object | None = None
     last_sound: str | None = None
     sound_seq: int = 0  # bumped per sound so the browser knows when to replay
 
@@ -242,6 +253,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         MetronomeBehavior,
         PomodoroBehavior,
         StopwatchBehavior,
+        bound_triggers,
     )
     from .rules import resolve
     from .scheduler import due_alarm
@@ -269,12 +281,27 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     # unplugged must not stop the web UI and the scheduler from coming up.
     await device.start()
     device.set_palette(cm.config.led_palette)
+
+    def wanted_max_taps() -> int:
+        """How far the device should count taps, given what the config binds.
+
+        Derived rather than configured because it is not a preference: counting
+        to three is what makes a double tap wait out its window, so a button
+        pays that only once a triple tap is bound to something.
+        """
+        return max_taps_for(TriggerType(name) for name in bound_triggers(cm.config.modes))
+
+    device.set_gesture_config(wanted_max_taps())
     tones = ToneLibrary()
     store = EventStore(cm.config.database_path)
 
-    def set_led(state: LEDState) -> None:
-        device.set_led(state)
+    def set_led(state: LEDState, effect=None) -> None:
+        """Show `state`, optionally wearing a one-off `effect` instead of its
+        palette entry - which is how a mode gets its own look without
+        allocating a global LEDState (ROADMAP D4)."""
+        device.set_led(state, effect)
         status.led_state = state.value
+        status.led_effect = effect
 
     def play_sound(sound: Sound) -> None:
         """Feedback tone + the web UI's mirror of it. sounds_enabled is read
@@ -672,9 +699,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         """Takeover metronome: short_press/double_tap mark a beat, long_press
         exits. BPM is the rolling average of the last `tap_history` intervals;
         a gap longer than `reset_gap_s` starts the average over. The LED
-        pulses at the resulting tempo via a live palette override; the finally
-        block restores the configured palette so the override never outlives
-        the session, and logs the session's tempo.
+        pulses at the resulting tempo as an ephemeral effect, so the session
+        never touches the stored palette and nothing has to be put back.
 
         How this goes fast. The tempo and the flash rate are different limits.
         `max_bpm` bounds the tempo and is yours to raise;
@@ -694,13 +720,12 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         status.last_mode = mode_name
 
         def push_tempo(tempo: float) -> int:
+            """Show METRONOME beating at `tempo`. The configured entry supplies
+            the colour and style; only the period is the session's business."""
             base = cm.config.led_palette.get(LEDState.METRONOME.value)
             period, per_flash = metronome_flash(tempo)
             if base is not None:
-                device.set_palette({
-                    **cm.config.led_palette,
-                    LEDState.METRONOME.value: replace(base, period_s=period),
-                })
+                set_led(LEDState.METRONOME, replace(base, period_s=period))
             return per_flash
 
         def describe(tempo: float, per_flash: int) -> str:
@@ -713,45 +738,42 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         push_tempo(behavior.start_bpm)
         status.last_message = f"tap to set the tempo (from {round(behavior.start_bpm)} BPM)"
 
-        try:
-            if args.demo:
-                # --demo is unattended: no tap will ever arrive, so show it
-                # briefly and exit instead of hanging the smoke test.
-                await asyncio.sleep(_SUCCESS_DISPLAY_S)
-                return ActionResult(True, "metronome (demo: no taps)")
-            while True:
-                trigger = await _wait_for_trigger(device.events, stop)
-                if trigger is None:  # shutting down mid-session
-                    return ActionResult(True, "metronome stopped (shutdown)")
-                if trigger is TriggerType.LONG_PRESS:
-                    if bpm is None:
-                        return ActionResult(True, "metronome (no tempo set)")
-                    # One row per session: the tempo you settled on. The
-                    # duration comes free from the mode_enter/mode_exit pair,
-                    # so "when did I practise, how long, how fast" is a query
-                    # rather than a guess.
-                    store.log_event(behavior.log_as, mode=mode_name, value=round(bpm, 1))
-                    _, per_flash = metronome_flash(bpm)
-                    return ActionResult(
-                        True, f"{describe(bpm, per_flash)} over {beats} beats"
-                    )
-                # short_press / double_tap -> a beat
-                now = loop.time()
-                if taps and (now - taps[-1]) > behavior.reset_gap_s:
-                    taps.clear()
-                taps.append(now)
-                del taps[:-behavior.tap_history]
-                beats += 1
-                if behavior.sound_on_tap:
-                    play_sound(Sound.ACK)
-                if len(taps) >= 2:
-                    intervals = [b - a for a, b in zip(taps, taps[1:])]
-                    bpm = min(behavior.max_bpm, 60.0 / (sum(intervals) / len(intervals)))
-                    status.last_message = describe(bpm, push_tempo(bpm))
-                else:
-                    status.last_message = "tap again to set the tempo"
-        finally:
-            device.set_palette(cm.config.led_palette)  # drop the live tempo override
+        if args.demo:
+            # --demo is unattended: no tap will ever arrive, so show it
+            # briefly and exit instead of hanging the smoke test.
+            await asyncio.sleep(_SUCCESS_DISPLAY_S)
+            return ActionResult(True, "metronome (demo: no taps)")
+        while True:
+            trigger = await _wait_for_trigger(device.events, stop)
+            if trigger is None:  # shutting down mid-session
+                return ActionResult(True, "metronome stopped (shutdown)")
+            if trigger is TriggerType.LONG_PRESS:
+                if bpm is None:
+                    return ActionResult(True, "metronome (no tempo set)")
+                # One row per session: the tempo you settled on. The
+                # duration comes free from the mode_enter/mode_exit pair,
+                # so "when did I practise, how long, how fast" is a query
+                # rather than a guess.
+                store.log_event(behavior.log_as, mode=mode_name, value=round(bpm, 1))
+                _, per_flash = metronome_flash(bpm)
+                return ActionResult(
+                    True, f"{describe(bpm, per_flash)} over {beats} beats"
+                )
+            # any tap -> a beat
+            now = loop.time()
+            if taps and (now - taps[-1]) > behavior.reset_gap_s:
+                taps.clear()
+            taps.append(now)
+            del taps[:-behavior.tap_history]
+            beats += 1
+            if behavior.sound_on_tap:
+                play_sound(Sound.ACK)
+            if len(taps) >= 2:
+                intervals = [b - a for a, b in zip(taps, taps[1:])]
+                bpm = min(behavior.max_bpm, 60.0 / (sum(intervals) / len(intervals)))
+                status.last_message = describe(bpm, push_tempo(bpm))
+            else:
+                status.last_message = "tap again to set the tempo"
 
     async def run_countdown(behavior: CountdownBehavior, mode_name: str) -> ActionResult:
         """Takeover countdown: a fixed run to zero with the LED's *colour*
@@ -766,15 +788,17 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         press); any other press acknowledges without stopping the clock, since
         the time left is already on the status line.
 
-        **This is host-side, and knowingly so.** The colour walk is rendered by
-        rewriting the TIMING palette entry live - the same reach-around
-        run_metronome uses, and for the same reason: pushing a one-off look
-        costs a global `LEDState` today and 0x0B of a one-byte namespace is
-        already spent. ROADMAP **D4**'s ephemeral effects are what replaces
-        this, at which point the ramp moves onto the device and stops costing a
-        radio write every few seconds. Until then it needs the host awake.
-        TIMING is borrowed rather than a new code allocated; only one takeover
-        mode runs at a time, so it cannot collide with a stopwatch.
+        **The ramp is still walked host-side, and knowingly so.** Each colour
+        goes down as an *ephemeral effect* now (ROADMAP D4) rather than by
+        rewriting the TIMING palette entry, so a countdown no longer edits
+        state it does not own and nothing has to be put back afterwards - the
+        look ends by itself at the next plain `set_led`. What it still costs is
+        a radio write every few seconds and a host that is awake to send them;
+        moving the ramp itself onto the device is what fixes that, and this is
+        the shape it moves in.
+
+        TIMING is still the state being shown, because a state is what the
+        status line and the web UI report. Only its appearance is borrowed.
         """
         loop = asyncio.get_running_loop()
         total = behavior.minutes * 60
@@ -795,12 +819,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             if base is None:
                 return
             pushed = colour
-            device.set_palette({
-                **cm.config.led_palette,
-                LEDState.TIMING.value: replace(
-                    base, style=behavior.style, color=colour, period_s=period
-                ),
-            })
+            set_led(
+                LEDState.TIMING,
+                replace(base, style=behavior.style, color=colour, period_s=period),
+            )
 
         def left() -> float:
             return max(0.0, deadline - loop.time())
@@ -809,47 +831,42 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         set_status("TIMING")
         status.last_mode = mode_name
 
-        try:
-            if args.demo:
-                # --demo is unattended: show the ramp's opening colour briefly
-                # rather than sitting here for the whole countdown.
-                paint(0.0)
-                await asyncio.sleep(_SUCCESS_DISPLAY_S)
-                return ActionResult(True, f"{label} (demo: {behavior.minutes:g} min)")
+        if args.demo:
+            # --demo is unattended: show the ramp's opening colour briefly
+            # rather than sitting here for the whole countdown.
+            paint(0.0)
+            await asyncio.sleep(_SUCCESS_DISPLAY_S)
+            return ActionResult(True, f"{label} (demo: {behavior.minutes:g} min)")
 
-            while True:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    break
-                paint(1.0 - remaining / total)
-                status.last_message = f"{label} - {_fmt_elapsed(remaining)} left"
-                trigger = await _wait_for_trigger(
-                    device.events, stop, timeout=min(remaining, _COUNTDOWN_TICK_S)
-                )
-                if stop.is_set():
-                    return ActionResult(
-                        True, f"{label} - {_fmt_elapsed(left())} left (shutdown)"
-                    )
-                if trigger is TriggerType.LONG_PRESS:
-                    return ActionResult(
-                        True, f"{label} - cancelled with {_fmt_elapsed(left())} left"
-                    )
-                if trigger is not None:
-                    play_sound(Sound.ACK)
-
-            # Ran out. Logged before the ring, so a countdown that is finished
-            # but not yet dismissed still counts as finished.
-            store.log_event(behavior.log_as, mode=mode_name, value=behavior.minutes)
-            if not behavior.ring_on_finish:
-                play_sound(Sound.SUCCESS)
-                return ActionResult(True, f"{label} finished")
-            # A finished countdown *is* an alarm going off, so it rings like
-            # one rather than growing a second copy of that loop.
-            return await ring_alarm(
-                AlarmBehavior(message=f"{label} finished"), mode_name
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            paint(1.0 - remaining / total)
+            status.last_message = f"{label} - {_fmt_elapsed(remaining)} left"
+            trigger = await _wait_for_trigger(
+                device.events, stop, timeout=min(remaining, _COUNTDOWN_TICK_S)
             )
-        finally:
-            device.set_palette(cm.config.led_palette)  # drop the live ramp override
+            if stop.is_set():
+                return ActionResult(
+                    True, f"{label} - {_fmt_elapsed(left())} left (shutdown)"
+                )
+            if trigger is TriggerType.LONG_PRESS:
+                return ActionResult(
+                    True, f"{label} - cancelled with {_fmt_elapsed(left())} left"
+                )
+            if trigger is not None:
+                play_sound(Sound.ACK)
+
+        # Ran out. Logged before the ring, so a countdown that is finished
+        # but not yet dismissed still counts as finished.
+        store.log_event(behavior.log_as, mode=mode_name, value=behavior.minutes)
+        if not behavior.ring_on_finish:
+            play_sound(Sound.SUCCESS)
+            return ActionResult(True, f"{label} finished")
+        # A finished countdown *is* an alarm going off, so it rings like
+        # one rather than growing a second copy of that loop.
+        return await ring_alarm(AlarmBehavior(message=f"{label} finished"), mode_name)
 
     async def enter_takeover(mode) -> None:
         """Enter a takeover mode (reached via a schedule fire or an enter_mode
@@ -989,6 +1006,12 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                     pushed_palette = cm.config.led_palette
                     device.set_palette(pushed_palette)
                     log.info("LED palette changed - pushed to the device")
+                # Binding (or unbinding) a long tap changes how far the device
+                # counts, so this rides the same hot-reload path the palette
+                # does rather than waiting for a restart.
+                if (max_taps := wanted_max_taps()) != device.max_taps:
+                    device.set_gesture_config(max_taps)
+                    log.info("gestures changed - device now counts %d taps", max_taps)
                 # After every wait (press or tick), check whether a scheduled
                 # alarm is due now and ring it; an alarm preempts the ambient
                 # layer. Prune `fired` to today's keys so it never grows without

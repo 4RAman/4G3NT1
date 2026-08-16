@@ -324,6 +324,7 @@
           <button data-trigger="short_press">Short press</button>
           <button data-trigger="long_press">Long press</button>
           <button data-trigger="double_tap">Double tap</button>
+          <button data-trigger="triple_tap">Triple tap</button>
         </div>
       </div>
 
@@ -419,7 +420,10 @@ function fmtValue(v) {
   return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
 }
 
-const GESTURES = { short_press: 'short press', long_press: 'long press', double_tap: 'double tap' };
+const GESTURES = {
+  short_press: 'short press', long_press: 'long press',
+  double_tap: 'double tap', triple_tap: 'triple tap',
+};
 
 async function refreshStatus() {
   try {
@@ -463,9 +467,11 @@ async function refreshStatus() {
     // virtual device panel (mock mode only)
     $('#virtual').hidden = !d.mock;
     if (d.mock) {
-      // Painted from the configured palette, so the browser shows the same
-      // effect the real LED would - including any colour you have edited.
-      const effect = (d.led_palette || {})[d.led_state];
+      // Painted from what the hardware was actually sent, so the browser shows
+      // the same thing the real LED would - a one-off look a mode is pushing
+      // (a countdown's ramp colour) if there is one, the state's palette entry
+      // otherwise, including any colour you have edited.
+      const effect = d.led_effect || (d.led_palette || {})[d.led_state];
       if (effect) paint($('#vled'), effect);
       $('#vstate').textContent = d.led_state;
       if (soundSeq !== null && d.sound_seq !== soundSeq && d.last_sound) {

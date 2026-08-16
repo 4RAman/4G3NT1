@@ -32,6 +32,7 @@ def test_event_names_match_the_host_enum():
     assert fw.SHORT_PRESS == TriggerType.SHORT_PRESS.value
     assert fw.LONG_PRESS == TriggerType.LONG_PRESS.value
     assert fw.DOUBLE_TAP == TriggerType.DOUBLE_TAP.value
+    assert fw.TRIPLE_TAP == TriggerType.TRIPLE_TAP.value
 
 
 # (name, [(method, timestamp), ...]) - the same scenarios the host matrix
@@ -105,6 +106,39 @@ def _step(detector, method, t, to_value):
     return to_value(event), deadline
 
 
+# The same, with the detector told to count to three. Everything above stays
+# in the table unchanged on purpose: max_taps=2 is not a special case in the
+# code, it is the general algorithm with a limit of two, and the fact that the
+# original scripts still pass is what says so.
+TRIPLE_SCRIPTS = [
+    ("a triple tap fires on the third press", [
+        ("press", 0.0), ("release", 0.1), ("press", 0.2), ("release", 0.3),
+        ("press", 0.4), ("release", 0.5),
+    ]),
+    ("a double tap now has to wait out the window", [
+        ("press", 0.0), ("release", 0.1), ("press", 0.2), ("release", 0.3),
+        ("timeout", 0.6),
+    ]),
+    ("a burst whose last tap outlives the window emits without waiting", [
+        ("press", 0.0), ("release", 0.1), ("press", 0.2), ("release", 0.7),
+    ]),
+    ("a fourth tap starts a fresh burst", [
+        ("press", 0.0), ("release", 0.1), ("press", 0.2), ("release", 0.3),
+        ("press", 0.4), ("release", 0.5),
+        ("press", 0.6), ("release", 0.7), ("timeout", 1.1),
+    ]),
+    ("holding part-way through a burst ends it as a long press", [
+        ("press", 0.0), ("release", 0.1), ("press", 0.2), ("hold", 1.2),
+        ("release", 1.3), ("press", 2.0), ("release", 2.1), ("timeout", 2.5),
+    ]),
+    ("three slow taps are three short presses", [
+        ("press", 0.0), ("release", 0.1), ("timeout", 0.4),
+        ("press", 1.0), ("release", 1.1), ("timeout", 1.4),
+        ("press", 2.0), ("release", 2.1), ("timeout", 2.4),
+    ]),
+]
+
+
 @pytest.mark.parametrize("name,script", SCRIPTS, ids=[s[0] for s in SCRIPTS])
 def test_port_matches_host_step_for_step(name, script):
     host, port = HostDetector(), fw.TriggerDetector()
@@ -114,15 +148,55 @@ def test_port_matches_host_step_for_step(name, script):
         assert actual == expected, f"{name}: {method}({t}) diverged"
 
 
+@pytest.mark.parametrize(
+    "name,script", TRIPLE_SCRIPTS, ids=[s[0] for s in TRIPLE_SCRIPTS]
+)
+def test_port_matches_host_when_counting_to_three(name, script):
+    host, port = HostDetector(max_taps=3), fw.TriggerDetector(max_taps=3)
+    for method, t in script:
+        expected = _step(host, method, t, lambda e: e.value if e else None)
+        actual = _step(port, method, t, lambda e: e)
+        assert actual == expected, f"{name}: {method}({t}) diverged"
+
+
+def test_counting_further_is_what_delays_a_double_tap():
+    """The cost the host is deciding about when it writes max_taps, stated as
+    a test so it cannot change by accident: at 2 a double tap lands on the
+    second press, at 3 it cannot, because a third tap might still be coming."""
+    taps = [("press", 0.0), ("release", 0.1), ("press", 0.2)]
+    instant = fw.TriggerDetector(max_taps=2)
+    patient = fw.TriggerDetector(max_taps=3)
+    for method, t in taps:
+        instant_out = _step(instant, method, t, lambda e: e)
+        patient_out = _step(patient, method, t, lambda e: e)
+    assert instant_out == fw.DOUBLE_TAP
+    assert patient_out is None
+    # ...and arrives when the window closes instead.
+    _step(patient, "release", 0.3, lambda e: e)
+    assert _step(patient, "timeout", 0.7, lambda e: e) == fw.DOUBLE_TAP
+
+
+def test_changing_max_taps_abandons_the_burst_in_progress():
+    """Otherwise a burst counted under one setting finishes under another and
+    emits a gesture neither of them describes."""
+    for detector in (fw.TriggerDetector(max_taps=3), HostDetector(max_taps=3)):
+        detector.on_press(0.0)
+        detector.on_release(0.1)
+        detector.on_press(0.2)  # two taps in, nothing emitted yet
+        detector.set_max_taps(2)
+        assert detector.on_timeout(1.0) is None
+
+
 def test_scripts_cover_every_gesture():
-    """A guard on the table above: if a gesture stopped being produced the
+    """A guard on the tables above: if a gesture stopped being produced the
     comparison would still pass while testing nothing about it."""
     seen = set()
-    for _name, script in SCRIPTS:
-        detector = fw.TriggerDetector()
-        for method, t in script:
-            result = _step(detector, method, t, lambda e: e)
-            event = result[0] if isinstance(result, tuple) else result
-            if event is not None:
-                seen.add(event)
-    assert seen == {fw.SHORT_PRESS, fw.LONG_PRESS, fw.DOUBLE_TAP}
+    for scripts, max_taps in ((SCRIPTS, 2), (TRIPLE_SCRIPTS, 3)):
+        for _name, script in scripts:
+            detector = fw.TriggerDetector(max_taps=max_taps)
+            for method, t in script:
+                result = _step(detector, method, t, lambda e: e)
+                event = result[0] if isinstance(result, tuple) else result
+                if event is not None:
+                    seen.add(event)
+    assert seen == {fw.SHORT_PRESS, fw.LONG_PRESS, fw.DOUBLE_TAP, fw.TRIPLE_TAP}

@@ -2,9 +2,9 @@
 
 Real taps, real gaps: what's being checked is the tempo machine (BPM is a
 rolling average of recent tap intervals, a long gap starts the average over,
-the LED's live period is floored for flash safety and reverted to the
-configured palette on exit) - not any habit-tracking, since a metronome
-deliberately logs nothing of its own to the event store.
+the LED's live period is floored for flash safety and gone on exit) - not any
+habit-tracking, since a metronome deliberately logs nothing of its own to the
+event store.
 """
 
 import asyncio
@@ -67,6 +67,19 @@ async def _tap(device, trigger: TriggerType = TriggerType.SHORT_PRESS):
     await asyncio.sleep(0.03)  # let the consumer act on it
 
 
+def _period(device):
+    """How fast the LED is actually blinking: the one-off look the metronome
+    is pushing if there is one, and the palette entry for its state otherwise.
+
+    Deliberately not `device.palette["METRONOME"]`. The tempo used to be
+    rendered by rewriting that entry and is now pushed as an ephemeral effect
+    (ROADMAP D4); asserting on what the light is doing rather than on which
+    mechanism drives it is what makes these tests outlive the change.
+    """
+    effect = device.led_effect or device.palette[device.led_state.value]
+    return effect.period_s
+
+
 async def test_entering_shows_the_metronome_light(tmp_path):
     seen = {}
 
@@ -81,7 +94,7 @@ async def test_default_tempo_before_any_taps(tmp_path):
     seen = {}
 
     async def script(device):
-        seen["period"] = device.palette["METRONOME"].period_s
+        seen["period"] = _period(device)
 
     await _run(tmp_path, script)
     # start_bpm's default of 120 - one beat every half second. The mode sets
@@ -97,7 +110,7 @@ async def test_two_taps_set_a_live_tempo(tmp_path):
         await _tap(device)
         await asyncio.sleep(0.5)  # roughly 120 BPM
         await _tap(device)
-        seen["period"] = device.palette["METRONOME"].period_s
+        seen["period"] = _period(device)
 
     await _run(tmp_path, script)
     assert 0.4 < seen["period"] < 0.65  # ~0.5s period, some real-clock slack
@@ -112,7 +125,7 @@ async def test_fast_taps_never_strobe_the_led_past_the_safety_floor(tmp_path):
         await _tap(device)
         await asyncio.sleep(0.05)  # far faster than the safety floor allows
         await _tap(device)
-        seen["period"] = device.palette["METRONOME"].period_s
+        seen["period"] = _period(device)
 
     await _run(tmp_path, script)
     assert seen["period"] >= main._MIN_FLASH_PERIOD_S
@@ -125,13 +138,13 @@ async def test_a_long_gap_resets_the_average_instead_of_averaging_in_the_silence
         await _tap(device)
         await asyncio.sleep(0.5)
         await _tap(device)  # ~120 BPM established
-        seen["first_tempo"] = device.palette["METRONOME"].period_s
+        seen["first_tempo"] = _period(device)
         await asyncio.sleep(2.5)  # longer than the reset gap
         await _tap(device)  # starts a fresh average - only one tap so far
-        seen["after_gap"] = device.palette["METRONOME"].period_s
+        seen["after_gap"] = _period(device)
         await asyncio.sleep(1.0)
         await _tap(device)  # second tap of the new average: ~60 BPM
-        seen["new_tempo"] = device.palette["METRONOME"].period_s
+        seen["new_tempo"] = _period(device)
 
     await _run(tmp_path, script)
     # Unchanged: a lone tap after the gap does not yet have a second tap to
@@ -140,20 +153,32 @@ async def test_a_long_gap_resets_the_average_instead_of_averaging_in_the_silence
     assert 0.85 < seen["new_tempo"] < 1.15  # ~60 BPM now, not averaged with the gap
 
 
-async def test_exit_restores_the_configured_palette(tmp_path):
+async def test_the_live_tempo_never_touches_the_stored_palette(tmp_path):
+    """A session's tempo must not outlive it, or the next metronome starts at
+    whatever the last one settled on.
+
+    It now cannot: the tempo is pushed as an ephemeral effect, so METRONOME's
+    stored entry still reads as configured *during* the session and there is
+    nothing to put back on the way out."""
     seen = {}
 
     async def script(device):
         await _tap(device)
         await asyncio.sleep(0.3)
         await _tap(device)
+        seen["shown_during"] = _period(device)
+        seen["stored_during"] = device.palette["METRONOME"].period_s
         await _tap(device, TriggerType.LONG_PRESS)  # exit
         seen["led"] = device.led_state
-        seen["period"] = device.palette["METRONOME"].period_s
+        seen["effect_after"] = device.led_effect
+        seen["stored_after"] = device.palette["METRONOME"].period_s
 
     await _run(tmp_path, script)
+    assert 0.2 < seen["shown_during"] < 0.45   # the tapped tempo, on screen
+    assert seen["stored_during"] == 0.5        # and not in the palette
     assert seen["led"] is LEDState.IDLE
-    assert seen["period"] == 0.5  # reverted to the configured default
+    assert seen["effect_after"] is None
+    assert seen["stored_after"] == 0.5
 
 
 async def test_a_finished_session_logs_its_tempo(tmp_path):
@@ -259,7 +284,7 @@ async def test_max_bpm_bounds_what_a_bounced_press_can_register(tmp_path):
         await _tap(device)
         await asyncio.sleep(0.02)  # ~3000 BPM if taken at face value
         await _tap(device)
-        seen["period"] = device.palette["METRONOME"].period_s
+        seen["period"] = _period(device)
     finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -294,7 +319,7 @@ async def test_the_light_keeps_time_at_the_configured_starting_tempo(tmp_path):
         device.press(TriggerType.SHORT_PRESS)
         await _drain(device.events)
         await asyncio.sleep(0.15)
-        seen["period"] = device.palette["METRONOME"].period_s
+        seen["period"] = _period(device)
     finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

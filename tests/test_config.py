@@ -2,6 +2,7 @@ import json
 from datetime import time
 
 from aibutton.config import (
+    TRIGGER_TYPES,
     ActionsBehavior,
     AlarmBehavior,
     AlwaysActivation,
@@ -19,6 +20,7 @@ from aibutton.config import (
     WebhookAction,
     WindowActivation,
     as_dict,
+    bound_triggers,
     load_config,
     parse_config,
 )
@@ -780,3 +782,51 @@ def test_config_manager_env_path(tmp_path, monkeypatch):
     cm = ConfigManager()
     assert cm.path == path
     assert cm.config.ble_device_name == "FromEnv"
+
+
+# --- which gestures are actually bound ---------------------------------
+
+def test_the_gesture_vocabulary_matches_the_wire():
+    """config.py and device.py must offer the same gestures, or a mode could
+    bind one the button will never send (or the button could send one no mode
+    can name)."""
+    from aibutton.device import TriggerType
+
+    assert TRIGGER_TYPES == tuple(t.value for t in TriggerType)
+
+
+def test_bound_triggers_reads_the_everyday_template():
+    config = parse_config({
+        "modes": [{
+            "name": "Default", "template": "actions",
+            "activation": {"type": "always"},
+            "short_press": {"action": "log", "event": "ping"},
+            "triple_tap": {"action": "log", "event": "note"},
+        }],
+    })
+    assert bound_triggers(config.modes) == {"short_press", "triple_tap"}
+
+
+def test_bound_triggers_reads_a_takeover_template_too():
+    """Pomodoro keeps its gesture map under a different field name. Reading
+    the dataclass's dict-shaped fields rather than asking each template what
+    it binds is what makes that work without a branch per template - including
+    for a template nobody has written yet."""
+    config = parse_config({
+        "modes": [{
+            "name": "Pom", "template": "pomodoro",
+            "activation": {"type": "manual"},
+            "short_press": "toggle", "long_press": "exit", "double_tap": "extend",
+        }],
+    })
+    assert {"short_press", "long_press", "double_tap"} <= bound_triggers(config.modes)
+
+
+def test_nothing_bound_is_an_empty_set_not_an_error():
+    config = parse_config({
+        "modes": [{
+            "name": "Tea", "template": "countdown",
+            "activation": {"type": "manual"}, "minutes": 3,
+        }],
+    })
+    assert bound_triggers(config.modes) == set()

@@ -33,11 +33,17 @@ log = logging.getLogger(__name__)
 
 
 class TriggerType(Enum):
-    """A gesture, as detected on-device and notified to the host."""
+    """A gesture, as detected on-device and notified to the host.
+
+    Tap counts past three are expressible on the wire and have no member
+    here yet - adding one is a host-side change with no reflash behind it,
+    which is the property parameterised gestures exist to buy (ROADMAP D5).
+    """
 
     SHORT_PRESS = "short_press"
     LONG_PRESS = "long_press"
     DOUBLE_TAP = "double_tap"
+    TRIPLE_TAP = "triple_tap"
 
 
 class LEDState(Enum):
@@ -77,6 +83,8 @@ SOUND_CMD_UUID = "f3641403-00b0-4240-ba50-05ca45bf8abc"
 LED_PALETTE_UUID = "f3641404-00b0-4240-ba50-05ca45bf8abc"
 DEVICE_INFO_UUID = "f3641405-00b0-4240-ba50-05ca45bf8abc"
 OTA_CONTROL_UUID = "f3641406-00b0-4240-ba50-05ca45bf8abc"  # reserved, unimplemented
+LED_EFFECT_UUID = "f3641407-00b0-4240-ba50-05ca45bf8abc"
+GESTURE_CONFIG_UUID = "f3641408-00b0-4240-ba50-05ca45bf8abc"
 
 # --- what the device says it is ---------------------------------------
 #
@@ -95,6 +103,8 @@ CAP_BATTERY = 0x0010   # features cannot pick the same bit, and reported as 0
 CAP_IMU = 0x0020       # until the thing behind them exists
 CAP_MIC = 0x0040
 CAP_OTA = 0x0080
+CAP_EFFECT = 0x0100          # a look can be pushed without allocating an LEDState
+CAP_GESTURE_PARAMS = 0x0200  # gestures carry a parameter; GESTURE_CONFIG is read
 
 CAPABILITY_NAMES = {
     CAP_LED: "led",
@@ -105,6 +115,8 @@ CAPABILITY_NAMES = {
     CAP_IMU: "imu",
     CAP_MIC: "mic",
     CAP_OTA: "ota",
+    CAP_EFFECT: "effect",
+    CAP_GESTURE_PARAMS: "gesture-params",
 }
 
 DEVICE_INFO_LEN = 6
@@ -160,12 +172,72 @@ def decode_device_info(data) -> DeviceInfo | None:
         capabilities=(data[4] << 8) | data[5],
     )
 
+# The three original one-byte codes. Frozen: a device in someone else's
+# pocket still sends these and they must not come to mean anything else.
 GESTURE_CODES: dict[TriggerType, int] = {
     TriggerType.SHORT_PRESS: 0x01,
     TriggerType.LONG_PRESS: 0x02,
     TriggerType.DOUBLE_TAP: 0x03,
 }
 GESTURE_BY_CODE = {code: trigger for trigger, code in GESTURE_CODES.items()}
+
+# Kinds that take a parameter byte. HOLD is reserved - the wire can carry a
+# hold level, the detector emits one, and claiming the code now is what keeps
+# that a host-side change later rather than another reflash.
+GESTURE_TAP = 0x10
+GESTURE_HOLD = 0x11
+
+# What N taps means to the mode machine. This is the *host's* vocabulary, and
+# it is deliberately shorter than the wire's: the firmware will count higher,
+# but a count the host cannot name is a count nothing could be bound to.
+TAP_TRIGGERS: dict[int, TriggerType] = {
+    1: TriggerType.SHORT_PRESS,
+    2: TriggerType.DOUBLE_TAP,
+    3: TriggerType.TRIPLE_TAP,
+}
+TAP_COUNTS = {trigger: count for count, trigger in TAP_TRIGGERS.items()}
+
+DEFAULT_MAX_TAPS = 2  # what an unconfigured detector does: today's behaviour
+MAX_TAPS = max(TAP_TRIGGERS)
+
+
+def decode_gesture(data) -> TriggerType | None:
+    """A BUTTON_EVENT notify -> the gesture it means, or None if this host has
+    no name for it.
+
+    Both forms are accepted, and that asymmetry is the point: the host must
+    understand everything a device might send, because the device is the half
+    that is hard to update. A one-byte notify is a pre-v1 button (or a v1 one
+    reporting a gesture that has always had a code); two bytes is a kind plus
+    its parameter.
+    """
+    if not data:
+        return None
+    code = data[0]
+    if code == GESTURE_TAP:
+        return TAP_TRIGGERS.get(data[1]) if len(data) > 1 else None
+    if code == GESTURE_HOLD:
+        return None  # reserved: no host vocabulary for hold levels yet
+    return GESTURE_BY_CODE.get(code)
+
+
+def gesture_config_payload(max_taps: int) -> bytes:
+    """The GESTURE_CONFIG write: how long a tap burst the device should look
+    for. Grows by appending, so a device that learns about hold levels reads
+    a longer payload and an older one ignores the tail."""
+    return bytes([max(DEFAULT_MAX_TAPS, min(int(max_taps), MAX_TAPS))])
+
+
+def max_taps_for(triggers) -> int:
+    """The longest tap burst any of `triggers` needs.
+
+    Derived rather than configured: counting to three costs a double tap its
+    instant response, so a button pays that only once something is actually
+    bound to a triple tap.
+    """
+    return max(
+        [DEFAULT_MAX_TAPS] + [TAP_COUNTS[t] for t in triggers if t in TAP_COUNTS]
+    )
 
 LED_CODES: dict[LEDState, int] = {
     LEDState.IDLE: 0x01,
@@ -231,14 +303,14 @@ def rgb_bytes(color: str) -> bytes:
         return b"\x00\x00\x00"
 
 
-def palette_payload(state: LEDState, effect) -> bytes:
-    """The LED_PALETTE write for one state. `effect` is duck-typed on
+def effect_payload(effect) -> bytes:
+    """The nine bytes describing a look - the LED_EFFECT write, and the tail
+    of a palette entry. `effect` is duck-typed on
     .style/.color/.color2/.period_s (config.LedEffect) so this module stays
     free of config imports."""
     period_cs = max(1, min(int(round(effect.period_s * 100)), _MAX_PERIOD_CS))
     return bytes(
         [
-            LED_CODES[state],
             LED_STYLE_CODES.get(effect.style, LED_STYLE_CODES["solid"]),
             *rgb_bytes(effect.color),
             *rgb_bytes(effect.color2),
@@ -246,6 +318,12 @@ def palette_payload(state: LEDState, effect) -> bytes:
             period_cs & 0xFF,
         ]
     )
+
+
+def palette_payload(state: LEDState, effect) -> bytes:
+    """The LED_PALETTE write for one state: which state, then what it looks
+    like. Same nine bytes as LED_EFFECT, so the two cannot drift."""
+    return bytes([LED_CODES[state]]) + effect_payload(effect)
 
 
 class ButtonDevice(ABC):
@@ -256,6 +334,7 @@ class ButtonDevice(ABC):
     def __init__(self) -> None:
         self.events: asyncio.Queue[TriggerType] = asyncio.Queue()
         self.palette: dict = {}
+        self.max_taps: int = DEFAULT_MAX_TAPS
         # What this device says it is. Read, not asserted - which is why it is
         # an attribute rather than a sixth method on the seam. Anything that is
         # its own hardware knows its own answer; BLEDevice replaces this with
@@ -270,7 +349,21 @@ class ButtonDevice(ABC):
         self.events.put_nowait(trigger)
 
     @abstractmethod
-    def set_led(self, state: LEDState) -> None: ...
+    def set_led(self, state: LEDState, effect=None) -> None:
+        """Show `state`, optionally wearing `effect` instead of its palette
+        entry.
+
+        The optional look is how a mode gets its own appearance without
+        allocating a global `LEDState` (ROADMAP D4). It is *ephemeral*: not
+        stored, not named, and gone at the next set_led. That is deliberately
+        an argument rather than a fifth method - it is the same assertion the
+        seam already makes ("show this"), carrying more detail, so it widens
+        nothing.
+
+        `state` is still required, and still means something, because it is
+        what the web UI and the status line report and what a device without
+        the capability falls back to rendering.
+        """
 
     @abstractmethod
     def play_sound(self, sound: Sound) -> None: ...
@@ -291,6 +384,16 @@ class ButtonDevice(ABC):
         browser) just remember it.
         """
         self.palette = palette
+
+    def set_gesture_config(self, max_taps: int) -> None:
+        """Tell the device how long a tap burst to look for.
+
+        Device state the host asserts, exactly like the palette, and derived
+        from what the config actually binds rather than configured by hand -
+        see `max_taps_for`. A device that cannot be told keeps its default of
+        2, which is the behaviour it has always had.
+        """
+        self.max_taps = max(DEFAULT_MAX_TAPS, min(int(max_taps), MAX_TAPS))
 
     @property
     def connected(self) -> bool:
@@ -321,18 +424,26 @@ class MockDevice(ButtonDevice):
     def __init__(self) -> None:
         super().__init__()
         self.led_state = LEDState.IDLE
+        # The look currently overriding led_state's palette entry, if any.
+        # main.py mirrors it into DeviceStatus so the browser's virtual LED
+        # shows what the real one would.
+        self.led_effect = None
         self.last_sound: Sound | None = None
         self.looping: Sound | None = None
         # The mock's hardware is the browser, which renders the LED and plays
-        # the tones - so it genuinely has all three, and says so rather than
-        # inheriting the "assume the worst case is fine" default.
+        # the tones - so it genuinely has all of these, and says so rather
+        # than inheriting the "assume the worst case is fine" default. It
+        # counts taps in Python, so gesture parameters are free too.
         self.info = DeviceInfo(
             protocol_version=PROTOCOL_VERSION,
-            capabilities=CAP_LED | CAP_BUZZER | CAP_PALETTE,
+            capabilities=(
+                CAP_LED | CAP_BUZZER | CAP_PALETTE | CAP_EFFECT | CAP_GESTURE_PARAMS
+            ),
         )
 
-    def set_led(self, state: LEDState) -> None:
+    def set_led(self, state: LEDState, effect=None) -> None:
         self.led_state = state
+        self.led_effect = effect
 
     def play_sound(self, sound: Sound) -> None:
         self.last_sound = sound

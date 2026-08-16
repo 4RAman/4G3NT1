@@ -308,6 +308,20 @@ class LEDController:
         if code == self._state:
             self._start(self._palette[code])
 
+    def show_effect(self, style, color, color2, period_s):
+        """Render a look that belongs to no state, until the next set_state().
+
+        The palette is left alone: this is a thing the host is *showing*, not
+        a thing it is changing. `_state` is cleared because nothing named is
+        on screen anymore - so a palette edit arriving mid-effect updates the
+        stored entry without yanking the light off what it is displaying.
+        """
+        if style not in self._styles:
+            print("led: unknown style 0x%02x - ignored" % style)
+            return
+        self._state = None
+        self._start(Effect(style, color, color2, period_s))
+
     @property
     def usable(self):
         """Whether an LED actually came up - reported over DEVICE_INFO."""

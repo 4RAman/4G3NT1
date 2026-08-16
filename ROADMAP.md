@@ -71,8 +71,12 @@ This is the one Stage-2 finding worth acting on immediately, because it
 invalidates "load it with as many apps as it will fit" as currently specified.
 
 A takeover app is reached by an `enter_mode` action bound to a gesture in an
-ambient mode. There are **three gestures**. Keep one for everyday logging and
-you can reach **two apps**. Time-windowed ambient modes buy you more only if
+ambient mode. There were **three gestures**; protocol v1 made tap counts data,
+so there are now four and could be more for the asking. That moves the number
+without changing the shape of the problem: keep one for everyday logging and
+you reach **three apps**, and every further gesture is a longer tap that
+nobody wants to remember — and that costs the double tap its instant response
+the moment you bind one. Time-windowed ambient modes buy you more only if
 you're willing to say *when* you want each app, which is not what an app
 launcher is.
 
@@ -81,7 +85,7 @@ Options, cheapest first:
 | Option | Cost | Verdict |
 |---|---|---|
 | Time-window ambient modes rebind gestures per hour | zero — works today | A workaround, not a launcher. Fine for 2–3 scheduled apps. |
-| N-tap gestures (4-tap = app 4…) | new gesture vocabulary on the wire | Doesn't scale past ~5 and is miserable to remember |
+| N-tap gestures (4-tap = app 4…) | ✔ shipped — now free, host-side data | Still doesn't scale past ~5, is miserable to remember, and each one slows the double tap. Being cheap did not make it good |
 | Web UI / phone picks the active app | small | Breaks "no second control" for the primary flow |
 | **A launcher app** | one new template + one core change | **Recommended** |
 
@@ -95,7 +99,10 @@ mode**. Today `enter_mode` is only reachable from the ambient layer
 back into itself.
 
 It also needs per-app colour, which is [TODO.md](TODO.md) item 3 and decision
-**D4** below. Those three things are one piece of work, not three.
+**D4** below. **D4 has shipped**, so the launcher can already show a different
+colour per entry — `set_led(state, effect)` in its cycle loop, no wire work.
+What item 3 still owes it is somewhere for those colours to *live* in the
+config. The remaining piece of work is host-side and is two things, not three.
 
 ### Stage 2 exit gates
 
@@ -109,8 +116,11 @@ It also needs per-app colour, which is [TODO.md](TODO.md) item 3 and decision
 - [ ] **Verified power-cycle recovery** — still needs real hardware: the
       reconnect path is tested against a fake bleak, not against a button
       whose USB was pulled mid-session
-- [ ] **Protocol v1 frozen** (see below) — this is the one architectural task
-      Stage 2 must not defer
+- [x] **Protocol v1 frozen** (see below) — the one architectural task Stage 2
+      must not defer, and it is done: capability negotiation, ephemeral
+      effects and parameterised gestures shipped, OTA and hold levels
+      reserved. **Everything else on this page is now reachable without a
+      reflash**, which is the property that was actually being bought
 
 ### Freeze the protocol *before* you build more hardware
 
@@ -125,12 +135,18 @@ Land them as one revision, then freeze:
    protocol change non-breaking — a new host asks an old device what it can
    do instead of assuming — and it is why the remaining three below are now
    negotiable additions rather than a flag day. (**D5**, **D8**)
-2. **Parameterised gestures** — the wire carries three magic constants today.
-   Make it carry a gesture *kind plus a parameter* (tap count, hold
-   duration bucket) so 5-tap, triple-tap and long-hold levels arrive as data
-   rather than as new codes. (**D5**)
-3. **Ephemeral effects** — let the host push a look without burning a global
-   LED state code. (**D4**)
+2. ~~**Parameterised gestures**~~ ✔ **shipped.** The wire carries
+   `[kind, param]` beside the three original codes, which are frozen and
+   still emitted for the gestures that have always had them. So 5-tap and
+   triple-tap now arrive as *data* — a `TriggerType` member and a `GESTURES`
+   entry — with no reflash under them. Hold levels have their kind code
+   claimed (`GESTURE_HOLD`) and are not implemented: the detector emits one
+   hold, and raising that is firmware work whenever something wants it.
+   (**D5**)
+3. ~~**Ephemeral effects**~~ ✔ **shipped.** `LED_EFFECT` renders a look
+   immediately and stores nothing, so a per-app appearance costs a write
+   rather than a byte of a 255-value namespace mirrored four ways. `0x0B` is
+   still the highest LED state code. (**D4**)
 4. **OTA hook** — ✔ *reserved*: `OTA_CONTROL_UUID` and `CAP_OTA` are claimed
    and documented as unimplemented, and the version handshake is `DEVICE_INFO`'s
    first byte. The implementation is still Stage 4 and still gates shipping a
@@ -160,14 +176,17 @@ why it can start immediately and carries almost no hardware risk.
 
 ### 3a — Apps become declarative and pure
 
-Today a rich app is a **6-to-9 file change**:
+Today a rich app is a **4-to-6 file change**:
 `config.py` (dataclass, parser, allow-list, serialiser, union) ·
 `main.py` (a `run_*` coroutine, two `isinstance` chains, an import) ·
-`schema.js` (template, takeover set, built-in) ·
-`device.py` + `firmware/protocol.py` + `firmware/led.py` + `config.py` again
-(a new LED state, mirrored four ways) · then the tests.
+`schema.js` (template, takeover set, built-in) · then the tests.
 
-That is not hot-swappable, and it is nowhere near a third-party app store.
+It was 6-to-9 until protocol v1: a new LED state, mirrored four ways, used to
+come with the territory and no longer does — an app pushes a look instead.
+That is the cheap half of the tax gone. The expensive half is the list above,
+which is still not hot-swappable and still nowhere near a third-party app
+store, because every one of those files is a place an app author cannot
+reach.
 
 The fix is not a new paradigm — it's [CLAUDE.md](CLAUDE.md)'s existing one
 applied to the one place it isn't: **a pure core with I/O injected at the
@@ -347,8 +366,8 @@ back and undoing things" the brief is trying to avoid.
 | **D1** ✔ | Where does the brain run when the PC is asleep? | **Decided: on the device.** It runs the OS and the active app; the phone (optionally cloud-backed) holds preferences and does the heavy lifting. See [ARCHITECTURE.md](ARCHITECTURE.md) | — | — |
 | **D2** ✔ | Is an app code, or data? | **Decided: data.** A state machine with expressions, compiled to a binary package — bounded by construction, never arbitrary code. See [ARCHITECTURE.md](ARCHITECTURE.md) | — | — |
 | **D3** | One schema or two? | **One manifest, served over `/api/schema`** | Stage 3 | Every third-party app needs a patch to the host's JS bundle |
-| **D4** | Per-app looks, or global LED codes? | **Ephemeral effects; keep semantic states few.** `0x0B` of a one-byte namespace is already spent, mirrored four ways, and two Pomodoros still can't look different | Stage 2 exit | Wire codes exhaust; every app revision needs a reflash |
-| **D5** | Fixed gestures, or parameterised? | **Parameterised on the wire now** (kind + count/duration) | Stage 2 exit | A flag-day protocol break after hardware ships |
+| **D4** ✔ | Per-app looks, or global LED codes? | **Decided and shipped: ephemeral effects, semantic states kept few.** A look is a write, not a byte; `0x0B` is still the highest code. Where the looks are *stored* is TODO item 3 and is now host-side work | — | — |
+| **D5** ✔ | Fixed gestures, or parameterised? | **Decided and shipped: kind + parameter**, beside the frozen originals. Tap counts are data now; hold levels have their code reserved and are unimplemented | — | — |
 | **D6** | Field firmware update | **Reserve the handshake in v1; implement before any unit leaves the building** | v1 now, working by Stage 4 | You cannot fix a bug in someone else's key fob |
 | **D7** | The name | **Rename before public disclosure.** `aibutton` is descriptive and inaccurate | Stage 4/5 boundary | Repo, package, BLE name, app namespace, domain and marks all re-bake |
 | **D8** ✔ | How do hosts and devices stay compatible? | **Decided and shipped: capability negotiation via `DEVICE_INFO`** — never assume, always ask. Protocol v1 | — | — |
@@ -357,13 +376,19 @@ back and undoing things" the brief is trying to avoid.
 purpose.** The reason to batch protocol changes is that each one costs a
 reflash and a chance to drift the mirrored tables, which is ruinous once units
 are in other people's hands. But `DEVICE_INFO` is the one whose whole job is to
-make the *others* non-breaking. With it shipped, D4 and D5 arrive as
+make the *others* non-breaking. With it shipped, D4 and D5 arrived as
 capability-gated additions an old device can decline, rather than a flag day —
-so they are now a batch of two, negotiable, instead of a batch of four that had
-to be perfect first time.
+a batch of two, negotiable, instead of a batch of four that had to be perfect
+first time. Both landed together, in one reflash, as intended.
 
 That reasoning does not generalise. Anything that is *not* a
 negotiation mechanism still batches.
+
+**What the freeze means for the next change.** The bar is no longer "is this
+cheap now?" — it is a capability the device physically cannot express. Both
+of the taxes that used to push work onto the wire are gone: an app's own look
+is a write, and an app's own gesture is a `TriggerType` member. If a proposal
+wants a new characteristic, check first that it is not really one of those.
 
 ---
 

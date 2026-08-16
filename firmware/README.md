@@ -1,9 +1,9 @@
 # ESP32 firmware
 
 The hardware half of the [ESP32 split](../DESIGN-ESP32.md). It detects
-gestures, notifies them to the host as one byte each, and renders the LED
-state and buzzer tone the host writes back. Nothing else: modes, schedules,
-the event log and the web UI all live in the Python app on the PC.
+gestures, notifies them to the host, and renders the LED state and buzzer
+tone the host writes back. Nothing else: modes, schedules, the event log and
+the web UI all live in the Python app on the PC.
 
 | File | What |
 |---|---|

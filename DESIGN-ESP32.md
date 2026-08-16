@@ -70,6 +70,14 @@ ESP32 (firmware)                      PC host (the existing Python app)
 
 ## Protocol (v0 — **pinned**)
 
+> **This is the v0 wire, kept as history.** The live spec is
+> [firmware/protocol.py](firmware/protocol.py) and its host mirror
+> [aibutton/device.py](aibutton/device.py). v1 added `DEVICE_INFO` (ask what
+> you are talking to), `LED_EFFECT` (render a look without naming a state),
+> `GESTURE_CONFIG` (how many taps to count), a `METRONOME` LED code, and
+> two-byte `[kind, param]` gestures. Everything below is still true — v1 added
+> and never repurposed — but it is no longer the whole story.
+
 One GATT service, reusing the project UUID base (the old Pi peripheral's
 characteristics retire with it):
 

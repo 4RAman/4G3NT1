@@ -240,6 +240,72 @@ def test_zero_period_cannot_divide_by_zero():
     assert effect.period_s > 0
 
 
+# --- the look the host shows without naming a state --------------------
+
+async def test_show_effect_renders_a_look_that_belongs_to_no_state():
+    backend = RecordingLED()
+    controller = fw_led.LEDController(backend)
+    controller.set_state(protocol.LED_IDLE)
+    await asyncio.sleep(0.02)
+    controller.show_effect(protocol.STYLE_SOLID, (255, 0, 0), (0, 0, 0), 1.0)
+    await asyncio.sleep(0.02)
+    assert backend.colors[-1] == (1, 0, 0)
+    controller.off()
+
+
+async def test_showing_a_look_leaves_the_stored_palette_alone():
+    """The whole difference between this and set_effect, and the reason it is
+    worth a characteristic of its own: nothing is remembered, so a mode can
+    have its own appearance without editing state it does not own."""
+    backend = RecordingLED()
+    controller = fw_led.LEDController(backend)
+    before = dict(controller._palette)
+    controller.show_effect(protocol.STYLE_SOLID, (255, 0, 0), (0, 0, 0), 1.0)
+    await asyncio.sleep(0.02)
+    assert controller._palette == before
+    controller.off()
+
+
+async def test_the_next_state_ends_the_look():
+    """An ephemeral effect lasts until the next LED_STATE write and no longer -
+    which is what makes it safe for the host to push one and forget it."""
+    backend = RecordingLED()
+    controller = fw_led.LEDController(backend)
+    controller.show_effect(protocol.STYLE_SOLID, (255, 0, 0), (0, 0, 0), 1.0)
+    await asyncio.sleep(0.02)
+    controller.set_state(protocol.LED_LISTENING)
+    await asyncio.sleep(0.02)
+    assert backend.colors[-1] == (1, 1, 0)  # listening yellow, not the red look
+    controller.off()
+
+
+async def test_a_palette_edit_mid_look_does_not_yank_the_light():
+    """set_effect restarts the animation when you edit the state on screen.
+    While a look is showing, no state *is* on screen - so an edit arriving
+    from the web UI updates the entry and waits its turn."""
+    backend = RecordingLED()
+    controller = fw_led.LEDController(backend)
+    controller.set_state(protocol.LED_IDLE)
+    controller.show_effect(protocol.STYLE_SOLID, (255, 0, 0), (0, 0, 0), 1.0)
+    await asyncio.sleep(0.02)
+    controller.set_effect(
+        protocol.LED_IDLE, protocol.STYLE_SOLID, (0, 255, 0), (0, 0, 0), 1.0
+    )
+    await asyncio.sleep(0.02)
+    assert backend.colors[-1] == (1, 0, 0)  # still the look
+    controller.set_state(protocol.LED_IDLE)
+    await asyncio.sleep(0.02)
+    assert backend.colors[-1] == (0, 1, 0)  # and the edit took, underneath
+    controller.off()
+
+
+def test_an_unknown_style_in_a_look_is_ignored():
+    backend = RecordingLED()
+    controller = fw_led.LEDController(backend)
+    controller.show_effect(0x7F, (1, 2, 3), (0, 0, 0), 1.0)
+    assert backend.colors == []
+
+
 # --- WS2812 byte order -------------------------------------------------
 
 def test_neopixel_order_places_each_component():

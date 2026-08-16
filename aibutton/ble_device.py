@@ -29,10 +29,13 @@ from .device import (
     ASSUMED_INFO,
     BUTTON_EVENT_UUID,
     CAP_BUZZER,
+    CAP_EFFECT,
+    CAP_GESTURE_PARAMS,
     CAP_LED,
     DEVICE_INFO_UUID,
-    GESTURE_BY_CODE,
+    GESTURE_CONFIG_UUID,
     LED_CODES,
+    LED_EFFECT_UUID,
     LED_PALETTE_UUID,
     LED_STATE_UUID,
     SOUND_CMD_UUID,
@@ -41,6 +44,9 @@ from .device import (
     LEDState,
     Sound,
     decode_device_info,
+    decode_gesture,
+    effect_payload,
+    gesture_config_payload,
     palette_payload,
     sound_command,
 )
@@ -68,6 +74,11 @@ class BLEDevice(ButtonDevice):
         self._retry_s = retry_s
         self._outbox: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
         self._led_state = LEDState.IDLE
+        self._led_effect = None  # the ephemeral look showing, if any
+        # States whose palette entry on the device is currently holding an
+        # ephemeral look, on a device too old to render one properly. Emptied
+        # by putting the real entries back - see set_led.
+        self._clobbered: set[LEDState] = set()
         self._client: BleakClient | None = None
         self._connected = False
         self._stop = asyncio.Event()
@@ -107,11 +118,37 @@ class BLEDevice(ButtonDevice):
 
     # --- feedback out -------------------------------------------------
 
-    def set_led(self, state: LEDState) -> None:
+    def set_led(self, state: LEDState, effect=None) -> None:
         # Remembered even while disconnected, so the next connection starts
         # showing what the host currently believes.
-        self._led_state = state
-        self._send(LED_STATE_UUID, bytes([LED_CODES[state]]))
+        self._led_state, previous = state, self._led_state
+        self._led_effect = effect
+        # Re-asserting the same state with a fresh look must not re-send the
+        # state: the device restarts the animation on every LED_STATE write,
+        # and a countdown pushes a colour every few seconds.
+        if state is not previous or effect is None:
+            self._send(LED_STATE_UUID, bytes([LED_CODES[state]]))
+        if effect is None:
+            self._restore_clobbered()
+        elif self.info.has(CAP_EFFECT):
+            self._send(LED_EFFECT_UUID, effect_payload(effect))
+        else:
+            # A device that predates ephemeral effects can still show the
+            # look - by borrowing the state's palette entry, which is exactly
+            # the reach-around run_metronome and run_countdown used to do from
+            # the run loop. It lives here now so the loops don't have to know
+            # which kind of device they are talking to, and so the borrowing
+            # is undone automatically rather than by a `finally` remembering.
+            self._clobbered.add(state)
+            self._send(LED_PALETTE_UUID, palette_payload(state, effect))
+
+    def _restore_clobbered(self) -> None:
+        """Put back any palette entry the fallback above borrowed."""
+        while self._clobbered:
+            state = self._clobbered.pop()
+            effect = self.palette.get(state.value)
+            if effect is not None:
+                self._send(LED_PALETTE_UUID, palette_payload(state, effect))
 
     def play_sound(self, sound: Sound) -> None:
         if not self.info.has(CAP_BUZZER):
@@ -136,6 +173,18 @@ class BLEDevice(ButtonDevice):
         super().set_palette(palette)
         for state, effect in self._palette_entries():
             self._send(LED_PALETTE_UUID, palette_payload(state, effect))
+
+    def set_gesture_config(self, max_taps: int) -> None:
+        """Tell the device how long a tap burst to watch for.
+
+        Gated: a device that predates parameterised gestures counts to two and
+        cannot be told otherwise, so writing to a characteristic it does not
+        have would only log a failure. It keeps behaving exactly as it always
+        has, which is the right answer for a button nobody has reflashed.
+        """
+        super().set_gesture_config(max_taps)
+        if self.info.has(CAP_GESTURE_PARAMS):
+            self._send(GESTURE_CONFIG_UUID, gesture_config_payload(self.max_taps))
 
     def _palette_entries(self):
         if not self.info.has(CAP_LED):
@@ -182,9 +231,9 @@ class BLEDevice(ButtonDevice):
     def _on_notify(self, _sender, data: bytearray) -> None:
         if not data:
             return
-        trigger = GESTURE_BY_CODE.get(data[0])
+        trigger = decode_gesture(data)
         if trigger is None:
-            log.warning("unknown gesture code 0x%02x - ignored", data[0])
+            log.warning("unknown gesture %s - ignored", bytes(data).hex())
             return
         self.press(trigger)
 
@@ -225,6 +274,15 @@ class BLEDevice(ButtonDevice):
             # and re-asked on every reconnect because the thing on the other
             # end may have been reflashed since.
             await self._adopt_info(client)
+            # A fresh device holds its own palette, so nothing is borrowed
+            # yet however this connection ended last time.
+            self._clobbered.clear()
+            if self.info.has(CAP_GESTURE_PARAMS):
+                await client.write_gatt_char(
+                    GESTURE_CONFIG_UUID,
+                    gesture_config_payload(self.max_taps),
+                    response=True,
+                )
             # The palette first, then the state - so the state that lights up
             # is already wearing the user's colours rather than the device's
             # built-in defaults for a frame.
@@ -232,10 +290,14 @@ class BLEDevice(ButtonDevice):
                 await client.write_gatt_char(
                     LED_PALETTE_UUID, palette_payload(state, effect), response=True
                 )
-            # Whatever the host thinks the LED should be, right now.
+            # Whatever the host thinks the LED should be, right now - including
+            # a look a takeover mode is part-way through showing, which would
+            # otherwise wait for its next change to reappear.
             await client.write_gatt_char(
                 LED_STATE_UUID, bytes([LED_CODES[self._led_state]]), response=True
             )
+            if self._led_effect is not None:
+                self.set_led(self._led_state, self._led_effect)
             await self._pump(client, disconnected)
         self._connected = False
         log.info("BLE: disconnected from %s", self._name)
