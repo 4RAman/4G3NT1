@@ -1,14 +1,11 @@
 {
+  "name": "Default",
   "ble_device_name": "AIButton",
-  "sounds_enabled": true,
+  "sounds_enabled": false,
   "database_path": "data/events.db",
   "web_enabled": true,
   "web_host": "0.0.0.0",
   "web_port": 8080,
-  "scenes": {
-    "dir": "scenes",
-    "active": "default"
-  },
   "modes": [
     {
       "name": "Main Menu",
@@ -18,15 +15,19 @@
       },
       "short_press": {
         "action": "enter_mode",
-        "target": "Pomodoro"
+        "target": "Metronome"
       },
       "long_press": {
         "action": "enter_mode",
-        "target": "Pomodoro 2"
+        "target": "Counter"
       },
       "double_tap": {
         "action": "enter_mode",
         "target": "Metronome"
+      },
+      "triple_tap": {
+        "action": "enter_mode",
+        "target": "Countdown 60s"
       }
     },
     {
@@ -90,39 +91,87 @@
       "activation": {
         "type": "manual"
       },
-      "event": "gratitude"
+      "event": "Habit"
     },
     {
       "name": "Alarm",
       "template": "alarm",
       "activation": {
         "type": "schedule",
-        "at": "05:00"
+        "at": "07:00",
+        "days": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri",
+          "sat",
+          "sun"
+        ]
       },
       "message": "Wake up",
       "label": "",
-      "snooze_minutes": 9,
+      "snooze_minutes": 10,
       "dismiss_event": "woke_up"
+    },
+    {
+      "name": "Countdown 60s",
+      "template": "countdown",
+      "activation": {
+        "type": "manual"
+      },
+      "minutes": 1,
+      "label": "",
+      "style": "flash",
+      "period_s": 0.5,
+      "ramp": [
+        {
+          "color": "#ff0000",
+          "at": 0
+        },
+        {
+          "color": "#ff8800",
+          "at": 0.2
+        },
+        {
+          "color": "#ffff00",
+          "at": 0.4
+        },
+        {
+          "color": "#00ffcc",
+          "at": 0.6
+        },
+        {
+          "color": "#0011ff",
+          "at": 0.8
+        },
+        {
+          "color": "#ffffff",
+          "at": 1
+        }
+      ],
+      "ring_on_finish": true,
+      "log_as": "countdown"
     }
   ],
   "led_palette": {
     "IDLE": {
-      "style": "rainbow",
-      "color": "#000105",
+      "style": "breathe",
+      "color": "#967d45",
       "color2": "#00fbff",
       "period_s": 8
     },
     "LISTENING": {
       "style": "breathe",
-      "color": "#ffffc2",
+      "color": "#515138",
       "color2": "#000000",
-      "period_s": 0.4
+      "period_s": 3
     },
     "THINKING": {
-      "style": "breathe",
-      "color": "#f3ebce",
-      "color2": "#363636",
-      "period_s": 0.2
+      "style": "alternate",
+      "color": "#ccfff7",
+      "color2": "#6e6e6e",
+      "period_s": 0.4
     },
     "SUCCESS": {
       "style": "solid",
@@ -134,7 +183,7 @@
       "style": "flash",
       "color": "#ff0000",
       "color2": "#000000",
-      "period_s": 0.18
+      "period_s": 0.483333333333333
     },
     "ALERT": {
       "style": "alternate",
@@ -146,7 +195,7 @@
       "style": "flash",
       "color": "#0062ff",
       "color2": "#000000",
-      "period_s": 0.25
+      "period_s": 0.603333333333333
     },
     "COUNTING": {
       "style": "fade",
@@ -173,5 +222,19 @@
       "period_s": 0.5
     }
   },
-  "looks": {}
+  "looks": {
+    "Ponder": {
+      "style": "fade",
+      "color": "#454545",
+      "color2": "#55aa9c",
+      "period_s": 1
+    },
+    "Cops": {
+      "style": "alternate",
+      "color": "#fd3f3f",
+      "color2": "#2e62ff",
+      "period_s": 0.4
+    }
+  },
+  "min_flash_period_s": 0.33
 }

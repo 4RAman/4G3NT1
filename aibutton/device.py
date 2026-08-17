@@ -44,6 +44,14 @@ class TriggerType(Enum):
     LONG_PRESS = "long_press"
     DOUBLE_TAP = "double_tap"
     TRIPLE_TAP = "triple_tap"
+    # Five, and deliberately not four. The names come from
+    # firmware/protocol.py's TAP_NAMES, which already covers 4..9; what a
+    # count means to the *host* is this table, and a count with no member here
+    # is dropped rather than fired. That is the useful behaviour for four - a
+    # stray extra tap on a triple should do nothing, not something else - and
+    # five is far enough out to be unmistakably deliberate, which is what a
+    # global on/off wants.
+    TAP_5 = "tap_5"
 
 
 class LEDState(Enum):
@@ -194,6 +202,7 @@ TAP_TRIGGERS: dict[int, TriggerType] = {
     1: TriggerType.SHORT_PRESS,
     2: TriggerType.DOUBLE_TAP,
     3: TriggerType.TRIPLE_TAP,
+    5: TriggerType.TAP_5,
 }
 TAP_COUNTS = {trigger: count for count, trigger in TAP_TRIGGERS.items()}
 
@@ -287,6 +296,23 @@ LED_STYLES = tuple(LED_STYLE_CODES)  # config validation + the web UI's picker
 STYLE_USES_COLOR = {"solid", "breathe", "flash", "alternate", "fade"}
 STYLE_USES_COLOR2 = {"alternate", "fade"}
 STYLE_USES_PERIOD = {"breathe", "flash", "alternate", "rainbow", "fade"}
+
+# Styles whose period is a hard on/off transition, which is what
+# photosensitivity guidance is actually about. `breathe` and `fade` cross the
+# same distance smoothly and do not strobe the same way, so the floor below
+# does not apply to them - see SAFE_MIN_PERIOD_S.
+STYLE_STROBES = {"flash", "alternate"}
+
+# The recommended floor on how often a light may switch: 3 Hz, per WCAG 2.3.1's
+# general-purpose flash threshold. It lives here rather than in config.py
+# because both config and main need it and device.py is the module both may
+# import (config imports device, never the reverse).
+#
+# It is the *default*, not the law: `AppConfig.min_flash_period_s` is a real
+# setting and may be taken lower deliberately. Everything that renders reads
+# the config's effective value; this constant is only what you get when nobody
+# said otherwise.
+SAFE_MIN_PERIOD_S = 1 / 3
 
 _MAX_PERIOD_CS = 0xFFFF  # the wire carries centiseconds in two bytes
 

@@ -128,7 +128,7 @@ async def test_fast_taps_never_strobe_the_led_past_the_safety_floor(tmp_path):
         seen["period"] = _period(device)
 
     await _run(tmp_path, script)
-    assert seen["period"] >= main._MIN_FLASH_PERIOD_S
+    assert seen["period"] >= main.SAFE_MIN_PERIOD_S
 
 
 async def test_a_long_gap_resets_the_average_instead_of_averaging_in_the_silence(tmp_path):
@@ -255,7 +255,7 @@ def test_no_tempo_can_make_the_light_blink_past_the_floor(bpm):
     """The property that actually matters, over the whole range rather than
     the handful of tempos above."""
     period, _ = main.metronome_flash(bpm)
-    assert period >= main._MIN_FLASH_PERIOD_S
+    assert period >= main.SAFE_MIN_PERIOD_S
 
 
 async def test_max_bpm_bounds_what_a_bounced_press_can_register(tmp_path):

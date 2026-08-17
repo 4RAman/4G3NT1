@@ -15,8 +15,12 @@ Endpoints (a future phone app should use these same routes):
     PUT  /api/scenes/{id}         overwrite one
     POST /api/scenes/{id}/activate  switch to it, hot
     DELETE /api/scenes/{id}       delete one (never the active one)
-    GET  /api/events?limit=50     recent log/timer events (newest first)
+    GET  /api/events?limit=50     recent events, newest first; filter with
+                                  kind/name/mode/since/until
+    GET  /api/events/kinds        the kinds actually present in the log
+    GET  /api/events/export       the same rows, as a csv or json download
     POST /api/trigger/{trigger}   simulate a button press
+    POST /api/dev/led             show one look now, saving nothing
 
 Submitted configs go through the exact parser the service uses
 (config.parse_config); anything invalid falls back per-key and the
@@ -36,6 +40,8 @@ reverse proxy if it ever needs to face an untrusted network.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import mimetypes
@@ -47,13 +53,21 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, scenes
 from .audio import ToneLibrary
-from .config import TRIGGER_TYPES, AppConfig, ConfigManager, as_dict, parse_with_warnings
-from .device import ButtonDevice, MockDevice, Sound, TriggerType
+from .config import (
+    TRIGGER_TYPES,
+    AppConfig,
+    ConfigManager,
+    as_dict,
+    flash_safe,
+    parse_effect_with_warnings,
+    parse_with_warnings,
+)
+from .device import ButtonDevice, LEDState, MockDevice, Sound, TriggerType
 from .rules import resolve
 from .store import EventStore
 
@@ -65,6 +79,17 @@ log = logging.getLogger(__name__)
 # and then appears to do nothing, so every scene response says which ones
 # differ from what the process actually started with.
 _STARTUP_ONLY = ("ble_device_name", "database_path", "web_enabled", "web_host", "web_port")
+
+# One row's columns, in the order the export writes them. Mirrors what
+# EventStore.recent selects; the CSV header is generated from this rather than
+# typed out, so a new column cannot appear in the JSON and go missing from the
+# spreadsheet.
+_EVENT_FIELDS = ("ts", "kind", "name", "duration_s", "mode", "value")
+# The most rows any single request will return. A ceiling rather than
+# pagination because this log is a few rows a day - the number exists so a
+# hand-made query cannot ask the service to build a 200 MB string, not because
+# anyone is expected to reach it.
+_EVENT_EXPORT_MAX = 10000
 
 # Windows' registry sometimes maps .js to text/plain, which browsers reject
 # for <script type="module">. Pin it so the config-menu ES modules load.
@@ -468,14 +493,82 @@ def create_app(ctx: WebContext) -> FastAPI:
         ctx.cm.reload()
         return {"effective": as_dict(ctx.cm.config)}
 
-    @app.get("/api/events")
-    async def events(limit: int = 50):
-        rows = ctx.store.recent(min(max(limit, 1), 500))
+    def _events(limit: int, kind, name, mode, since, until) -> list[dict]:
+        """The filtered log as dicts. Shared by the JSON endpoint and the
+        export so the file you download is by construction the table you were
+        looking at - two queries with two filter implementations would be two
+        answers to the same question."""
+        rows = ctx.store.recent(
+            limit=min(max(limit, 1), _EVENT_EXPORT_MAX),
+            kind=kind, name=name, mode=mode, since=since, until=until,
+        )
         return [
-            {"ts": ts, "kind": kind, "name": name, "duration_s": duration,
-             "mode": mode, "value": value}
-            for ts, kind, name, duration, mode, value in rows
+            {"ts": ts, "kind": kind_, "name": name_, "duration_s": duration,
+             "mode": mode_, "value": value}
+            for ts, kind_, name_, duration, mode_, value in rows
         ]
+
+    @app.get("/api/events")
+    async def events(
+        limit: int = 50,
+        kind: str | None = None,
+        name: str | None = None,
+        mode: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ):
+        return _events(limit, kind, name, mode, since, until)
+
+    @app.get("/api/events/kinds")
+    async def event_kinds():
+        """What the filter's kind picker should offer - read off the log
+        rather than hard-coded, so a new event kind appears on its own."""
+        return {"kinds": ctx.store.kinds()}
+
+    @app.get("/api/events/export")
+    async def export_events(
+        format: str = "csv",
+        limit: int = _EVENT_EXPORT_MAX,
+        kind: str | None = None,
+        name: str | None = None,
+        mode: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ):
+        """The same rows as /api/events, as a download.
+
+        The default limit is the ceiling rather than 50: an export is asking
+        for the log, and silently handing back the most recent page of it
+        would be the kind of quiet wrong answer that is only noticed much
+        later, in a spreadsheet.
+        """
+        if format not in ("csv", "json"):
+            raise HTTPException(422, f"unknown format {format!r} - csv or json")
+        rows = _events(limit, kind, name, mode, since, until)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        if format == "json":
+            return Response(
+                content=json.dumps(rows, indent=2),
+                media_type="application/json",
+                headers={
+                    "Content-Disposition":
+                        f'attachment; filename="button-events-{stamp}.json"'
+                },
+            )
+        buffer = io.StringIO()
+        # newline="" is csv's documented requirement; StringIO honours it and
+        # skipping it puts stray blank lines in the file on Windows.
+        writer = csv.DictWriter(buffer, fieldnames=_EVENT_FIELDS, lineterminator="\r\n")
+        writer.writeheader()
+        writer.writerows(rows)
+        return Response(
+            content=buffer.getvalue(),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="button-events-{stamp}.csv"'
+            },
+        )
 
     @app.post("/api/trigger/{trigger}")
     async def trigger(trigger: str):
@@ -507,6 +600,59 @@ def create_app(ctx: WebContext) -> FastAPI:
         return {
             "now": ctx.clock.now().isoformat(timespec="seconds"),
             "clock_override": ctx.clock.overridden,
+        }
+
+    @app.post("/api/dev/led")
+    async def dev_led(body: dict = Body(...)):
+        """Show one look on the real LED right now, without saving it.
+
+        The Lights tab's test bench. It needs no new device method because
+        "show this look" is already what an ephemeral effect means - the same
+        call `run_metronome` makes - so this is the seam being used, not
+        widened.
+
+        Nothing is written and nothing is remembered: the next press, mode
+        change or palette edit repaints from the config, which is what makes
+        this safe to poke at while a real button is in use. `{"clear": true}`
+        drops straight back to the palette without waiting for that.
+
+        `state` picks which LED_STATE byte rides along, because that is what a
+        device too old for effects falls back to rendering - and what the
+        status line reports either way. IDLE is the harmless default.
+
+        Same exposure as the rest of this API: it can already rewrite the whole
+        config, so being able to light the LED adds nothing (see the header).
+        """
+        raw_state = body.get("state", LEDState.IDLE.value)
+        try:
+            state = LEDState(raw_state)
+        except ValueError:
+            raise HTTPException(422, f"unknown LED state {raw_state!r}")
+
+        if body.get("clear"):
+            effect, warnings = None, []
+        else:
+            effect, warnings = parse_effect_with_warnings(body, "look")
+
+        # The bench pushes a look at the real LED, so it is subject to the same
+        # flash floor as anything the run loop pushes - a test bench that could
+        # strobe past the configured limit would be a hole in it, not a test of
+        # it. What comes back is the floored effect, so the page reports what is
+        # actually on the light rather than what was asked for.
+        effect = flash_safe(effect, ctx.cm.config.min_flash_period_s)
+        ctx.device.set_led(state, effect)
+        # Mirrors the tail of main.set_led rather than calling it: that one
+        # resolves the *active mode's* look, and the whole point here is to
+        # assert a literal one. The status fields are what the dashboard and
+        # the virtual device render from, so a test that skipped them would be
+        # invisible on a mock.
+        ctx.status.led_state = state.value
+        ctx.status.led_effect = effect
+        return {
+            "state": state.value,
+            "effect": _effect_dict(effect),
+            "warnings": warnings,
+            "connected": ctx.device.connected,
         }
 
     @app.get("/api/dev/sound/{name}")

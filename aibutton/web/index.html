@@ -260,9 +260,31 @@
   .palette-name { font-weight: 600; }
   .palette-meaning { color: var(--dim); font-size: 12px; }
   .palette-summary { color: var(--dim); font-size: 12px; margin-left: auto; }
+  /* Test bench: the swatches are round for the same reason the palette one
+     is - they stand for the LED, not for a colour field. */
+  .test-swatches { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .test-dot { width: 24px; height: 24px; border-radius: 50%; padding: 0;
+              border: 1px solid var(--line); cursor: pointer; }
+  .test-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
   .color-row { display: flex; align-items: center; gap: 8px; }
   .inp-color { width: 46px; height: 30px; padding: 2px; cursor: pointer; }
   .fld-hex { color: var(--dim); font-size: 12px; font-family: ui-monospace, monospace; }
+
+  /* Slider + its readout. The readout is monospace and fixed-width so the
+     number does not shuffle the slider sideways while you drag it. */
+  /* --- events filter bar: one row that wraps, not a form --- */
+  .ev-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+                margin-bottom: 8px; }
+  .ev-filters .inp { width: auto; }
+  #ev-name { min-width: 140px; }
+  .ev-spacer { flex: 1; }
+  .ev-count { color: var(--dim); font-size: 12px; font-family: ui-monospace, monospace; }
+  .ev-note { color: var(--dim); font-size: 12px; margin: 0 0 8px; }
+
+  .range-row { display: flex; align-items: center; gap: 10px; }
+  .inp-range { flex: 1; min-width: 90px; padding: 0; height: 22px; cursor: pointer; }
+  .fld-readout { color: var(--dim); font-size: 12px; font-family: ui-monospace, monospace;
+                 white-space: nowrap; min-width: 11ch; text-align: right; }
 
   /* --- ramp editor: the gradient first, the numbers under it --- */
   .ramp-edit { display: flex; flex-direction: column; gap: 8px; }
@@ -355,6 +377,19 @@
         <section class="tab-panel scroll-fade" data-panel="modes" id="panel-modes">Loading…</section>
         <section class="tab-panel scroll-fade" data-panel="lights" id="panel-lights" hidden>Loading…</section>
         <section class="tab-panel scroll-fade" data-panel="events" id="panel-events" hidden>
+          <div class="ev-filters">
+            <input type="search" id="ev-name" class="inp" placeholder="Search name…">
+            <select id="ev-kind" class="inp"><option value="">Any kind</option></select>
+            <input type="date" id="ev-since" class="inp" title="From this day">
+            <input type="date" id="ev-until" class="inp" title="Up to and including this day">
+            <button type="button" class="mini" id="ev-clear">Clear</button>
+            <span class="ev-spacer"></span>
+            <span class="ev-count" id="ev-count"></span>
+            <button type="button" class="mini" id="ev-csv">Export CSV</button>
+            <button type="button" class="mini" id="ev-json">Export JSON</button>
+          </div>
+          <p class="ev-note" data-help>Filters narrow the table and the export together
+            - what you download is what you are looking at.</p>
           <div id="events"></div>
         </section>
         <section class="tab-panel scroll-fade" data-panel="device" id="panel-device" hidden>Loading…</section>
@@ -487,9 +522,51 @@ async function refreshStatus() {
   }
 }
 
+// The filter state, as query params. One function builds them for the table
+// and for the export, so a downloaded file can never disagree with the table
+// it was downloaded from.
+function eventQuery() {
+  const params = new URLSearchParams();
+  const name = $('#ev-name').value.trim();
+  const kind = $('#ev-kind').value;
+  const since = $('#ev-since').value;
+  const until = $('#ev-until').value;
+  if (name) params.set('name', name);
+  if (kind) params.set('kind', kind);
+  // The pickers are days; the log is UTC instants. Local midnight to local
+  // midnight, with `until` inclusive of the day you chose - "up to the 5th"
+  // meaning "not the 5th" is the classic off-by-one in a date filter.
+  if (since) params.set('since', new Date(`${since}T00:00`).toISOString());
+  if (until) {
+    const end = new Date(`${until}T00:00`);
+    end.setDate(end.getDate() + 1);
+    params.set('until', end.toISOString());
+  }
+  return params;
+}
+
+function eventsFiltered() {
+  return [...eventQuery().keys()].length > 0;
+}
+
+async function refreshEventKinds() {
+  try {
+    const { kinds } = await api('/api/events/kinds');
+    const picker = $('#ev-kind');
+    const chosen = picker.value;
+    picker.innerHTML = '<option value="">Any kind</option>'
+      + kinds.map(k => `<option value="${k}">${k.replace('_', ' ')}</option>`).join('');
+    picker.value = chosen;  // a refresh must not silently drop the filter
+  } catch { /* server briefly away */ }
+}
+
 async function refreshEvents() {
   try {
-    const rows = await api('/api/events?limit=30');
+    const params = eventQuery();
+    params.set('limit', '200');
+    const rows = await api(`/api/events?${params}`);
+    $('#ev-count').textContent = rows.length
+      ? `${rows.length} row${rows.length === 1 ? '' : 's'}` : '';
     $('#events').innerHTML = rows.length
       ? `<table><tr><th>When</th><th>Kind</th><th>Name</th><th>Mode</th><th>Duration</th><th>Value</th></tr>` +
         rows.map(r => `<tr>
@@ -500,9 +577,32 @@ async function refreshEvents() {
           <td>${r.duration_s != null ? fmtDuration(r.duration_s) : ''}</td>
           <td>${r.value != null ? fmtValue(r.value) : ''}</td>
         </tr>`).join('') + '</table>'
-      : '<p class="empty">No events yet.'
-        + '<span data-help> Bind a press to Log/Timer in Modes, then press the button.</span></p>';
+      // An empty log and an empty filter result are different problems and
+      // need different advice - "press the button" is unhelpful when the
+      // answer is "you asked about last Tuesday".
+      : eventsFiltered()
+        ? '<p class="empty">Nothing matches these filters.</p>'
+        : '<p class="empty">No events yet.'
+          + '<span data-help> Bind a press to Log/Timer in Modes, then press the button.</span></p>';
   } catch { /* server briefly away; keep last view */ }
+}
+
+for (const id of ['#ev-name', '#ev-kind', '#ev-since', '#ev-until']) {
+  $(id).addEventListener('input', refreshEvents);
+}
+$('#ev-clear').addEventListener('click', () => {
+  for (const id of ['#ev-name', '#ev-kind', '#ev-since', '#ev-until']) $(id).value = '';
+  refreshEvents();
+});
+for (const [id, format] of [['#ev-csv', 'csv'], ['#ev-json', 'json']]) {
+  $(id).addEventListener('click', () => {
+    const params = eventQuery();
+    params.set('format', format);
+    // A plain navigation rather than fetch + blob: the endpoint already sends
+    // Content-Disposition, so the browser saves it and names it, and there is
+    // no object URL to remember to revoke.
+    window.location = `/api/events/export?${params}`;
+  });
 }
 
 $('#clock-set').addEventListener('click', async () => {
@@ -533,6 +633,7 @@ document.querySelectorAll('[data-trigger]').forEach(btn =>
     setTimeout(refreshEvents, 2500);
   }));
 
+refreshEventKinds();
 refreshStatus(); refreshEvents();
 setInterval(refreshStatus, 1000);
 setInterval(refreshEvents, 5000);

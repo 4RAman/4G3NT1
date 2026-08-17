@@ -43,6 +43,7 @@ from pathlib import Path
 
 from . import ramp
 from .device import (
+    SAFE_MIN_PERIOD_S,
     ButtonDevice,
     LEDState,
     MockDevice,
@@ -67,19 +68,19 @@ _SUCCESS_DISPLAY_S = 2.0
 # cheap scheduler scan per second. It also paces the loop's fault backoff.
 _SCHEDULER_TICK_S = 1.0
 
-# The shortest period the LED may flash at, for anything: a WCAG-style
-# flash-rate cap of roughly 3 times a second. This is the one light-timing
-# number that is *not* config - how many taps to average, how fast a tempo may
-# go and how long a countdown runs are all the mode's business, but a light
-# that can trigger a seizure is not a preference.
+# The shortest period the LED may flash at: roughly 3 times a second, per
+# WCAG 2.3.1. It now lives in device.py as SAFE_MIN_PERIOD_S (config imports it
+# too, and device.py is the module both may import) and it is the *default* for
+# `min_flash_period_s` rather than a law - one button on one desk, and its
+# owner may decide it can go faster. Everything here reads the config's
+# effective value; this name is only the fallback for a pure function nobody
+# handed one to.
 #
-# Two consumers so far, and they work around it in different ways because they
-# mean different things: run_metronome marks every Nth beat (so raising max_bpm
+# Two consumers, and they work around it differently because they mean
+# different things: run_metronome marks every Nth beat (so raising max_bpm
 # makes the button faster without making the light more dangerous), while
-# run_countdown simply floors its configured period. Item 4 in TODO.md still
-# owns picking the exact number, and notes that once effects become stop lists
+# run_countdown floors its configured period. When effects become stop lists
 # the floor has to be defined over *transitions* rather than over a period.
-_MIN_FLASH_PERIOD_S = 1 / 3
 
 # How often a running countdown re-evaluates its ramp. The colour is only
 # actually pushed when it has visibly moved (ramp.differs), so this is a
@@ -89,8 +90,14 @@ _COUNTDOWN_TICK_S = 1.0
 # ~1.5% of the range: below this it is not a colour change, it is traffic.
 _COUNTDOWN_COLOR_STEP = 4
 
+# How slowly a reminder breathes when it has no look of its own. Slow enough
+# to be obviously not the alarm's flash, which is the whole distinction.
+_REMINDER_PERIOD_S = 2.0
 
-def metronome_flash(bpm: float) -> tuple[float, int]:
+
+def metronome_flash(
+    bpm: float, min_period_s: float = SAFE_MIN_PERIOD_S
+) -> tuple[float, int]:
     """(LED period, how many beats each flash stands for) for a tempo of `bpm`.
 
     Module-level and pure on purpose. It is the one part of the metronome that
@@ -105,7 +112,7 @@ def metronome_flash(bpm: float) -> tuple[float, int]:
     back inside the floor.
     """
     beat_s = 60.0 / bpm
-    per_flash = max(1, math.ceil(_MIN_FLASH_PERIOD_S / beat_s))
+    per_flash = max(1, math.ceil(min_period_s / beat_s))
     return beat_s * per_flash, per_flash
 
 
@@ -252,8 +259,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         EnterModeAction,
         MetronomeBehavior,
         PomodoroBehavior,
+        ReminderBehavior,
         StopwatchBehavior,
         bound_triggers,
+        flash_safe,
         look_for,
     )
     from .rules import resolve
@@ -281,7 +290,6 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     # Connecting happens in the background: a button that is out of range or
     # unplugged must not stop the web UI and the scheduler from coming up.
     await device.start()
-    device.set_palette(cm.config.led_palette)
 
     def wanted_max_taps() -> int:
         """How far the device should count taps, given what the config binds.
@@ -314,9 +322,33 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         """
         if effect is None:
             effect = look_for(cm.config, active_mode, state)
+        # The one gate every pushed look passes through, which is why the floor
+        # is enforced here rather than in each run_* loop: a mode computing its
+        # own effect (the metronome's period, the countdown's colour) cannot
+        # route around it, and neither can a look someone hand-edited into a
+        # scene file. The palette's own entries are floored where they are
+        # pushed - the device renders those without asking.
+        effect = flash_safe(effect, cm.config.min_flash_period_s)
         device.set_led(state, effect)
         status.led_state = state.value
         status.led_effect = effect
+
+    def push_palette(palette: dict) -> None:
+        """Send the stored palette, floored. Separate from `set_led` because
+        the device renders these entries on its own when no effect overrides
+        them, so a strobing palette entry would never pass through the gate
+        above."""
+        device.set_palette(
+            {
+                name: flash_safe(entry, cm.config.min_flash_period_s)
+                for name, entry in palette.items()
+            }
+        )
+
+    # Deferred until push_palette exists, rather than pushed raw at connect
+    # time: the very first palette the button ever sees has to be inside the
+    # floor too. Nothing between here and device.start() reads the palette.
+    push_palette(cm.config.led_palette)
 
     def base_look(state: LEDState):
         """The look a mode should build its live effect on top of - its own if
@@ -475,20 +507,85 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 store.log_event(behavior.dismiss_event, mode=mode_name)
             return ActionResult(True, f"Dismissed: {label}")
 
+    def reminder_look(behavior: ReminderBehavior):
+        """What a reminder shows on ALERT.
+
+        A named look wins, exactly as everywhere else. With none chosen the
+        fallback is *not* the bare ALERT palette entry, because that is the
+        ringing-alarm look and a reminder that is indistinguishable from an
+        alarm has failed at the one thing it is for. Breathing the same colour
+        reads as "notice me" where the alarm's hard flash reads as "deal with
+        me", and it costs no wire code: it is an ephemeral effect over the
+        state the mode already owns.
+        """
+        chosen = look_for(cm.config, active_mode, LEDState.ALERT)
+        if chosen is not None:
+            return chosen
+        base = cm.config.led_palette.get(LEDState.ALERT.value)
+        return None if base is None else replace(
+            base, style="breathe", period_s=max(base.period_s, _REMINDER_PERIOD_S)
+        )
+
+    async def run_reminder(behavior: ReminderBehavior, mode_name: str) -> ActionResult:
+        """A scheduled nudge: flash until any press clears it, or until it
+        gives up on its own.
+
+        Three deliberate differences from `ring_alarm`, which is the template
+        this parallels and does not touch:
+
+        *Any* press clears it, rather than a nominated gesture. Requiring a
+        specific one would make a reminder as demanding as an alarm, which is
+        the thing it exists not to be - and it keeps the "escapable with a
+        press" invariant trivially true.
+
+        No snooze, and no loop. A reminder that could be postponed is an alarm
+        with extra steps; if you want it again, schedule it again.
+
+        It times out. `timeout_minutes` (0 = wait forever) is the other half of
+        being ignorable - a reminder nobody was in the room for should not
+        still be flashing at midnight. A timeout is not a clear: nothing is
+        logged, because nobody saw it.
+        """
+        label = behavior.message or behavior.label or mode_name
+        set_led(LEDState.ALERT, reminder_look(behavior))
+        if behavior.chime:
+            play_sound(Sound.ACK)  # once - the light is what persists
+        status.last_message = label
+        set_status("REMINDING")
+
+        if args.demo:
+            # --demo runs unattended: no press will ever arrive, so show it
+            # briefly rather than hanging the smoke test.
+            await asyncio.sleep(_SUCCESS_DISPLAY_S)
+            return ActionResult(True, f"{label} (demo: flashes until cleared)")
+
+        timeout = behavior.timeout_minutes * 60 if behavior.timeout_minutes > 0 else None
+        trigger = await _wait_for_trigger(device.events, stop, timeout)
+        if trigger is None:
+            if stop.is_set():
+                return ActionResult(True, f"{label} (interrupted by shutdown)")
+            return ActionResult(True, f"{label} - not cleared, gave up")
+        if behavior.cleared_event:
+            store.log_event(behavior.cleared_event, mode=mode_name)
+        return ActionResult(True, f"Cleared: {label}")
+
     async def fire_alarm(mode) -> None:
-        """Run a scheduled alarm's ring loop and surface its result, then
-        drop back to the ambient layer (IDLE)."""
+        """Run a scheduled mode - an alarm's ring or a reminder's flash - and
+        surface its result, then drop back to the ambient layer (IDLE)."""
         nonlocal active_mode
         play_sound(Sound.ACK)
         status.last_trigger = None
         status.last_mode = mode.name
-        log.info("scheduled alarm %r firing", mode.name)
+        log.info("scheduled mode %r firing", mode.name)
         entered_at = store.log_mode_enter(mode.name)
-        active_mode = mode  # so ALERT wears this alarm's look, if it has one
+        active_mode = mode  # so ALERT wears this mode's look, if it has one
         try:
-            result = await ring_alarm(mode.behavior, mode.name)
-        except Exception as exc:  # an alarm bug must never kill the loop
-            log.exception("alarm crashed")
+            if isinstance(mode.behavior, ReminderBehavior):
+                result = await run_reminder(mode.behavior, mode.name)
+            else:
+                result = await ring_alarm(mode.behavior, mode.name)
+        except Exception as exc:  # a scheduled-mode bug must never kill the loop
+            log.exception("scheduled mode crashed")
             result = ActionResult(False, f"internal error: {exc}")
         store.log_mode_exit(mode.name, entered_at)
         active_mode = None
@@ -750,7 +847,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             palette entry) supplies the colour and style; only the period is
             the session's business."""
             base = base_look(LEDState.METRONOME)
-            period, per_flash = metronome_flash(tempo)
+            period, per_flash = metronome_flash(tempo, cm.config.min_flash_period_s)
             if base is not None:
                 set_led(LEDState.METRONOME, replace(base, period_s=period))
             return per_flash
@@ -782,7 +879,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 # so "when did I practise, how long, how fast" is a query
                 # rather than a guess.
                 store.log_event(behavior.log_as, mode=mode_name, value=round(bpm, 1))
-                _, per_flash = metronome_flash(bpm)
+                _, per_flash = metronome_flash(bpm, cm.config.min_flash_period_s)
                 return ActionResult(
                     True, f"{describe(bpm, per_flash)} over {beats} beats"
                 )
@@ -838,10 +935,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         # is what a countdown has always used.
         look = look_for(cm.config, active_mode, LEDState.TIMING)
         style = look.style if look is not None else behavior.style
-        period = max(
-            _MIN_FLASH_PERIOD_S,
-            look.period_s if look is not None else behavior.period_s,
-        )
+        # No floor applied here any more: every effect this loop pushes goes
+        # through set_led, which is the one place that enforces it. Flooring
+        # again would only make this the second place to keep in step.
+        period = look.period_s if look is not None else behavior.period_s
         pushed: str | None = None
 
         def paint(progress: float) -> None:
@@ -1047,7 +1144,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                         log.info("discarded %d press(es) made while busy", discarded)
                 if cm.config.led_palette != pushed_palette:
                     pushed_palette = cm.config.led_palette
-                    device.set_palette(pushed_palette)
+                    push_palette(pushed_palette)
                     log.info("LED palette changed - pushed to the device")
                 # Binding (or unbinding) a long tap changes how far the device
                 # counts, so this rides the same hot-reload path the palette

@@ -17,6 +17,27 @@ and an app is becoming *data* rather than code
 but a new takeover loop written as a state machine over `(state, event, now)`
 will port; one that awaits the device directly will be rewritten.
 
+## Current hardware state — the button is off the board
+
+**The 19 mm button is de-soldered**, switch *and* LED, pending the rework in
+**0c**. Until it goes back on:
+
+- **Presses come from the board's BOOT button — once the firmware is
+  flashed.** `BUTTON_PIN` is temporarily **0** rather than 4 in the source so
+  there is something to press, but that is a firmware constant: until
+  `mpremote cp firmware/*.py : + reset` has run, the board is still reading
+  GPIO4 and nothing physical produces a gesture. The web UI's simulate-press
+  buttons and `POST /api/trigger` work either way. GPIO0 is a strapping pin,
+  so do not hold it through a reset or a replug — that is download mode, and
+  it looks like a dead board. **0c** puts the pin back to 4.
+- **No ring.** The board's onboard WS2812 is the only light, and it is now the
+  *accurate* one — the byte-order fault that made both LEDs render red as
+  green is fixed and flashed (see Done).
+
+The ESP32 itself is untouched and the service runs normally, so the rest of
+the list is unaffected. Re-soldering is **0c**, and the 5 V rework belongs in
+that same sitting rather than putting it back exactly as it was.
+
 ## How to work this list
 
 Each numbered item under **Sprint** is written to stand alone: context, the
@@ -62,16 +83,38 @@ the mirrored tables.
 
 | Body of work | Items it spans | Gate |
 |---|---|---|
-| **The colour engine** — a stop list instead of `{style, 2 colours, period}`; progress ramps; named looks a mode picks from | 0b·3 ✔, **3** ✔, **4**, 0a's per-app colour ✔ | ~~Wire change~~ — **ungated**; only item 4 (the slider + safety floor) is left |
-| **The gesture engine** — N taps, hold levels, the ramp that renders them | 0b·2 ✔, the 5-tap toggle | ~~Wire change~~ — **ungated** for taps; hold levels still need firmware |
-| **Depth without the wire** — metronome config ✔, event values ✔, Tinker mode, filtering/export | **1**, **9**, **12** | None — ship freely |
+| **The colour engine** — a stop list instead of `{style, 2 colours, period}`; progress ramps; named looks a mode picks from | 0b·3 ✔, **3** ✔, **4** ✔, 0a's per-app colour ✔ | ~~Wire change~~ — **done**; the stop list itself is now the only piece left, and it lives with 15/16/17 |
+| **The gesture engine** — N taps, hold levels, the ramp that renders them | 0b·2 ✔, the 5-tap gesture ✔ (its action is not) | ~~Wire change~~ — **ungated** for taps; hold levels still need firmware |
+| **Depth without the wire** — metronome config ✔, event values ✔, filtering/export ✔, Tinker mode | **1** ✔, **9**, **12**, **14** | None — ship freely |
 | **Reach and hosting** — launcher, remote UI | **0a**, **7**, **8** | 0a gates 7 |
+| **Saying a number** — ambient counting, count readout, progress | **15**, **17** | Wants the stop list (**4**) first — a readout *is* a stop list |
+| **Play** — timing/rhythm and guessing games | **16** | Forgiving games ungated; tight rhythm needs Stage 3's on-device runtime |
 
-**The gate column is the news.** Two of these four were blocked on a reflash
-and are not any more. With item 3 shipped, **0a's launcher is the next thing
-on the critical path** and its only remaining dependency is a core change in
+Two things sit outside the table. **0c** is hardware (re-solder + the 5 V
+rework) and gates nothing but its own verification. **18** (Notion) is process
+and is **parked** — the analysis is written down, the decision is not needed
+yet, and nothing exists in Notion to keep in sync.
+
+**The gate column is the news.** Two of these were blocked on a reflash and
+are not any more. With item 3 shipped, **0a's launcher is the next thing on
+the critical path** and its only remaining dependency is a core change in
 `main.py` — a takeover mode that can enter another one. Colour, gestures and
 config are all in place for it.
+
+**Item 4 shipped, and it left the stop list standing alone.** The slider and
+the safety floor are done (the floor is a *setting* now, defaulting to 3 Hz —
+see item 4). What item 4 was carrying for everyone else is not: a count
+readout is a stop list, a Simon sequence is a stop list, and a progress ramp
+is a stop list driven by progress instead of the clock. Three of the four
+newest items (**15**, **16**, **17**) all queue behind that one structure.
+Design it once, deliberately, and they get cheap; improvise a `blink_n_times`
+effect instead and you have spent a wire feature on a special case of it.
+
+**One constraint item 4 handed forward, in writing:** the flash floor is
+enforced over `period_s`, and a stop list breaks that — five colours at 0.1 s
+each is a 2 Hz cycle but a 10 Hz change rate. Whoever designs the stop list
+owns redefining the floor over *transitions*. `config.flash_safe` is the one
+function to change.
 
 Three things fall out of that table and are worth stating rather than
 rediscovering:
@@ -152,6 +195,84 @@ launcher can be reached without spending one of the original three.
 **What is actually left**, and it is now the only thing: the core change in
 the next paragraph — a takeover mode that can enter another takeover mode,
 plus the depth guard or the explicit "replace, don't nest" rule.
+
+
+### 0c. Re-solder the button, and move its LED to 5 V while it is off
+
+**Do this before anything whose test is "look at the ring".** The button is
+currently de-soldered (see the state note at the top). This item puts it back
+— and the reason to read it before reaching for the iron is that soldering it
+back exactly as it was would preserve a known fault.
+
+**What was found.** Pushing known colours at both LEDs from the Lights tab's
+test bench turned up two separate faults, not one:
+
+1. **Byte order — fixed, flashed, confirmed on hardware.** `NEOPIXEL_ORDER`
+   and `ONBOARD_NEOPIXEL_ORDER` in [hardware.py](firmware/hardware.py) were on
+   the wrong LEDs. Nothing else to do here; it is recorded because the
+   *evidence* is the useful part. `#ff0000` lit **both** LEDs green, `#00ff00`
+   lit both red, `#0000ff` was correct — one R/G swap on both at once, which
+   is what exchanging those two settings produces and is distinguishable from
+   either one being wrong alone (that would have made the two disagree). Blue,
+   yellow and white are fixed points of an R/G swap, which is exactly why the
+   fault hid on them; cyan↔magenta is the pair that talks.
+
+2. **Channel imbalance on the ring — open. This is the rework.** With the
+   order corrected the onboard LED renders accurately and the ring still does
+   not: it renders white as light orange, cyan with a green tint, magenta with
+   a red tint, yellow with an orange tint. One consistent ordering,
+   **R > G > B**, measured off video at roughly `1.00 : 0.54 : 0.44`.
+
+**The diagnosis, and why it is a wiring change rather than a constant.** That
+ordering is a forward-voltage fingerprint. A WS2812's red die is AlInGaP at
+~1.9–2.1 V; green and blue are InGaN at ~3.0–3.2 V. Each channel is a
+constant-current sink that needs headroom above Vf to regulate. The ring's VDD
+is on **3V3** ([hardware.py](firmware/hardware.py)'s wiring block), so red has
+~1.3 V of headroom and regulates, while green and blue have ~0.1–0.3 V and
+fall out of it — blue worst, its Vf being highest. The part is a 5 V device
+being run under spec. It is *not* leakage: leakage makes channels glow when
+commanded off, and here the channels that should be strong are the weak ones.
+
+**What to build.** Re-solder the button, and take the LED's VDD to **5 V**
+instead of 3V3. The catch is the one README.md already documents: a WS2812's
+logic threshold is ~0.7 × VDD, so at 5 V it wants 3.5 V on data and the S3
+drives 3.3 V — the marginal case that fails as *flicker*, which is the hardest
+failure here to read as wiring. Two standard ways round it, pick one and write
+down which:
+
+- a silicon diode in series with the LED's VDD (5 V − 0.7 ≈ 4.3 V, threshold
+  drops to ~3.0 V, and 3.3 V data clears it) — the cheap version, usually enough
+- a 74AHCT125 level shifter on the data line — the correct version
+
+**Confirm which fault it is first**, because it costs one minute and decides
+whether the rework is even the right fix. Three solids through the test bench,
+watching the ring only: `#ffffff`, `#808080`, `#202020`. A WS2812 dims by PWM,
+not by reducing current, so peak current per die is the same at every level —
+if all three are **equally** orange it is Vf headroom and the 5 V move is the
+answer. If it **neutralises as it dims**, it is rail sag instead and the fix is
+a 100–470 µF cap across the ring's VDD/GND plus shorter, thicker power leads.
+Then the load ladder, which tests the blue die specifically: `#0000ff`,
+`#ff00ff`, `#ffffff` — blue strong alone and progressively vanishing as
+channels join it is sag; blue mediocre even alone is headroom.
+
+**The software fallback, if the hardware route is refused.** A per-channel gain
+trim beside `LED_BRIGHTNESS` in [hardware.py](firmware/hardware.py) — it is
+exactly a hardware.py-shaped constant, a property of that physical LED rather
+than a preference, and it would belong on the device for the same reason the
+palette's rendering does. The honest cost: it can only attenuate, so it pulls
+R and G *down* to meet B and you get neutral white at whatever brightness the
+starved blue channel can manage. 5 V buys correct colour *and* full brightness;
+calibration buys only the first. Do not add it before the three-level test
+says headroom is not the cause.
+
+**Definition of done.** Button re-soldered and pressing again (a real gesture
+reaching the host, not a simulated one); **`BUTTON_PIN` back to 4** — it is
+temporarily 0 so the board's BOOT button can stand in, and leaving it there
+would make every reset a coin-flip on entering download mode; the three-level
+and load-ladder results written down here; the LED's supply and any
+level-shifting recorded in [hardware.py](firmware/hardware.py)'s wiring block;
+and `#ffffff` reading as white on the ring, or an explicit note saying how far
+off it still is and why that was accepted.
 
 
 ### 0b. Freeze the wire protocol as v1 ✔ done
@@ -250,13 +371,31 @@ exactly that string). The metronome is its first user. `_migrate` now adds
 each column independently, so a database from any version catches up in one
 open.
 
+**Filtering and export shipped too.** `/api/events` takes `kind`, `name`,
+`mode`, `since` and `until` alongside `limit`; `/api/events/export` returns the
+same rows as a CSV or JSON download; `/api/events/kinds` backs the picker.
+
+Four things worth keeping:
+
+- **One query, two consumers.** The table and the export share `_events()`, so
+  a downloaded file cannot disagree with the table it came from — which is the
+  failure that makes an export worse than none.
+- **`name` is a substring, `kind` and `mode` are exact.** You search a log for
+  "coff" and expect "coffee"; you pick a kind off a list and expect that kind.
+  LIKE's own wildcards are escaped, so searching for `%` finds rows containing
+  a percent sign rather than everything.
+- **The window is text comparison, and that is not a shortcut.** `ts` is UTC
+  ISO-8601, where lexical order *is* chronological order. That property is the
+  reason the stored format is not negotiable.
+- **An export defaults to the whole log, not to one page.** Silently handing
+  back the most recent 50 rows is the kind of wrong answer only noticed later,
+  in a spreadsheet.
+
+The date pickers are days and the log is instants, so the UI converts local
+midnight to local midnight with `until` inclusive of the day you chose.
+Suite: `test_events_filter.py`.
+
 **What is left:**
-- Filtering/search in the Events tab UI (by kind, by name, by date range) —
-  `/api/events` ([webui.py](aibutton/webui.py)) still takes `limit` and
-  nothing else, and [index.html](aibutton/web/index.html) renders a flat
-  table. Now worth more than it was: there is a numeric column to filter and
-  sort on.
-- Exporting the log (CSV/JSON download) — there's no export endpoint today.
 - Which *gesture* produced an event, which the `mode` column doesn't tell
   you. Only worth adding if item 12 turns out to need it — don't widen the
   schema on spec. Note this gets *harder* to defer once gestures are
@@ -395,7 +534,60 @@ tick. So what is left is `config.py` (parsing and validation for a named
 loops pass the mode's look to `set_led` instead of nothing. **No firmware, no
 reflash.**
 
-### 4. Turn "seconds per cycle" into a slider, with a safety floor
+### 4. Turn "seconds per cycle" into a slider, with a safety floor ✔ shipped
+
+**Both halves landed, and the number turned out to be a third question.** The
+slider exists, the floor is enforced in one place rather than three, and the
+answer to "3 Hz or 4 Hz" was *neither as a constant*: it is a **setting**,
+`min_flash_period_s`, defaulting to the recommended 3 Hz.
+
+The shape, and why it is this:
+
+- **The floor is a setting, and that is a deliberate product call.** This is
+  one button on one desk and its owner may decide it can go faster. So a value
+  below the recommendation is *honoured and warned about* - silently clamping
+  would make the setting a lie, and silently accepting would make the hazard
+  invisible. A value that is not a positive number is a different failure and
+  falls back per-key like anything else.
+- **One constant, in the module both halves may import.**
+  `device.SAFE_MIN_PERIOD_S` (3 Hz, per WCAG 2.3.1), because `config` imports
+  `device` and never the reverse. `main._MIN_FLASH_PERIOD_S` is gone;
+  `metronome_flash(bpm, min_period_s)` takes the effective floor as an
+  argument, which is the pure-core rule applied to a number that is now
+  configurable.
+- **One gate, not three.** `config.flash_safe(effect, floor)` is pure, and
+  `main.set_led` is the single choke point every pushed look passes through -
+  so a mode computing its own effect cannot route around it, and neither can a
+  hand-edited scene file. The stored palette is floored where it is *pushed*,
+  because the device renders those entries without asking. `run_countdown`'s
+  own `max(...)` was removed rather than left as a second place to keep in
+  step, and the Lights tab's test bench is floored too.
+- **Only hard on/off styles are floored.** `flash` and `alternate`
+  (`device.STYLE_STROBES`, mirrored as `strobes: true` on each style
+  descriptor in `schema.js`, with a drift test). A fast `breathe` or `fade`
+  travels the same distance smoothly and reads as shimmer, so flooring them
+  would cost the slowest legal fade a third of a second and buy nothing.
+- **The slider's minimum is live.** `LED_FIELDS`' `period_s` is
+  `kind: 'range'` with `min` as a *function of ctx* - the same trick `select`
+  already used for dynamic `options` - so raising the setting widens the
+  slider instead of leaving it lying about what will be accepted. `number`
+  learned the same dynamic bounds on the way past. The ceiling stretches to
+  fit a stored value already above it, so a 600-second breathe in an existing
+  config is not silently rewritten the moment its form renders.
+
+**Still open, and it was already written down here:** the floor is defined
+over `period_s`, and once effects become **stop lists** it has to be defined
+over *transitions* - five colours at 0.1 s each is a 2 Hz cycle but a 10 Hz
+change rate, which this check does not catch. That is a constraint on the
+stop-list design (items **15**/**16**/**17**), not a defect in this one.
+
+Suite: `test_flash_floor.py` - the pure floor, the setting's two failure
+modes, the metronome's guarantee restated over an arbitrary floor, the bench,
+and the mirrored-table drift guard.
+
+The original scope follows.
+
+---
 
 **Current state.** `LED_FIELDS` in [schema.js](aibutton/web/static/schema.js)
 has `{ key: 'period_s', kind: 'number', min: 0.1, max: 600, step: 0.1 }`, a
@@ -468,9 +660,10 @@ protected.
 **b) Rename "Default" and change its default bindings.** Currently
 `_default_modes()` ships one mode named `"Default"` with
 `short_press → Log(button_press)`, `long_press → TimerToggle(focus)`,
-`double_tap → Log(note)`. Change the name (the request says "mode
-selection" - `"Mode Selection"` reads more like a UI label than a mode name;
-confirm what the user actually wants it called) and its default bindings to
+`double_tap → Log(note)`. **The name is decided: `"Home"`** — confirmed, and
+chosen over `"Mode Selection"` (a UI label, not a mode name) because it is the
+place you return to, which is exactly what item 0a's launcher will want to
+call it. Change its default bindings to
 `short_press → Log`, `long_press → Enter "Pomodoro"`,
 `double_tap → Enter "Stopwatch"`. That last part means `_default_modes()`
 can no longer return a single mode - it needs to also seed default Pomodoro
@@ -494,10 +687,14 @@ localStorage helpers (storage *raises* in private browsing and off
 
 ### 7. Build at least 10 modes total
 
-**Item 0a first, or most of these are unreachable** — three gestures means
-two launchable apps until a launcher exists.
+**Item 0a first, or most of these are unreachable** — with `triple_tap` and
+`tap_5` now bindable the ceiling is four launchable apps rather than two, which
+buys room but does not solve it: a launcher is still what turns "as many apps
+as it will fit" into a real sentence. Scheduled modes (alarm, reminder) are the
+exception and always were — a clock starts them, not a gesture.
 
-**Two are done** - Tap metronome and Countdown (see Done below); the countdown
+**Three are done** - Tap metronome, Countdown and Reminder (item 11), which
+leaves seven. The countdown
 was on the candidate list at the bottom of this item and is now a real
 template, which leaves eight. The
 Morse code logger that was the other specified mode is on hold in favor of a
@@ -636,7 +833,42 @@ ten apps verified on hardware, a launcher, a naive-user run, a 24-hour soak,
 the single-instance guard, verified power-cycle recovery, protocol v1 frozen -
 and decide whether Stage 3 starts or Stage 2 has more in it.
 
-### 11. Split Alarm into "Alarm" (clock) and a new "Reminders" mode
+### 11. Split Alarm into "Alarm" (clock) and a new "Reminders" mode ✔ shipped
+
+`ReminderBehavior` + `run_reminder` + a `reminders` template descriptor. The
+alarm is untouched, which was the first instruction and is asserted by a test.
+
+The decisions, because they are the item:
+
+- **Any press clears it.** Nominating a gesture would make a reminder as
+  demanding as an alarm, which is the thing it exists not to be — and it makes
+  "escapable with a press" trivially true rather than something to check.
+- **No snooze.** A reminder you can postpone is an alarm with extra steps. If
+  you want it again, schedule it again.
+- **It gives up.** `timeout_minutes` (default 5, 0 = forever) is the other half
+  of being ignorable — a reminder nobody was in the room for should not still
+  be flashing at midnight. **A timeout is not a clear**: nothing is logged,
+  because nobody saw it.
+- **It reuses `ALERT` and does not look like one.** No new `LEDState`. With no
+  named look it breathes rather than flashes — pushed as an ephemeral effect,
+  so it is visibly not an alarm without a wire code, a mirror or a reflash. A
+  named look still wins, as everywhere else.
+- **The scheduler was generalised, not duplicated.** What makes a mode
+  scheduled is its *activation*, not its behaviour, so `due_alarm` matches
+  `ScheduleActivation` against a tuple of allowed behaviours and the parser
+  keeps deciding which templates may carry one. A parallel `due_reminder`
+  would have been the same twenty lines with one `isinstance` swapped, and the
+  third scheduled template would have made it three copies. Config order
+  decides a tie at the same minute, which puts an alarm above a reminder if it
+  is listed first — the right way round, and now written down.
+
+Suite: `test_reminders.py` — the flash, the clear, the timeout that logs
+nothing, per-key fallback, the round-trip, and a guard that the alarm template
+still behaves exactly as it did.
+
+The original scope follows.
+
+---
 
 Keep `alarm`'s current behaviour (`AlarmBehavior`/`ring_alarm` in
 `main.py`: looping tone + `ALERT` LED until dismissed, optional snooze) as
@@ -858,6 +1090,199 @@ for); the whole Device settings group is tinker except `sounds_enabled`.
 should be at the top of a basic mode form, so deciding what "basic" contains
 before the look editor exists means deciding it twice.
 
+### 15. Counting without entering an app — and what "background" actually means
+
+**Half of this already works, and that is the first thing to know.** Binding a
+gesture to count something specific does *not* need the Counter takeover and
+never did: `LogAction` is an ambient action, and
+[store.py](aibutton/store.py)'s `count_today` / `current_streak` group by the
+event name, so this counts coffees today with no code at all —
+
+```json
+{ "name": "Everyday", "template": "actions", "activation": {"type": "always"},
+  "double_tap": {"action": "log", "event": "coffee"} }
+```
+
+**So what is the Counter takeover actually for?** Three things, and only the
+third is hard: it zeroes a session tally, it owns `COUNTING` on the LED, and
+it *tells you the number*. An ambient `log` gives you a `SUCCESS` flash — you
+learn that it counted, not what it counted to. **The gap is the readout, which
+makes this item and item 17 the same feature.** Do 17's scheme first, then
+this is a new ambient action (`log` with a `readout` flag, or a `count_readout`
+action) and a preset, not a new template.
+
+**"Can alarm / Pomodoro run in the background?" splits three ways**, and the
+answers are different — worth separating before anyone designs for it:
+
+- **Background *timekeeping*** — the clock keeps running. Alarms already do
+  this: `due_alarm` fires from the ambient loop in [main.py](aibutton/main.py)
+  and preempts whatever is running. Nothing to build.
+- **Background *gesture handling*** — the button still answers other gestures
+  while a timer runs. **This is the real change.** A takeover awaits
+  `device.events` directly and so monopolises every press; that is the same
+  sentence CLAUDE.md flags as the one place the pure-core rule is broken.
+- **Background *display*** — two running things wanting one LED. This cannot
+  be solved by sharing; it needs a stated priority rule (or the readout from
+  17, so a backgrounded timer is *asked* rather than *watched*).
+
+**This is a genuinely new architectural question.** Neither
+[ROADMAP.md](ROADMAP.md) nor [ARCHITECTURE.md](ARCHITECTURE.md) says anything
+about concurrency — the app model is written as one app at a time throughout.
+So do **not** improvise it into the run loop. The near-term slice is the
+ambient counting above, which needs none of it; the concurrent-app question
+belongs in ARCHITECTURE.md as a decision (one foreground app plus N headless
+timers? a priority number per app?) before any code assumes an answer.
+
+**Definition of done.** Ambient counting with a readout gesture, shipped as
+data (an action plus a preset, no new template); and a paragraph in
+ARCHITECTURE.md that answers "can two apps run at once" one way or the other,
+so the next person does not have to guess.
+
+
+### 16. Games — timing, rhythm, and a hot/cold guesser
+
+Simon-Says-style timing games; a hot/cold detector that cycles a rainbow,
+stops on a press, and flashes how close you were. Creative latitude wanted.
+
+**Read [ARCHITECTURE.md](ARCHITECTURE.md)'s "What this deliberately cannot
+express" before designing any of it** — it names Simon Says specifically, as
+the worked example of what a bounded state machine *can't* do (it has to emit
+a generated sequence). It also gives the three sanctioned answers, in order:
+push the work to the phone, extend the **effect set** (a system decision, not
+an app's), or ship it as a native app compiled into the firmware. A scripting
+language is explicitly refused. So a game is not a reason to reopen that; it
+is a reason to grow the effect set, which is the same work as item 4 and 17.
+
+**The latency budget decides which games are possible now.** ARCHITECTURE's
+table puts "press → the app decides what it means" at **≤ 50 ms, on device, no
+exceptions**. A host-side game over BLE cannot meet that. Therefore:
+
+- **Forgiving games are buildable today** — hot/cold, guessing, anything with
+  a window of ±150 ms or looser.
+- **Tight rhythm judgement is Stage 3 work**, on-device, and pretending
+  otherwise will produce a game that feels broken and gets blamed on the
+  radio. Do not start there.
+
+**A non-obvious constraint that falls straight out of the existing design, and
+will bite whoever writes the first game:** a single press does not fire until
+the multi-tap window has elapsed, and how long that is comes from `max_taps`,
+which the host derives from *what the config binds*. A mode that binds only
+short press gets an instant press; the same mode with a double tap bound eats
+0.4 s before every single press. **So a timing game must bind exactly one
+gesture**, and that is a config fact, not something to fix in firmware.
+
+**Hot/cold has one real problem worth knowing before you start it:** the host
+does not know the device's rainbow phase, because `_rainbow` renders
+on-device. Two ways out — drive the sweep from the host (fights "feedback is
+fire-and-forget", and burns radio), or compute the phase from send-time plus
+period, which works precisely because the press latency is bounded and known
+once the mode binds one gesture. Prefer the second.
+
+**The "how close were you" flash is already built.** `ramp.color_at` in
+[ramp.py](aibutton/ramp.py) maps progress 0→1 onto a colour ramp, which is
+exactly "cold → warm → hot". That module was written to have four consumers;
+this is one of them. Do not write a second distance-to-colour function.
+
+**Definition of done.** One shipped game (hot/cold is the cheap one), written
+as a step function over `(state, event, now)` rather than as a loop that
+awaits the device — per CLAUDE.md, that is the difference between porting to
+the Stage-3 runtime unchanged and being rewritten.
+
+
+### 17. A number you can read off one light
+
+**The question was whether a universal colour-to-digit code exists. It does:**
+the resistor colour code (IEC 60062), which is genuinely standard and genuinely
+known — black 0, brown 1, **red 2**, orange 3, yellow 4, green 5, blue 6,
+violet 7, grey 8, white 9. That is the "red = *n* by a universal metric" thing,
+though red is 2 rather than 1.
+
+**And it is the wrong tool here.** Black is 0, which on an LED is *off* and
+therefore indistinguishable from idle; brown and grey are "dim orange" and
+"dim white" on a WS2812, which is to say they are not colours a diffused pixel
+can deliver; violet against blue is hard on a single dot. That is ten-way hue
+discrimination on one diffused LED — and this build's ring has a *measured*
+colour cast (item **0c**) that eats exactly those distinctions. A number system
+nobody can read under a warm lampshade is not a number system.
+
+**One LED has three channels, and they are not equally good at numbers:**
+
+| Channel | Good for | Bad for |
+|---|---|---|
+| Count / rhythm | **exact integers**, no legend, no learning | anything large |
+| Hue | **proportion**, magnitude, hot/cold | exact values |
+| Brightness | emphasis, grouping | anything on its own |
+
+So: **exact counts are blinks, proportions are hue.** Do not make hue carry
+digits.
+
+**The proposal, which is the tally idea with the grouping made explicit** —
+tens as slow pulses in one colour, units as quick pulses in another. 27 is two
+slow, then seven quick. It covers 0–99 in at most eleven blinks, reads like an
+abacus, needs no legend, and has an engineering property worth more than
+elegance here: **it does not depend on telling colours apart at all**, so it
+survives the ring's cast, a warm room, and a colourblind user. Hue then stays
+free to mean *which thing* is being counted.
+
+**For proportion, use what exists.** `ramp.color_at` already maps 0→1 onto a
+ramp; a Pomodoro's progress, a countdown, a hold level and item 16's hot/cold
+are the same primitive. Nothing new to design.
+
+**The protocol note, and the reason to do item 4 first: a readout *is* a stop
+list.** The colour-engine section above already wants `{colour, hold, fade}`
+stops to replace `{style, 2 colours, period}`, because that one structure
+subsumes all six styles and gives gradients and sequencing for free. "Two slow
+amber, seven quick white" is precisely a stop list. So building a bespoke
+`blink_n_times` effect would spend a wire feature on a special case of one
+already planned. **Build the stop list; get the readout for free.**
+
+**Definition of done.** The scheme written down as data (in `schema.js` and
+`config.py`, not as branches); a readout reachable from an ambient counter
+(item 15); and one person who has *not* been told the rule reading a
+two-digit number off it correctly. That last one is the actual test — if it
+needs explaining, it failed.
+
+
+### 18. Move project management into Notion ⏸ parked — not yet
+
+**Deferred deliberately, not dropped.** Nothing is created in Notion and
+nothing should be until the split below is chosen. The analysis is kept
+because the decision is the expensive part and it is already made once here.
+
+**The risk is not the migration, it is ending up with two sources of truth.**
+This file is 1000+ lines and most of that is *reasoning*: why an item exists,
+which files it touches, what done means. [CLAUDE.md](CLAUDE.md) and the "How
+to work this list" section both lean on each item standing alone well enough
+to be picked up cold in a fresh session. That property lives in prose, and
+Notion is not better at prose.
+
+What Notion *is* better at: status, priority, what is in flight, dates,
+sequencing, and looking at the whole thing without scrolling a wall of text.
+Which is exactly what this file is worst at.
+
+**So decide the split before creating anything:**
+
+- **A — Notion tracks state, TODO.md keeps reasoning.** One card per item
+  (status / priority / gated-by / body-of-work), each linking to its heading
+  here. Notion answers "what now", the file answers "what and why".
+- **B — migrate wholesale**, CLAUDE.md repoints at Notion, this file becomes
+  an archive.
+
+**Recommend A**, on the grounds that the fresh-session property is load-bearing
+for how this project is actually worked and B puts it behind a network call and
+an auth prompt. The five bodies of work in the table above are the natural
+Notion views; the numbered items are the cards.
+
+**Cheap to execute** — the Notion MCP is available, so the mechanical part is
+a script over the headings, not a copy-paste job. Do not create the database
+until the split is chosen, because the field set follows from it.
+
+**Definition of done.** The chosen split written into
+[CLAUDE.md](CLAUDE.md) — one sentence saying which document a fresh session
+should read for what — and the items loaded. Without that sentence this is
+just a second backlog.
+
+
 ## Smaller, worth doing
 
 - **Verify power-cycle recovery.** Phase 3's last unchecked criterion: pull
@@ -871,14 +1296,24 @@ before the look editor exists means deciding it twice.
   Research" (from Obsidian) and replace the placeholder tone tables carried
   over from the Pi build. A matching sound palette, pushed the same way the
   LED palette now is, is the obvious shape.
-- **On/Off toggle** - "5 taps" as a global toggle. **No longer firmware.**
-  0b·2 shipped, so this is now: add `TAP_5 = "tap_5"` to `TriggerType`, the
-  matching entry to `GESTURES` in `schema.js`, and an action to bind it to.
-  The detector already counts that far and the wire already carries it; the
-  host writes `max_taps=5` by itself the moment something binds it. Worth
-  knowing that binding it *does* cost the double tap its instant response -
-  that is the trade `max_taps` makes explicit, and the reason not to bind a
-  long tap by default.
+- **On/Off toggle** - "5 taps" as a global toggle. **The gesture half is
+  shipped; the action is what's left.** `TriggerType.TAP_5` and the `GESTURES`
+  entry landed as a pure data change with no reflash under them - which is the
+  promise 0b·2 made, now demonstrated end to end against the *firmware's own*
+  encoder (`test_device.py`). The host writes `max_taps=5` by itself the moment
+  something binds it.
+
+  Two decisions worth keeping. **Four taps is deliberately unnamed**: the
+  firmware has named 4..9 since v1, but a count with no `TAP_TRIGGERS` member
+  is dropped rather than fired, and dropping is the right behaviour for a
+  stray extra tap on a triple. And binding five *does* cost every shorter tap
+  its instant response - the `GESTURES` hint says so, because it is the one
+  gesture whose cost is paid by the other gestures.
+
+  **What is left is the action**: there is no "toggle the button off" action to
+  bind it to. That is an `actions.py` + `ACTIONS` + `config.py` change, and it
+  needs a decision first - does "off" mean the ambient layer stops matching, or
+  the device goes dark, or both? Ambient-only is the cheap and honest one.
 
 ## Parking lot (deliberately later)
 
@@ -916,6 +1351,31 @@ before the look editor exists means deciding it twice.
   worthy in its own right even after the mode itself exists.
 
 ## Done
+
+- ~~**A light test bench, and the byte-order fault it caught**~~ - the Lights
+  tab grew a **Test bench**: push any style/colour/period straight at the LED,
+  saving nothing. It needed no new device method, because "show this look" is
+  already what an ephemeral effect means - `POST /api/dev/led` makes the same
+  call `run_metronome` does, so the four-method seam was used rather than
+  widened. It writes nothing and marks nothing dirty; the next press repaints
+  from the palette, which is what makes it safe to poke at with a real button
+  attached. Validation goes through the config's own `_parse_effect`, so a
+  colour the editor would reject on Save is rejected identically here and the
+  caller is told what it actually got - one parser, no second opinion about
+  what a look is.
+
+  It immediately earned itself. `NEOPIXEL_ORDER` and `ONBOARD_NEOPIXEL_ORDER`
+  were on the wrong LEDs, so *both* rendered red as green and green as red
+  while blue, yellow and white looked perfect - those three being the fixed
+  points of an R/G swap. Corrected and flashed; the onboard LED is now
+  accurate. The ring's remaining warm cast is a different fault and is item
+  **0c**.
+
+  Worth keeping in mind for the next fault like it: the diagnosis came from
+  pushing *known* colours and reading them back, not from staring at a
+  rainbow. A rainbow is the worst test available for a mapping fault - every
+  permutation of it is still a rainbow, so it only shows a direction reversal,
+  and the camera's own white balance is happy to fake one of those.
 
 - ~~**Protocol v1, finished: a look you can push and a gesture that carries a
   number**~~ - the second and last revision of the wire (see item 0b for the

@@ -46,6 +46,14 @@ export class ConfigApi {
     return this._json('/api/status');
   }
 
+  /** Show one look on the button now, saving nothing. `{ clear: true }`
+   *  drops back to whatever the config says. Returns what was accepted, so
+   *  the bench can report a colour that fell back rather than lying about
+   *  what is on the LED. */
+  showLook(body) {
+    return this._send('/api/dev/led', 'POST', body);
+  }
+
   // --- scenes ---
   // Every one of these returns the same shape (the saved scenes, which is
   // active, the resulting effective config, and anything waiting on a

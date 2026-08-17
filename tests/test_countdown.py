@@ -156,7 +156,7 @@ async def test_the_configured_period_is_floored_for_flash_safety(tmp_path):
         seen["period"] = _timing(device).period_s
 
     await _run(tmp_path, script, minutes=1, period_s=0.02, ring_on_finish=False)
-    assert seen["period"] == pytest.approx(main._MIN_FLASH_PERIOD_S)
+    assert seen["period"] == pytest.approx(main.SAFE_MIN_PERIOD_S)
 
 
 # --- leaving ---------------------------------------------------------------

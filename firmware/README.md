@@ -29,11 +29,24 @@ five wires:
 | LED GND | any GND | |
 | LED data in (red) | **GPIO1** (`NEOPIXEL_PIN`) | |
 
-**Power the LED from 3V3, not 5V.** A WS2812 wants its data line at ~0.7×VDD
-to read a 1; the S3 drives 3.3 V, so a 5 V-powered pixel sits right on the
-edge and fails intermittently — the failure looks like flicker or wrong
-colours, not like nothing working. At 3V3 the levels match by construction.
-Slightly dimmer is the whole cost.
+**The LED is on 3V3, and that is now known to be the wrong half of a
+trade — see TODO 0c.** A WS2812 wants its data line at ~0.7×VDD to read a 1;
+the S3 drives 3.3 V, so a 5 V-powered pixel sits right on the edge and fails
+intermittently, as flicker rather than as silence. Dropping VDD to 3V3 makes
+the levels match by construction, which is why it was chosen.
+
+"Slightly dimmer is the whole cost" is what this paragraph used to claim, and
+it is false. Measured: white renders **orange**, at roughly R:G:B =
+1.00 : 0.54 : 0.44. A WS2812's red die is AlInGaP at ~2 V while its green and
+blue dies are InGaN at ~3.2 V, so on a 3.3 V rail only red keeps enough
+headroom for its constant-current sink to regulate — green and blue starve,
+blue worst. The part is a 5 V device being run under spec, and the cost is
+colour, not brightness.
+
+The fix is 5 V *plus* something about the data threshold it drags up with it:
+a silicon diode in series with the LED's VDD (≈4.3 V, so 3.3 V data clears
+~0.7×VDD comfortably), or a 74AHCT125 level shifter on the data line. Do one
+of those, or stay on 3V3 and accept the cast — but do not move to 5 V alone.
 
 Neither GPIO is special: **4** and **1** are plain S3 GPIOs, clear of the
 strapping pins (0/3/45/46), the SPI flash (26–32), octal PSRAM (33–37) and
@@ -43,7 +56,7 @@ Other hardware is a line in `hardware.py`:
 
 | Board | `hardware.py` |
 |---|---|
-| This build | defaults as shipped (`BUTTON_PIN = 4`, `NEOPIXEL_PIN = 1`) |
+| This build | defaults as shipped (`BUTTON_PIN = 4`, `NEOPIXEL_PIN = 1`) — but `BUTTON_PIN` is **temporarily 0** while the button is de-soldered (TODO 0c) |
 | Onboard WS2812 instead | `NEOPIXEL_PIN` per the table below |
 | Onboard WS2812 *too*, mirroring the button's | `ONBOARD_NEOPIXEL_PIN` per the table below |
 | ESP32-C3 (onboard RGB) | `BUTTON_PIN = 9`, `NEOPIXEL_PIN = 8` |

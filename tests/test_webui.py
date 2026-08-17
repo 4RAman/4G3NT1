@@ -266,6 +266,51 @@ async def test_status_includes_dev_fields(client, ctx):
     datetime.fromisoformat(data["now"])  # parseable
 
 
+async def test_test_bench_shows_a_look_without_saving_it(client, ctx):
+    # The Lights tab's test bench. Its whole value is that it asserts a look
+    # on the hardware and changes nothing else, so the config on disk and the
+    # config in memory both have to come through untouched.
+    before = json.loads(Path(ctx.cm.path).read_text(encoding="utf-8"))
+    res = await client.post("/api/dev/led", json={
+        "style": "solid", "color": "#ff0000", "state": "IDLE",
+    })
+    assert res.status_code == 200
+    assert res.json()["effect"]["color"] == "#ff0000"
+    assert ctx.device.led_effect.color == "#ff0000"
+    assert ctx.device.led_state is LEDState.IDLE
+    assert ctx.status.led_state == "IDLE"  # the dashboard renders from this
+    assert json.loads(Path(ctx.cm.path).read_text(encoding="utf-8")) == before
+    assert ctx.cm.config.led_palette["IDLE"].color != "#ff0000"  # nor in memory
+
+
+async def test_test_bench_clear_drops_back_to_the_palette(client, ctx):
+    # "Stop" has to remove the override rather than push a look that happens
+    # to match the config - an effect left asserted would survive the next
+    # palette edit and quietly misreport what the button is doing.
+    await client.post("/api/dev/led", json={"style": "solid", "color": "#ff0000"})
+    res = await client.post("/api/dev/led", json={"clear": True})
+    assert res.status_code == 200
+    assert res.json()["effect"] is None
+    assert ctx.device.led_effect is None
+    assert ctx.status.led_effect is None
+
+
+async def test_test_bench_validates_like_the_config_does(client, ctx):
+    # One parser: a colour the editor would reject on Save is rejected the
+    # same way here, and the caller is told what it actually got. A bench
+    # that silently showed something else would be untrustworthy exactly when
+    # it matters.
+    res = await client.post("/api/dev/led", json={"style": "solid", "color": "not-a-colour"})
+    assert res.status_code == 200
+    assert res.json()["warnings"]
+    assert res.json()["effect"]["color"] != "not-a-colour"
+
+
+async def test_test_bench_rejects_an_unknown_state(client):
+    res = await client.post("/api/dev/led", json={"state": "NONSENSE"})
+    assert res.status_code == 422
+
+
 async def test_stop_endpoint_asks_the_run_loop_to_shut_down(client, ctx):
     # The control panel's only polite way to stop the service on Windows:
     # SIGTERM is never delivered between processes there, and a console

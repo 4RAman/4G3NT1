@@ -69,14 +69,15 @@ every key; the web server's bind address is only read at startup.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from datetime import time
 
 from . import ramp, scenes
-from .device import LED_STYLES, LEDState, TriggerType
+from .device import LED_STYLES, SAFE_MIN_PERIOD_S, STYLE_STROBES, LEDState, TriggerType
 from .scenes import SceneSettings
 
 log = logging.getLogger(__name__)
@@ -345,9 +346,47 @@ class CountdownBehavior:
         return "countdown"
 
 
+@dataclass(frozen=True)
+class ReminderBehavior:
+    """The scheduled *nudge*: fires on a clock time like an alarm, but flashes
+    instead of ringing and clears on any press.
+
+    Why this is its own template rather than a setting on AlarmBehavior: an
+    alarm is a thing you have to deal with - it rings until dismissed, and its
+    whole design is that it cannot be ignored. A reminder is a thing you should
+    notice. Folding them together would mean one dataclass whose fields half
+    apply depending on another field, which is the shape that produces "why is
+    my snooze doing nothing".
+
+    It owns no new LED state. `ALERT` already means "look at the button", and
+    the reminder's *look* is a named look pushed as an ephemeral effect, so a
+    reminder is visibly not an alarm without spending a wire code (ROADMAP D4).
+    """
+
+    message: str = ""
+    label: str = ""
+    # A single chime, not a loop. Empty means silent - the point of a reminder
+    # over an alarm is that it may be ignorable, and a silent one is a real
+    # choice rather than a broken one.
+    chime: bool = True
+    # Logged when the reminder is cleared. Mirrors `unless_logged_today` one
+    # level up: an ambient mode stands down once something is logged today, and
+    # this is the scheduled equivalent writing that row.
+    cleared_event: str = ""
+    # How long it flashes before giving up on its own. 0 = until pressed.
+    # A reminder nobody was in the room for should not still be flashing at
+    # midnight, which is exactly the way an alarm and a reminder differ.
+    timeout_minutes: float = 5.0
+
+    @property
+    def template(self) -> str:
+        return "reminders"
+
+
 Behavior = (
     ActionsBehavior | AlarmBehavior | StopwatchBehavior | CounterBehavior
     | PomodoroBehavior | MetronomeBehavior | CountdownBehavior
+    | ReminderBehavior
 )
 
 # Which activation types each template accepts (per-template allow-list,
@@ -356,6 +395,7 @@ Behavior = (
 _ALLOWED_ACTIVATIONS = {
     "actions": (AlwaysActivation, WindowActivation),
     "alarm": (ScheduleActivation,),
+    "reminders": (ScheduleActivation,),
     "stopwatch": (ManualActivation,),
     "counter": (ManualActivation,),
     "pomodoro": (ManualActivation,),
@@ -378,6 +418,11 @@ _ALLOWED_ACTIVATIONS = {
 MODE_LED_STATES: dict[str, tuple[str, ...]] = {
     "actions": (),  # ambient: it never takes the light over
     "alarm": (LEDState.ALERT.value,),
+    # Same state as an alarm, deliberately. ALERT means "look at the button";
+    # what distinguishes a reminder from a ringing alarm is the look it wears,
+    # which is why naming one matters more here than anywhere else - a
+    # reminder that picks no look is indistinguishable from an alarm.
+    "reminders": (LEDState.ALERT.value,),
     "stopwatch": (LEDState.TIMING.value,),
     "counter": (LEDState.COUNTING.value,),
     "pomodoro": (LEDState.WORKING.value, LEDState.RESTING.value),
@@ -678,6 +723,12 @@ class AppConfig:
     # itself is merged in before parsing (see load_config_full), so nothing
     # downstream of here knows a scene was involved.
     scenes: SceneSettings = field(default_factory=SceneSettings)
+    # The shortest a hard on/off flash may be, in seconds. Defaults to the 3 Hz
+    # photosensitivity floor (device.SAFE_MIN_PERIOD_S) and is deliberately a
+    # setting rather than a constant: this is one button on one desk, and the
+    # person who owns it may decide it can go faster. Taking it below the
+    # recommendation is allowed and warns; it is never silently ignored.
+    min_flash_period_s: float = SAFE_MIN_PERIOD_S
 
 
 # --- parsing helpers ----------------------------------------------------
@@ -889,6 +940,43 @@ def _parse_alarm_body(raw: dict, where: str) -> AlarmBehavior | None:
     return AlarmBehavior(
         message=message, label=label,
         snooze_minutes=float(snooze), dismiss_event=dismiss_event,
+    )
+
+
+def _parse_reminder_body(raw: dict, where: str) -> ReminderBehavior | None:
+    """Parse the flat reminder-template fields, each falling back per-key."""
+    defaults = ReminderBehavior()
+
+    message = raw.get("message", defaults.message)
+    if not isinstance(message, str):
+        log.error("config: %s.message must be a string - using default", where)
+        message = defaults.message
+
+    label = raw.get("label", defaults.label)
+    if not isinstance(label, str):
+        log.error("config: %s.label must be a string - using default", where)
+        label = defaults.label
+
+    chime = raw.get("chime", defaults.chime)
+    if not isinstance(chime, bool):
+        log.error("config: %s.chime must be true or false - using default", where)
+        chime = defaults.chime
+
+    cleared_event = raw.get("cleared_event", defaults.cleared_event)
+    if not isinstance(cleared_event, str):
+        log.error("config: %s.cleared_event must be a string - using default", where)
+        cleared_event = defaults.cleared_event
+
+    timeout = raw.get("timeout_minutes", defaults.timeout_minutes)
+    if not (isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout >= 0):
+        log.error(
+            "config: %s.timeout_minutes must be a number >= 0 - using default", where
+        )
+        timeout = defaults.timeout_minutes
+
+    return ReminderBehavior(
+        message=message, label=label, chime=chime,
+        cleared_event=cleared_event, timeout_minutes=float(timeout),
     )
 
 
@@ -1114,6 +1202,8 @@ def _parse_mode(raw, idx: int, looks: set[str] | None = None) -> Mode | None:
         behavior = _parse_actions_body(raw, where, name)
     elif template == "alarm":
         behavior = _parse_alarm_body(raw, where)
+    elif template == "reminders":
+        behavior = _parse_reminder_body(raw, where)
     elif template == "stopwatch":
         behavior = _parse_stopwatch_body(raw, where)
     elif template == "counter":
@@ -1263,6 +1353,7 @@ def parse_config(raw: dict) -> AppConfig:
         "ble_device_name", "sounds_enabled", "database_path",
         "web_enabled", "web_host", "web_port",
         "modes", "rules", "commands", "led_palette", "looks", "scenes",
+        "min_flash_period_s",
     }
     for key in raw:
         if key not in known:
@@ -1284,7 +1375,55 @@ def parse_config(raw: dict) -> AppConfig:
         led_palette=_parse_palette(raw),
         looks=looks,
         scenes=scenes.parse_settings(raw.get("scenes")),
+        min_flash_period_s=_parse_min_flash_period(raw),
     )
+
+
+def _parse_min_flash_period(raw: dict) -> float:
+    """The effective flash floor, with the recommendation as the default.
+
+    Two different failures, told apart on purpose. A value that is not a
+    positive number is *broken* - there is no reading of it, so it falls back
+    like any other bad key. A value that is merely lower than the recommended
+    floor is a *choice*: it is honoured and warned about, because the whole
+    reason this is a setting is that someone may mean it.
+    """
+    value = _take(raw, "min_flash_period_s", float, SAFE_MIN_PERIOD_S)
+    if value <= 0:
+        log.error(
+            "config: min_flash_period_s must be greater than 0, got %r - "
+            "using %.3f", value, SAFE_MIN_PERIOD_S,
+        )
+        return SAFE_MIN_PERIOD_S
+    if value < SAFE_MIN_PERIOD_S:
+        log.warning(
+            "config: min_flash_period_s %.3fs allows flashing at %.1f Hz, above "
+            "the recommended %.1f Hz photosensitivity limit - honoured, but it "
+            "is a seizure risk for some people",
+            value, 1 / value, 1 / SAFE_MIN_PERIOD_S,
+        )
+    return value
+
+
+def flash_safe(effect: LedEffect | None, min_period_s: float) -> LedEffect | None:
+    """`effect` with its period raised to `min_period_s` if it strobes.
+
+    Pure, so the safety property is testable without a device or a clock -
+    and one function rather than a clamp repeated at each call site, because
+    a floor enforced in three places is a floor with three chances to drift.
+
+    Only hard on/off styles are floored (device.STYLE_STROBES). `breathe` and
+    `fade` travel the same distance smoothly, so a fast one reads as shimmer
+    rather than as a strobe, and flooring them would make the slowest legal
+    breathe a third of a second for no benefit. None passes through - it is
+    what `set_led` means by "no override", and the palette entry it falls back
+    to has been through here already.
+    """
+    if effect is None or effect.style not in STYLE_STROBES:
+        return effect
+    if effect.period_s >= min_period_s:
+        return effect
+    return replace(effect, period_s=min_period_s)
 
 
 def look_for(config: AppConfig, mode: Mode | None, state: LEDState) -> LedEffect | None:
@@ -1301,16 +1440,13 @@ def look_for(config: AppConfig, mode: Mode | None, state: LEDState) -> LedEffect
     return config.looks.get(name) if name else None
 
 
-def parse_with_warnings(raw: dict) -> tuple[AppConfig, list[str]]:
-    """`parse_config` plus the warnings it logged along the way.
+@contextlib.contextmanager
+def _collecting(warnings: list[str]):
+    """Route the parser's per-key fallback complaints into `warnings`.
 
-    The web API returns these to the editor and the scenes CLI prints them, so
-    both show exactly what the service would accept - there is one parser, and
-    this is how its complaints get out of the journal. Both loggers are
-    captured: a scene's own keys are validated in scenes.py, and a warning the
-    editor never sees is a warning nobody acts on.
+    Both loggers are captured: a scene's own keys are validated in scenes.py,
+    and a warning the editor never sees is a warning nobody acts on.
     """
-    warnings: list[str] = []
 
     class _Collector(logging.Handler):
         def __init__(self) -> None:
@@ -1324,11 +1460,38 @@ def parse_with_warnings(raw: dict) -> tuple[AppConfig, list[str]]:
     for logger in loggers:
         logger.addHandler(collector)
     try:
-        cfg = parse_config(raw)
+        yield
     finally:
         for logger in loggers:
             logger.removeHandler(collector)
+
+
+def parse_with_warnings(raw: dict) -> tuple[AppConfig, list[str]]:
+    """`parse_config` plus the warnings it logged along the way.
+
+    The web API returns these to the editor and the scenes CLI prints them, so
+    both show exactly what the service would accept - there is one parser, and
+    this is how its complaints get out of the journal.
+    """
+    warnings: list[str] = []
+    with _collecting(warnings):
+        cfg = parse_config(raw)
     return cfg, warnings
+
+
+def parse_effect_with_warnings(raw, where: str = "effect") -> tuple[LedEffect, list[str]]:
+    """One look, through the config parser's own rules.
+
+    The Lights tab's test bench shows a look the button never stores, but
+    "what counts as a valid look" must not fork: a colour the editor would
+    reject when saved has to be rejected the same way when shown, or the
+    bench stops being a test of the real thing. Same per-field fallback as
+    everywhere else - a bad colour costs you that colour, not the request.
+    """
+    warnings: list[str] = []
+    with _collecting(warnings):
+        effect = _parse_effect(raw, where, LedEffect())
+    return effect, warnings
 
 
 @dataclass(frozen=True)
@@ -1459,6 +1622,12 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["label"] = mode.behavior.label
         entry["snooze_minutes"] = mode.behavior.snooze_minutes
         entry["dismiss_event"] = mode.behavior.dismiss_event
+    elif isinstance(mode.behavior, ReminderBehavior):
+        entry["message"] = mode.behavior.message
+        entry["label"] = mode.behavior.label
+        entry["chime"] = mode.behavior.chime
+        entry["cleared_event"] = mode.behavior.cleared_event
+        entry["timeout_minutes"] = mode.behavior.timeout_minutes
     elif isinstance(mode.behavior, StopwatchBehavior):
         entry["log_as"] = mode.behavior.log_as
     elif isinstance(mode.behavior, CounterBehavior):
@@ -1509,6 +1678,7 @@ def as_dict(cfg: AppConfig) -> dict:
         "web_enabled": cfg.web_enabled,
         "web_host": cfg.web_host,
         "web_port": cfg.web_port,
+        "min_flash_period_s": cfg.min_flash_period_s,
         "scenes": scenes.settings_to_dict(cfg.scenes),
         "modes": [_mode_to_dict(mode) for mode in cfg.modes],
         "led_palette": {

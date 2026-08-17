@@ -216,6 +216,15 @@ Three consequences for code written today:
 - **The host owns state; the device renders it.** The firmware's palette and
   animations are a *fallback* for running with no host attached. Anything
   persistent belongs in `config.json`.
+- **The flash floor has one gate, and it is a setting.**
+  `min_flash_period_s` defaults to `device.SAFE_MIN_PERIOD_S` (3 Hz, WCAG
+  2.3.1) and may be taken lower deliberately — that is honoured *and* warned
+  about, because clamping a setting silently makes it a lie. Enforcement is
+  `config.flash_safe`, applied in `main.set_led` (every pushed look) and where
+  the palette is pushed (the device renders those unasked). Do not add a
+  second clamp: a floor in three places is a floor with three chances to
+  drift. Only `device.STYLE_STROBES` styles are floored, mirrored as
+  `strobes: true` in `schema.js`.
 - **A takeover mode must be escapable with a press.** Alarm, stopwatch,
   counter, pomodoro and metronome all exit on a gesture; the Pomodoro parser
   warns if you unbind its only exit.
@@ -295,11 +304,23 @@ is the one surface that will exist in someone else's pocket.
 - **ESP32-S3, USB-Serial/JTAG.** Entering download mode sets a sticky flag
   that survives a reset — after flashing, the board sits in the bootloader,
   silent, until you physically replug. It looks exactly like a bad flash.
-- **WS2812 byte order varies by board.** `NEOPIXEL_ORDER` in
-  [hardware.py](firmware/hardware.py); diagnose by which colours are wrong
-  (red↔green swapped, blue fine → the strip is RGB, not GRB).
-- **The button's WS2812 runs on 3V3, not 5V.** Its data threshold is ~0.7×VDD
-  and the S3 drives 3.3 V, so a 5 V-powered pixel sits on the edge and fails
-  as *flicker*, not as silence — the hardest failure here to read as wiring.
+- **WS2812 byte order varies by board, and this build's two LEDs disagree.**
+  The ring is GRB, the onboard one is RGB (`NEOPIXEL_ORDER` /
+  `ONBOARD_NEOPIXEL_ORDER` in [hardware.py](firmware/hardware.py)). Diagnose by
+  pushing *known* colours from the Lights tab's test bench, never by watching
+  the rainbow — every permutation of a rainbow is still a rainbow, so it shows
+  at most a direction reversal and a camera's white balance will happily fake
+  one of those. One LED wrong means that LED's setting is wrong; **both wrong
+  the same way means the two settings are on the wrong LEDs**. Red, green, cyan
+  and magenta are the colours that talk — blue, yellow and white are fixed
+  points of an R/G swap and look perfect while it is broken.
+- **The button's WS2812 runs on 3V3, and that is a trade, not a fix.** Its data
+  threshold is ~0.7×VDD, so a 5 V-powered pixel driven by the S3's 3.3 V sits
+  on the edge and fails as *flicker*, not as silence — the hardest failure here
+  to read as wiring. 3V3 removes that and buys a colour fault instead: the red
+  die runs at ~2 V and the green and blue dies at ~3.2 V, so on a 3.3 V rail
+  only red keeps its current sink in regulation and white renders orange
+  (measured R:G:B ≈ 1.00 : 0.54 : 0.44). Going to 5 V means handling the
+  threshold as well — series diode or level shifter, never 5 V alone. TODO 0c.
 - **`mpremote exec` interrupts `main.py`.** The board stops advertising until
   you `reset` it.

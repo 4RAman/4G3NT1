@@ -29,6 +29,17 @@ function requiredError(spec, value) {
   return spec.required && !String(value ?? '').trim() ? `${spec.label} is required` : null;
 }
 
+// A numeric bound may be a plain number or a function of `ctx`, resolved at
+// render time. The live one is the flash floor: it is a *setting* rather than
+// a constant, so a slider that hard-coded its own minimum would keep offering
+// periods the parser has been told to reject. Same trick `select` already
+// uses for dynamic `options`.
+function bound(spec, name, ctx) {
+  const raw = spec[name];
+  const value = typeof raw === 'function' ? raw(ctx) : raw;
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 function textInput(type, spec, obj, onInput) {
   const input = el('input', {
     type,
@@ -76,10 +87,12 @@ const WIDGETS = {
     };
   },
 
-  number(spec, obj, onInput) {
+  number(spec, obj, onInput, ctx) {
+    const min = bound(spec, 'min', ctx);
+    const max = bound(spec, 'max', ctx);
     const input = el('input', { type: 'number', className: 'inp', value: obj[spec.key] ?? '' });
-    if (spec.min != null) input.min = spec.min;
-    if (spec.max != null) input.max = spec.max;
+    if (min != null) input.min = min;
+    if (max != null) input.max = max;
     if (spec.step != null) input.step = spec.step;
     const err = errLine();
     input.addEventListener('input', () => {
@@ -92,8 +105,71 @@ const WIDGETS = {
         const value = obj[spec.key];
         let msg = null;
         if (value === '' || value == null || Number.isNaN(value)) msg = `${spec.label} must be a number`;
-        else if (spec.min != null && value < spec.min) msg = `${spec.label} must be ≥ ${spec.min}`;
-        else if (spec.max != null && value > spec.max) msg = `${spec.label} must be ≤ ${spec.max}`;
+        else if (min != null && value < min) msg = `${spec.label} must be ≥ ${min}`;
+        else if (max != null && value > max) msg = `${spec.label} must be ≤ ${max}`;
+        err.textContent = msg ? 'Invalid' : '';
+        return msg;
+      },
+    };
+  },
+
+  // A slider with the number beside it. Same contract as `number`, and the
+  // reason to have both: for a flash period the *shape* of the value matters
+  // more than the digits - you are choosing a rate you can picture, and the
+  // useful thing is that dragging left stops at a floor rather than that you
+  // can type 0.02.
+  //
+  // The floor is a live bound (`bound` above), not a constant: it comes from
+  // the config's min_flash_period_s, so raising the setting immediately widens
+  // the slider instead of leaving it lying about what will be accepted. That
+  // is also why the readout names the rate in Hz - the safety limit is written
+  // in flashes per second, and a period in seconds is the reciprocal of the
+  // number anyone reasons in.
+  range(spec, obj, onInput, ctx) {
+    const min = bound(spec, 'min', ctx) ?? 0;
+    const step = spec.step ?? 1;
+    const start = Number(obj[spec.key] ?? min);
+    // The ceiling stretches to fit a value that is already above it. `max` is
+    // chosen so the range people actually use is draggable, and a config
+    // holding a 600-second breathe is rare but real - pinning it to the slider's
+    // top would silently rewrite it the moment the form rendered.
+    const max = Math.max(bound(spec, 'max', ctx) ?? 100,
+      Number.isFinite(start) ? start : 0);
+    const input = el('input', {
+      type: 'range', className: 'inp inp-range',
+      min, max, step,
+      value: Number.isFinite(start) ? Math.min(max, Math.max(min, start)) : min,
+    });
+    const readout = el('span', { className: 'fld-readout' });
+    const err = errLine();
+
+    const show = () => {
+      const value = Number(obj[spec.key]);
+      if (!Number.isFinite(value)) {
+        readout.textContent = '-';
+        return;
+      }
+      readout.textContent = spec.describe ? spec.describe(value) : String(value);
+    };
+
+    input.addEventListener('input', () => {
+      obj[spec.key] = Number(input.value);
+      show();
+      onInput();
+    });
+    show();
+
+    return {
+      el: wrap(spec, el('span', { className: 'range-row' }, [input, readout]), err),
+      validate() {
+        const value = Number(obj[spec.key]);
+        let msg = null;
+        if (!Number.isFinite(value)) msg = `${spec.label} must be a number`;
+        // A stored value below the floor is not the slider's doing - a scene
+        // file or a lowered setting can produce one. Say so rather than
+        // silently snapping it, because the number is a safety limit.
+        else if (value < min) msg = `${spec.label} must be ≥ ${min}`;
+        else if (value > max) msg = `${spec.label} must be ≤ ${max}`;
         err.textContent = msg ? 'Invalid' : '';
         return msg;
       },

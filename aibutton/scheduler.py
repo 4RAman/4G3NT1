@@ -6,13 +6,20 @@ time through the injected `now` (the device's Clock) means the web UI's test
 clock drives schedules too - set 06:59 and a 07:00 alarm fires seconds
 later - and keeps this unit-testable with no async, GPIO, or wall clock.
 
-Only alarm modes are scheduled. Stopwatch and counter are takeover modes too,
-but they use `manual` activation and are reached only via an enter_mode action
-- never auto-fired here - so this scan matches AlarmBehavior + ScheduleActivation
-alone and ignores everything else.
+Not every takeover mode is scheduled. Stopwatch, counter, pomodoro, metronome
+and countdown use `manual` activation and are reached only via an enter_mode
+action - never auto-fired here.
 
-An alarm mode (an AlarmBehavior paired with a ScheduleActivation) is **due**
-when:
+**What makes a mode scheduled is its activation, not its behaviour.** So the
+scan matches `ScheduleActivation` and lets the *parser* decide which templates
+may carry one (`_ALLOWED_ACTIVATIONS` in config.py). That is why adding the
+reminders template needed no change here: a second `due_reminder` would have
+been the same twenty lines with one isinstance swapped, and the third
+scheduled template would have made it three copies. `due_alarm` keeps its name
+and now takes an optional filter for the one caller that does care which kind
+it got.
+
+A scheduled mode is **due** when:
 
 * `now`'s weekday is in the activation's `days` (or `days` is None - every
   day), and
@@ -30,7 +37,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from .config import AlarmBehavior, Mode, ScheduleActivation
+from .config import AlarmBehavior, Mode, ReminderBehavior, ScheduleActivation
+
+# Behaviours a ScheduleActivation may fire. Kept as a tuple rather than
+# "anything with a schedule" so a template that acquires a schedule by
+# accident (a parser bug, a hand-edited scene) cannot be started by a clock
+# without someone deciding it should be.
+SCHEDULED_BEHAVIORS = (AlarmBehavior, ReminderBehavior)
 
 # How long after the scheduled minute an occurrence stays "due" if not yet
 # fired - wide enough to survive the run loop's <=1s recompute tick.
@@ -47,12 +60,19 @@ def due_alarm(
     modes: tuple[Mode, ...],
     now: datetime,
     fired: set[str],
+    kinds: tuple[type, ...] = SCHEDULED_BEHAVIORS,
 ) -> tuple[Mode, str] | None:
-    """First alarm mode (config order) whose today's occurrence is due and
+    """First scheduled mode (config order) whose today's occurrence is due and
     not yet in `fired`, returned with its occurrence key. None if nothing is
-    due. The caller records the key, rings, and prunes `fired` to today."""
+    due. The caller records the key, runs it, and prunes `fired` to today.
+
+    Config order decides, which means an alarm listed above a reminder wins a
+    tie at the same minute. That is the right way round - the alarm is the one
+    you cannot ignore - but it is a property of how the list is written, so say
+    it out loud rather than leaving it to be discovered.
+    """
     for mode in modes:
-        if not isinstance(mode.behavior, AlarmBehavior):
+        if not isinstance(mode.behavior, kinds):
             continue
         if not isinstance(mode.activation, ScheduleActivation):
             continue

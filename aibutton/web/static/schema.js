@@ -18,6 +18,12 @@ export const GESTURES = [
   { key: 'long_press', label: 'Long press' },
   { key: 'double_tap', label: 'Double tap' },
   { key: 'triple_tap', label: 'Triple tap' },
+  // Binding this makes the button count to five, which costs the double tap
+  // its instant response (see max_taps_for). Worth saying in the UI, because
+  // it is the one gesture whose cost is paid by the *other* gestures.
+  { key: 'tap_5', label: 'Five taps',
+    hint: 'Deliberately awkward - good for an on/off. Binding it slows every '
+      + 'shorter tap slightly, because the button has to wait to be sure.' },
 ];
 
 export const DAYS = [
@@ -33,7 +39,7 @@ export const DAYS = [
 // Names of the templates whose modes are takeovers - the only valid targets
 // for an `enter_mode` action. Mirrors each template's `nature: 'takeover'`.
 const TAKEOVER_TEMPLATES = new Set([
-  'alarm', 'stopwatch', 'counter', 'pomodoro', 'metronome', 'countdown',
+  'alarm', 'reminders', 'stopwatch', 'counter', 'pomodoro', 'metronome', 'countdown',
 ]);
 
 // The default colour walk for a countdown - red while there is plenty of time,
@@ -262,6 +268,38 @@ export const TEMPLATES = [
     describe: (mode) => {
       const snooze = Number(mode.snooze_minutes) > 0 ? `, snooze ${mode.snooze_minutes} min` : '';
       return `Alarm${mode.message ? ` “${mode.message}”` : ''}${snooze}`;
+    },
+  },
+  {
+    type: 'reminders',
+    ledStates: ['ALERT'],
+    label: 'Reminder',
+    nature: 'takeover',
+    allowedActivations: ['schedule'],
+    body: 'fields',
+    fields: [
+      { key: 'message', label: 'Message', kind: 'text',
+        hint: 'Shown while the reminder is up.' },
+      { key: 'label', label: 'Short label', kind: 'text',
+        hint: 'Optional name for the status line.' },
+      { key: 'chime', label: 'Chime once', kind: 'checkbox',
+        hint: 'One tone when it fires. Off = the light only.' },
+      { key: 'timeout_minutes', label: 'Give up after (minutes)', kind: 'number',
+        min: 0, step: 1,
+        hint: 'Stops flashing on its own after this long. 0 = waits forever.' },
+      { key: 'cleared_event', label: 'Log on clear', kind: 'text',
+        hint: 'Optional event name logged when you clear it. A timeout logs nothing.' },
+    ],
+    defaults: () => ({
+      message: '', label: '', chime: true, timeout_minutes: 5, cleared_event: '',
+    }),
+    startedBy: 'schedule',
+    exits: () => 'any press',
+    describe: (mode) => {
+      const quiet = mode.chime ? '' : ', silent';
+      const gives = Number(mode.timeout_minutes) > 0
+        ? `, gives up after ${mode.timeout_minutes} min` : '';
+      return `Reminder${mode.message ? ` “${mode.message}”` : ''}${quiet}${gives}`;
     },
   },
   {
@@ -574,9 +612,14 @@ export const LED_STYLES = [
     describe: () => 'held' },
   { type: 'breathe', label: 'Breathe', uses: ['color', 'period_s'],
     describe: (e) => `fading every ${e.period_s}s` },
-  { type: 'flash', label: 'Flash', uses: ['color', 'period_s'],
+  // `strobes` marks the hard on/off styles - the ones the flash floor applies
+  // to. Mirrors device.py's STYLE_STROBES; test_webui.py fails if they drift.
+  // A property of the style rather than a list in the renderer, so a new style
+  // declares whether it strobes instead of the floor having to learn its name.
+  { type: 'flash', label: 'Flash', uses: ['color', 'period_s'], strobes: true,
     describe: (e) => `blinking every ${e.period_s}s` },
   { type: 'alternate', label: 'Alternate two colours', uses: ['color', 'color2', 'period_s'],
+    strobes: true,
     describe: (e) => `swapping every ${e.period_s}s` },
   { type: 'fade', label: 'Fade between two colours', uses: ['color', 'color2', 'period_s'],
     describe: (e) => `crossfading every ${e.period_s}s` },
@@ -624,7 +667,15 @@ export const LED_FIELDS = [
     options: LED_STYLES.map((s) => ({ value: s.type, label: s.label })) },
   { key: 'color', label: 'Colour', kind: 'color' },
   { key: 'color2', label: 'Second colour', kind: 'color' },
-  { key: 'period_s', label: 'Seconds per cycle', kind: 'number', min: 0.1, max: 600, step: 0.1 },
+  // A slider rather than a number box, and its floor is the *configured*
+  // flash limit rather than a constant, so it cannot offer a rate the parser
+  // has been told to floor. Styles that do not strobe (breathe, fade, rainbow)
+  // are not subject to it - `ctx.minFlashPeriod` is resolved per render by
+  // whoever builds the row, which is the only place that knows the style.
+  { key: 'period_s', label: 'Seconds per cycle', kind: 'range',
+    min: (ctx) => ctx?.minFlashPeriod ?? 0.05, max: 10, step: 0.01,
+    describe: (v) => `${v.toFixed(2)}s`,
+    hint: 'How long one full cycle takes.' },
 ];
 
 /** One-line summary of an effect, e.g. "Breathe #0000ff, fading every 3s". */
@@ -646,6 +697,15 @@ export const SETTINGS_GROUPS = [
         hint: 'The name the button advertises; the host connects to it by name.' },
       { key: 'sounds_enabled', label: 'Feedback sounds', kind: 'checkbox' },
       { key: 'database_path', label: 'Event database path', kind: 'text' },
+      // The one setting whose default exists for a medical reason rather than
+      // a taste one. It is editable because this is one button on one desk and
+      // its owner may decide it can go faster; the hint has to say what that
+      // costs, because nothing else in the UI will.
+      { key: 'min_flash_period_s', label: 'Fastest the light may flash',
+        kind: 'range', min: 0.05, max: 2, step: 0.01,
+        describe: (v) => `${v.toFixed(2)}s (${(1 / v).toFixed(1)} flashes/sec)`,
+        hint: 'Floor for flash + alternate. 0.33s = 3/sec, the recommended '
+          + 'photosensitivity limit. Faster is allowed and is a seizure risk.' },
     ],
   },
   {

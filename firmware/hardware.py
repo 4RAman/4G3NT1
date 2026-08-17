@@ -9,6 +9,13 @@
 #   button common (white)  -> GND        LED VDD (black) -> 3V3
 #   button NO     (green)  -> BUTTON_PIN LED GND         -> GND
 #                                        LED data (red)  -> NEOPIXEL_PIN
+#
+# **LED VDD on 3V3 is a known fault, not a choice** - see TODO 0c. A WS2812 is
+# a 5 V part: its red die runs at ~2 V and its green and blue dies at ~3.2 V,
+# so on a 3.3 V rail only red keeps enough headroom for its current sink to
+# regulate. Green and blue starve, and white comes out orange. Moving VDD to
+# 5 V is the fix, and it drags the data threshold (~0.7 x VDD) up with it -
+# which is the *flicker* failure further down this file. Do both or neither.
 
 DEVICE_NAME = "AIButton"  # what the host scans for; match config.json's ble_device_name
 
@@ -20,7 +27,19 @@ DEVICE_NAME = "AIButton"  # what the host scans for; match config.json's ble_dev
 # button cannot influence boot. (That is the reason not to reuse GPIO0/BOOT
 # once a real button exists: held low *at power-on* it enters download mode
 # instead of running.)
-BUTTON_PIN = 4
+#
+# **Temporarily 0, not 4** - the 19 mm button is de-soldered (TODO 0c), so
+# this borrows the board's own BOOT button to keep the button pressable in
+# the meantime. GPIO0 has a pull-up and a switch to GND already on the board,
+# so nothing else here changes.
+#
+# The catch is the one the paragraph above describes, and it is live now
+# rather than hypothetical: GPIO0 is a strapping pin, so **holding this button
+# while the board resets or is plugged in enters download mode** - the board
+# then sits silent in the bootloader until it is physically replugged, which
+# looks exactly like a failed flash. Press it only while the board is already
+# running. Put this back to 4 when the button goes back on.
+BUTTON_PIN = 0
 BUTTON_PULL_UP = True   # False if you wire your own pull-down + button to 3V3
 BUTTON_ACTIVE_LOW = True  # pressed reads 0 (the pull-up case)
 
@@ -66,14 +85,21 @@ LED_BRIGHTNESS = 1.0
 # two components look swapped, swap those two letters in this name.
 #
 # This LED and the onboard one are NOT the same order - the button's WS2812 is
-# RGB, the board's is GRB. That is normal (they are different parts from
-# different makers) and it is why each has its own setting rather than sharing
-# one.
+# GRB (the common case, and what the driver already assumes), the board's is
+# RGB. That is normal (they are different parts from different makers) and it
+# is why each has its own setting rather than sharing one.
+#
+# Measured, not guessed, and the two values were on the wrong LEDs until they
+# were: pushing solid #ff0000 lit *both* LEDs green and #00ff00 lit both red,
+# while #0000ff was correct - an R/G swap on both at once, which is exactly
+# what swapping these two settings between the two LEDs produces. The Lights
+# tab's test bench is how to repeat that in ten seconds.
 #
 # White is useless for this. It is three equal components, so every
 # permutation of it is still white - a byte-order fault only shows on colours
-# with unequal components (red, green, cyan, magenta).
-NEOPIXEL_ORDER = "RGB"
+# with unequal components. So are yellow and blue *for this particular fault*:
+# an R/G swap fixes both, so red/green/cyan/magenta are the ones that talk.
+NEOPIXEL_ORDER = "GRB"
 
 RGB_PINS = (18, 19, 20)   # (red, green, blue) when LED_KIND == "rgb_pwm"
 RGB_ACTIVE_HIGH = True    # False for a common-anode LED
@@ -94,7 +120,11 @@ RGB_PWM_FREQ = 1000
 # the REPL snippet in README.md identifies it.
 ONBOARD_NEOPIXEL_PIN = 48
 
-ONBOARD_NEOPIXEL_ORDER = "GRB"  # onboard WS2812s are usually wired GRB
+# Usually GRB, but not on this board: measured RGB, by the same test that
+# corrected NEOPIXEL_ORDER above. Both LEDs showed the *same* wrong colours,
+# which is the signature of these two values being on the wrong LEDs rather
+# than of one of them being wrong on its own.
+ONBOARD_NEOPIXEL_ORDER = "RGB"
 ONBOARD_LED_BRIGHTNESS = 0.25
 
 # --- buzzer ------------------------------------------------------------

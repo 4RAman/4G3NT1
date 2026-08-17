@@ -53,6 +53,16 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _like_escape(text: str) -> str:
+    """Neutralise LIKE's own wildcards in a user's search text.
+
+    Without this, searching for `100%` matches every row - the string is bound
+    safely (so this is not an injection question), but `%` and `_` still mean
+    something to LIKE, and a search box that quietly treats them as operators
+    surprises people."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _local_day_bounds_utc() -> tuple[str, str]:
     """UTC ISO bounds [start, end) of "today" in the system's local
     timezone - ts is stored as UTC, but "today" means the Pi's wall
@@ -227,17 +237,68 @@ class EventStore:
         self._conn.commit()
         return elapsed
 
-    def recent(self, limit: int = 50) -> list[tuple]:
+    def recent(
+        self,
+        limit: int = 50,
+        kind: str | None = None,
+        name: str | None = None,
+        mode: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[tuple]:
         """Newest-first (ts, kind, name, duration_s, mode, value) rows - backs
         the web UI's Events tab.
 
         `value` is appended rather than slotted in beside the other nullable
-        columns so existing positional reads keep meaning what they meant."""
+        columns so existing positional reads keep meaning what they meant.
+
+        Every filter is optional and they combine with AND, which is what a
+        filter bar means by having several boxes filled in. `name` is a
+        substring match because you search a log for "coff" and expect to find
+        "coffee"; `kind` and `mode` are exact, because those come from a
+        fixed list and a substring match on them would be a way to select the
+        wrong thing by accident.
+
+        `since`/`until` are UTC ISO strings compared as text. That works
+        because `ts` is stored as UTC ISO-8601, where lexical order *is*
+        chronological order - the property that makes a string column usable
+        as a timeline, and the reason the format is not negotiable.
+
+        Fragments are assembled, values are always bound. The one rule here:
+        nothing a caller supplies is ever interpolated into the SQL.
+        """
+        where: list[str] = []
+        params: list[object] = []
+        if kind:
+            where.append("kind = ?")
+            params.append(kind)
+        if name:
+            where.append("name LIKE ? ESCAPE '\\'")
+            params.append(f"%{_like_escape(name)}%")
+        if mode:
+            where.append("mode = ?")
+            params.append(mode)
+        if since:
+            where.append("ts >= ?")
+            params.append(since)
+        if until:
+            where.append("ts < ?")
+            params.append(until)
+        clause = f" WHERE {' AND '.join(where)}" if where else ""
+        params.append(limit)
         return self._conn.execute(
             "SELECT ts, kind, name, duration_s, mode, value "
-            "FROM events ORDER BY id DESC LIMIT ?",
-            (limit,),
+            f"FROM events{clause} ORDER BY id DESC LIMIT ?",
+            params,
         ).fetchall()
+
+    def kinds(self) -> list[str]:
+        """Every `kind` present in the log, so the filter's picker offers what
+        is actually there rather than a hard-coded list that drifts as new
+        event kinds appear."""
+        return [row[0] for row in self._conn.execute(
+            "SELECT DISTINCT kind FROM events ORDER BY kind"
+        )]
 
     def close(self) -> None:
         self._conn.close()
