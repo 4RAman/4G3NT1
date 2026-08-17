@@ -236,5 +236,5 @@
       "period_s": 0.4
     }
   },
-  "min_flash_period_s": 0.33
+  "min_flash_period_s": 0.3
 }

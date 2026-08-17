@@ -87,7 +87,8 @@ the mirrored tables.
 | **The gesture engine** — N taps, hold levels, the ramp that renders them | 0b·2 ✔, the 5-tap gesture ✔ (its action is not) | ~~Wire change~~ — **ungated** for taps; hold levels still need firmware |
 | **Depth without the wire** — metronome config ✔, event values ✔, filtering/export ✔, Tinker mode | **1** ✔, **9**, **12**, **14** | None — ship freely |
 | **Reach and hosting** — launcher, remote UI | **0a**, **7**, **8** | 0a gates 7 |
-| **Saying a number** — ambient counting, count readout, progress | **15**, **17** | Wants the stop list (**4**) first — a readout *is* a stop list |
+| **Saying a number** — ambient counting, count readout, progress | **15**, **17** | Wants the stop list (**19b**) first — a readout *is* a stop list |
+| **The light as a language** — ladder ✔, stop list, one-offs, where colour is edited | **19** | None for a–c; **19d** is a UI move |
 | **Play** — timing/rhythm and guessing games | **16** | Forgiving games ungated; tight rhythm needs Stage 3's on-device runtime |
 
 Two things sit outside the table. **0c** is hardware (re-solder + the 5 V
@@ -1125,13 +1126,34 @@ answers are different — worth separating before anyone designs for it:
   be solved by sharing; it needs a stated priority rule (or the readout from
   17, so a backgrounded timer is *asked* rather than *watched*).
 
-**This is a genuinely new architectural question.** Neither
-[ROADMAP.md](ROADMAP.md) nor [ARCHITECTURE.md](ARCHITECTURE.md) says anything
-about concurrency — the app model is written as one app at a time throughout.
-So do **not** improvise it into the run loop. The near-term slice is the
-ambient counting above, which needs none of it; the concurrent-app question
-belongs in ARCHITECTURE.md as a decision (one foreground app plus N headless
-timers? a priority number per app?) before any code assumes an answer.
+**This is a genuinely new architectural question — and it now has an answer.**
+
+**Decided: one foreground app, and shared state lives in the event log rather
+than in the app.** Not "N concurrent apps with a priority rule". The case that
+prompted it — count something from Home, then enter the Counter and *continue*
+the same tally — needs no concurrency at all, because `count_today` already
+groups by event name. An ambient `log` of `coffee` and a Counter whose event is
+`coffee` are already the same rows.
+
+**What actually has to change is one line of state.** The Counter takeover
+holds its session number as a local integer starting at zero, which is the only
+reason the two disagree about what "the count" is. Read it from the store
+instead and they agree by construction: counting from Home and counting in the
+Counter become the same count, and "count something else in counter mode" is
+just a different event name. No priority rule, no second run loop, no
+display-arbitration problem.
+
+That is also why this stays cheap under the Stage-3 move: the log is the shared
+surface, and it is already the thing that survives a restart, a reflash and a
+change of host. **Write this paragraph into ARCHITECTURE.md** — the decision
+matters more than the code change, because the next person to want two things
+at once needs to find it.
+
+The two questions it does *not* answer, and neither is urgent: a genuinely
+backgrounded timer still monopolises gestures (a takeover awaits
+`device.events` directly), and two things wanting the LED still needs a stated
+priority — or the readout from 17, so a backgrounded timer is *asked* rather
+than watched.
 
 **Definition of done.** Ambient counting with a readout gesture, shipped as
 data (an action plus a preset, no new template); and a paragraph in
@@ -1282,6 +1304,115 @@ until the split is chosen, because the field set follows from it.
 should read for what — and the items loaded. Without that sentence this is
 just a second backlog.
 
+
+### 19. The light as a language — sequencer, one-offs, and where colour is edited
+
+Three of the four pieces below are unbuilt; the subdivision ladder is done and
+is written up here because it establishes the vocabulary the rest reuses.
+
+**There are three structures, not one, and conflating them is the trap.**
+
+| | Driven by | Shape | Serves |
+|---|---|---|---|
+| **Ramp** ✔ [ramp.py](aibutton/ramp.py) | progress 0→1 | colours pinned at fractions | countdown, Pomodoro block, hold level, hot/cold |
+| **Stop list** — unbuilt | the clock | ordered `{colour, hold, fade}` | Fade / Flash / Evolve, gradients, sequencing |
+| **Subdivision ladder** ✔ [ladder.py](aibutton/ladder.py) | a *counter* | `{interval → colour}`, largest match wins | a time reference on any timer |
+
+A ramp answers "how far through are you", a ladder answers "what time is it",
+a stop list answers "what happens next". None can express the others —
+modular arithmetic is not interpolation — which is why they are three modules
+and not three modes of one.
+
+#### a) The subdivision ladder ✔ shipped
+
+The light as a clock: at any moment the colour is the one on the **largest
+interval that divides the elapsed time**. Defaults are the spec as asked —
+10 s white, 5 s yellow, even seconds light blue, odd dark blue, 0.5 s ticks,
+every interval and colour editable.
+
+What the "largest wins" rule buys, and the reason not to special-case it:
+**parity needs no notion of parity.** A rung at 2 s catches the even seconds
+and a rung at 1 s catches whatever is left, so "even and odd differ" falls out
+of division rather than being a rule anyone wrote. Adding a 15 s rung needs no
+code.
+
+Four details worth keeping:
+
+- **Whole milliseconds, not floats.** `2.0 % 0.5` can land on
+  0.4999999999999998. A ladder that worked at 1 s and failed at 0.1 s would be
+  the worst kind of intermittent, so everything divides in integer ms with a
+  1 ms slop either side of a boundary.
+- **Ticks are evaluated at their nominal time**, not at the wall time the loop
+  woke up. A tick scheduled for 2.000 s that fires at 2.013 s must still be the
+  two-second colour, or the marker silently never appears on a host that also
+  talks to a radio.
+- **The flash floor applies to the *cadence*, not to `period_s`.** This is the
+  transitions hole item 4 flagged: a 0.1 s tick is a 10 Hz colour change however
+  sedate the style, and `flash_safe` cannot see it because a `solid` never
+  strobes by its own reckoning. `ladder_paint` floors the tick.
+- **Opt-in, and it replaces the ramp.** Both decide *which colour*, so only one
+  runs; the ladder wins because turning it on is an explicit "make this a
+  clock". A plain stopwatch still blocks on the next press and costs no radio
+  traffic at all — the tick only exists when a ladder does.
+
+Shipped on **stopwatch** and **countdown** (countdown drives it from time
+*remaining*, which is what a countdown is about). Suite: `test_ladder.py`
+(the pure arithmetic), `test_ladder_modes.py` (the config surface and a
+running timer).
+
+**Left open:** the metronome, which wants it most and is the one place the
+ladder's counter should be *beats* rather than seconds — that is a different
+axis and deserves its own thought, not a copy of this wiring.
+
+#### b) The sequencer — a stop list, and one-offs
+
+The `{colour, hold, fade}` stop list the colour-engine section has wanted all
+along: it subsumes all six current styles (solid = one stop; flash = colour +
+black, stepped; fade = two stops, smoothed; breathe = colour → black) and then
+gives gradients, sequencing and asymmetric duty for free. "Fade, Flash, Evolve"
+are three presets over one structure, not three features.
+
+**The new requirement, and it is a real addition to the effect model: not
+everything loops.** "Do x sequence over y interval" needs a *play once* mode.
+Today every style repeats until the next state change, and the 0.03 s
+confirmation flash is a one-off only because it is a state display rather than
+an effect.
+
+That has a safety consequence worth stating before anything is built: **0.03 s
+is 33 Hz and is fine precisely because it happens once.** So `flash_safe` needs
+to know whether an effect repeats — the floor is over *repeating* transitions.
+A one-off sequence and a looping one are different questions and the current
+signature cannot tell them apart.
+
+#### c) Reuse the ramp widget wherever a gradient makes sense
+
+The `ramp` widget already exists and is only offered on the countdown. Pomodoro
+blocks, hold levels and any "how far through" surface want the same control.
+This is a descriptor change per template, not new code.
+
+#### d) Move mode colour fully into the mode, and grow the picker
+
+The Lights tab should hold **system states only** (IDLE / LISTENING / THINKING
+/ SUCCESS / ERROR). Mode-owned states (ALERT / TIMING / COUNTING / WORKING /
+RESTING / METRONOME) belong on each mode's own page.
+
+**Decided:** the global palette entries for mode-owned states **stay in config
+as the invisible fallback** — they are what a mode with no named look renders,
+and `base_look` reads them. Only the *editor group* goes away. Removing the
+entries themselves would leave a mode that names nothing with nothing to show.
+
+The test bench is the right springboard for the per-mode picker: it already
+pushes a look through the real parser and the real seam. What it needs to grow
+is saved user styles — which is what the `looks` pool already is, so this is a
+UI move rather than a new concept.
+
+#### e) The metronome's period field in the Lights tab — confirmed dead
+
+Verified, and nothing depends on it: `push_tempo` does
+`replace(base, period_s=period)` on every tick, so the stored value is
+overridden before it is ever rendered — including before the first tap, where
+`start_bpm` drives it. Removing the field from the editor changes nothing at
+runtime. It resolves for free when METRONOME moves to the mode page (d).
 
 ## Smaller, worth doing
 

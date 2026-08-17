@@ -41,7 +41,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import ramp
+from . import ladder, ramp
 from .device import (
     SAFE_MIN_PERIOD_S,
     ButtonDevice,
@@ -358,6 +358,43 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             state.value
         )
 
+    def ladder_paint(spec, state: LEDState):
+        """A `paint(seconds)` that shows `spec`'s colour for a moment in time.
+
+        Returns `(paint, tick_s)` - the cadence comes back because the caller
+        has to wake at it, and because it is not always the configured one.
+
+        **The flash floor applies to the cadence, not to the effect's period.**
+        A ladder changes colour every tick, so a 0.1s tick is a 10 Hz change
+        rate however sedate the underlying style is - which is exactly the hole
+        `flash_safe` cannot see, since it reads `period_s` and a `solid` never
+        strobes by its own reckoning. Flooring the tick is the same safety
+        property enforced over the axis that actually moves here.
+
+        Colours are pushed only when they change, for the reason ramp.differs
+        exists: a ladder is a couple of writes a second on a radio whose whole
+        contract is fire-and-forget, and most ticks repeat the previous colour.
+        """
+        tick = max(spec.tick_s, cm.config.min_flash_period_s)
+        shown: str | None = None
+
+        def paint(seconds: float) -> None:
+            nonlocal shown
+            index = ladder.tick_index(seconds, tick)
+            colour = ladder.color_for_tick(spec.rungs, index, tick, spec.base)
+            if colour == shown:
+                return
+            base = base_look(state)
+            if base is None:
+                return
+            shown = colour
+            # `solid` because the ladder *is* the animation - the tick supplies
+            # the rhythm, so asking the device to also flash inside each tick
+            # would be two clocks on one light.
+            set_led(state, replace(base, style="solid", color=colour))
+
+        return paint, tick
+
     def play_sound(sound: Sound) -> None:
         """Feedback tone + the web UI's mirror of it. sounds_enabled is read
         per press, so muting the button takes effect on the next reload."""
@@ -620,8 +657,22 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 running = False
                 _, elapsed = store.toggle_timer(log_as, mode=mode_name)
                 return ActionResult(True, f"{log_as} (demo: ran {_fmt_elapsed(elapsed or 0)})")
+            # With a subdivision ladder on, the stopwatch grows a tick: the
+            # light has to say what time it is, which means waking to change
+            # it. Without one it still blocks indefinitely on the next press,
+            # exactly as before - a stopwatch that woke twice a second to
+            # repaint a colour nobody asked for would be pure radio traffic.
+            ticking, tick_s = (
+                ladder_paint(behavior.ladder, LEDState.TIMING)
+                if behavior.ladder.enabled else (None, None)
+            )
+            started = asyncio.get_running_loop().time()
             while True:
-                trigger = await _wait_for_trigger(device.events, stop)
+                if ticking is not None:
+                    ticking(asyncio.get_running_loop().time() - started)
+                trigger = await _wait_for_trigger(device.events, stop, tick_s)
+                if trigger is None and tick_s is not None and not stop.is_set():
+                    continue  # a tick, not a press: repaint and keep waiting
                 if trigger is None:  # shutting down mid-run - stop the open timer
                     running = False
                     store.toggle_timer(log_as, mode=mode_name)
@@ -961,6 +1012,16 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         def left() -> float:
             return max(0.0, deadline - loop.time())
 
+        # The ladder and the ramp both decide *which colour*, so they cannot
+        # both run - and the ladder wins, because it is off by default and
+        # turning it on is an explicit "make this light a clock". Driven by the
+        # time *remaining*, which is what a countdown is about: the ten-second
+        # colour lands on ten seconds left, not ten seconds in.
+        ticking, tick_s = (
+            ladder_paint(behavior.ladder, LEDState.TIMING)
+            if behavior.ladder.enabled else (None, _COUNTDOWN_TICK_S)
+        )
+
         set_led(LEDState.TIMING)
         set_status("TIMING")
         status.last_mode = mode_name
@@ -976,10 +1037,13 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             remaining = deadline - loop.time()
             if remaining <= 0:
                 break
-            paint(1.0 - remaining / total)
+            if ticking is not None:
+                ticking(remaining)
+            else:
+                paint(1.0 - remaining / total)
             status.last_message = f"{label} - {_fmt_elapsed(remaining)} left"
             trigger = await _wait_for_trigger(
-                device.events, stop, timeout=min(remaining, _COUNTDOWN_TICK_S)
+                device.events, stop, timeout=min(remaining, tick_s)
             )
             if stop.is_set():
                 return ActionResult(

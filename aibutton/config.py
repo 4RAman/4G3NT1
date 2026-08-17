@@ -76,7 +76,7 @@ import os
 from dataclasses import dataclass, field, fields, replace
 from datetime import time
 
-from . import ramp, scenes
+from . import ladder, ramp, scenes
 from .device import LED_STYLES, SAFE_MIN_PERIOD_S, STYLE_STROBES, LEDState, TriggerType
 from .scenes import SceneSettings
 
@@ -198,6 +198,43 @@ class AlarmBehavior:
         return "alarm"
 
 
+def _default_rungs() -> tuple[ladder.Rung, ...]:
+    """The ladder someone has to be able to read across a room: white on the
+    ten, yellow on the five, light blue on even seconds, dark blue on odd.
+
+    Chosen so the *rate* tells you the unit before you know the code - a
+    colour you see twice a minute is obviously the coarse one - and so the two
+    most frequent colours are a light/dark pair rather than two hues, which
+    survives both this build's warm ring cast (TODO 0c) and a colourblind
+    reader.
+    """
+    return (
+        ladder.Rung(10.0, "#ffffff"),
+        ladder.Rung(5.0, "#ffff00"),
+        ladder.Rung(2.0, "#66ccff"),
+        ladder.Rung(1.0, "#0033aa"),
+    )
+
+
+@dataclass(frozen=True)
+class LadderSpec:
+    """A subdivision ladder plus the cadence it is sampled at.
+
+    Off by default, because it replaces a mode's ordinary look with a clock,
+    and that should be something you turn on rather than something that
+    happens to you the first time you open a stopwatch.
+
+    It lives on the *behaviour* rather than on a palette entry for the same
+    reason a ramp does: a ladder says which colour, not how the light moves,
+    so it composes with the look instead of competing with it.
+    """
+
+    enabled: bool = False
+    tick_s: float = 0.5
+    base: str = "#000000"  # ticks landing on no rung; black = a dark off-beat
+    rungs: tuple[ladder.Rung, ...] = field(default_factory=_default_rungs)
+
+
 @dataclass(frozen=True)
 class StopwatchBehavior:
     """The takeover stopwatch template: enter starts a timer (logged under
@@ -206,6 +243,11 @@ class StopwatchBehavior:
     owns the LED/sound/button-event loop while running."""
 
     log_as: str = ""
+    # Optional: turn the light into a clock while it runs. Defined here rather
+    # than on the palette entry because it is what this *mode* is doing, and
+    # because a ladder is not an effect - it says which colour, not how the
+    # light moves (same split as ramp).
+    ladder: LadderSpec = field(default_factory=LadderSpec)
 
     @property
     def template(self) -> str:
@@ -340,6 +382,9 @@ class CountdownBehavior:
     ramp: tuple[ramp.Stop, ...] = field(default_factory=_default_countdown_ramp)
     ring_on_finish: bool = True
     log_as: str = "countdown"  # a finished run logs its length under this
+    # Turn the light into a clock instead of a ramp. The two both decide which
+    # colour, so only one runs - see run_countdown.
+    ladder: LadderSpec = field(default_factory=LadderSpec)
 
     @property
     def template(self) -> str:
@@ -943,6 +988,85 @@ def _parse_alarm_body(raw: dict, where: str) -> AlarmBehavior | None:
     )
 
 
+def _parse_ladder(raw, where: str) -> LadderSpec:
+    """One subdivision ladder, each key falling back on its own.
+
+    Same rule as `_parse_effect`: a bad rung costs you that rung, a bad tick
+    costs you the tick, and neither costs you the mode. A ladder is a *look*,
+    and losing a stopwatch over the colour of its off-beat would be wildly
+    disproportionate.
+
+    An `enabled` ladder with no usable rungs left is turned back off rather
+    than run as a base-colour-only clock: showing one flat colour and calling
+    it a time reference is worse than showing the mode's ordinary look.
+    """
+    defaults = LadderSpec()
+    if raw is None:
+        return defaults
+    if not isinstance(raw, dict):
+        log.error("config: %s must be an object - ignored", where)
+        return defaults
+
+    enabled = raw.get("enabled", defaults.enabled)
+    if not isinstance(enabled, bool):
+        log.error("config: %s.enabled must be true or false - using default", where)
+        enabled = defaults.enabled
+
+    tick = raw.get("tick_s", defaults.tick_s)
+    if not (isinstance(tick, (int, float)) and not isinstance(tick, bool) and tick > 0):
+        log.error("config: %s.tick_s must be a number > 0 - using default", where)
+        tick = defaults.tick_s
+
+    # _parse_color rather than a local check: it already owns normalisation
+    # ('#' optional, case-folded), and a second opinion about what a colour is
+    # would be a mirrored table with nothing testing the mirror.
+    base = _parse_color(raw["base"], f"{where}.base", defaults.base) \
+        if "base" in raw else defaults.base
+
+    entries = raw.get("rungs", None)
+    if entries is None:
+        rungs = defaults.rungs
+    elif not isinstance(entries, list):
+        log.error("config: %s.rungs must be a list - using defaults", where)
+        rungs = defaults.rungs
+    else:
+        rungs = tuple(_parse_rungs(entries, where))
+
+    if enabled and not rungs:
+        log.warning(
+            "config: %s has no usable rungs - the subdivision light is off", where
+        )
+        enabled = False
+    return LadderSpec(
+        enabled=enabled, tick_s=float(tick), base=base, rungs=rungs
+    )
+
+
+def _parse_rungs(entries: list, where: str):
+    """Each rung independently; an unusable one is dropped with a warning."""
+    for index, entry in enumerate(entries):
+        at = f"{where}.rungs[{index}]"
+        if not isinstance(entry, dict):
+            log.error("config: %s must be an object - dropped", at)
+            continue
+        every = entry.get("every_s")
+        if not (
+            isinstance(every, (int, float))
+            and not isinstance(every, bool)
+            and every > 0
+        ):
+            log.error("config: %s.every_s must be a number > 0 - dropped", at)
+            continue
+        # A rung with no readable colour is dropped rather than defaulted:
+        # unlike `base`, there is no sensible colour to substitute, and a rung
+        # silently becoming black would look exactly like the off-beat.
+        raw_color = entry.get("color")
+        color = _parse_color(raw_color, f"{at}.color", "")
+        if not color:
+            continue
+        yield ladder.Rung(every_s=float(every), color=color)
+
+
 def _parse_reminder_body(raw: dict, where: str) -> ReminderBehavior | None:
     """Parse the flat reminder-template fields, each falling back per-key."""
     defaults = ReminderBehavior()
@@ -987,7 +1111,9 @@ def _parse_stopwatch_body(raw: dict, where: str) -> StopwatchBehavior | None:
     if not isinstance(log_as, str):
         log.error("config: %s.log_as must be a string - using default", where)
         log_as = defaults.log_as
-    return StopwatchBehavior(log_as=log_as)
+    return StopwatchBehavior(
+        log_as=log_as, ladder=_parse_ladder(raw.get("ladder"), f"{where}.ladder")
+    )
 
 
 def _parse_counter_body(raw: dict, where: str) -> CounterBehavior | None:
@@ -1169,6 +1295,7 @@ def _parse_countdown_body(raw: dict, where: str) -> CountdownBehavior:
     return CountdownBehavior(
         minutes=float(minutes), label=label, style=style, period_s=float(period),
         ramp=stops, ring_on_finish=ring, log_as=log_as,
+        ladder=_parse_ladder(raw.get("ladder"), f"{where}.ladder"),
     )
 
 
@@ -1595,6 +1722,20 @@ def _activation_to_dict(activation: Activation) -> dict:
     raise TypeError(f"unknown activation type {type(activation).__name__}")
 
 
+def _ladder_to_dict(spec: LadderSpec) -> dict:
+    """Written out in full, longest interval first - the order it reads in, so
+    the file shows the ladder the way the editor does."""
+    return {
+        "enabled": spec.enabled,
+        "tick_s": spec.tick_s,
+        "base": spec.base,
+        "rungs": [
+            {"every_s": rung.every_s, "color": rung.color}
+            for rung in ladder.sorted_rungs(spec.rungs)
+        ],
+    }
+
+
 def _effect_to_dict(effect: LedEffect) -> dict:
     return {
         "style": effect.style,
@@ -1630,6 +1771,7 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["timeout_minutes"] = mode.behavior.timeout_minutes
     elif isinstance(mode.behavior, StopwatchBehavior):
         entry["log_as"] = mode.behavior.log_as
+        entry["ladder"] = _ladder_to_dict(mode.behavior.ladder)
     elif isinstance(mode.behavior, CounterBehavior):
         entry["event"] = mode.behavior.event
     elif isinstance(mode.behavior, PomodoroBehavior):
@@ -1655,6 +1797,7 @@ def _mode_to_dict(mode: Mode) -> dict:
         ]
         entry["ring_on_finish"] = mode.behavior.ring_on_finish
         entry["log_as"] = mode.behavior.log_as
+        entry["ladder"] = _ladder_to_dict(mode.behavior.ladder)
     elif isinstance(mode.behavior, MetronomeBehavior):
         entry["start_bpm"] = mode.behavior.start_bpm
         entry["tap_history"] = mode.behavior.tap_history

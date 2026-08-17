@@ -272,6 +272,20 @@
 
   /* Slider + its readout. The readout is monospace and fixed-width so the
      number does not shuffle the slider sideways while you drag it. */
+  /* --- subdivision ladder: intervals top down, then one cycle previewed ---
+     The preview is discrete cells, not a gradient: a ladder is a sequence of
+     separate flashes and blending them would misrepresent the only thing it
+     does. */
+  .ladder-edit { gap: 6px; }
+  .ladder-body { display: flex; flex-direction: column; gap: 6px;
+                 border-left: 2px solid var(--line); padding-left: 10px; margin-top: 4px; }
+  .ladder-rows { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+  .ladder-row { display: flex; align-items: center; gap: 6px; }
+  .ladder-lbl { color: var(--dim); font-size: 12px; }
+  .ladder-every { width: 74px; }
+  .ladder-preview { display: flex; gap: 2px; flex-wrap: wrap; margin-top: 4px; }
+  .ladder-cell { width: 12px; height: 16px; border: 1px solid var(--line); }
+
   /* --- events filter bar: one row that wraps, not a form --- */
   .ev-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
                 margin-bottom: 8px; }

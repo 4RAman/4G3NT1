@@ -364,6 +364,176 @@ const WIDGETS = {
     };
   },
 
+  // A subdivision ladder: intervals paired with colours, read top down, where
+  // the largest interval dividing the current time wins. Mirrors ladder.py and
+  // what config.py's _parse_ladder accepts.
+  //
+  // Rows are kept sorted longest-first because that is the order the thing
+  // *reads* in - the ten-second colour is the headline and the one-second
+  // colour is the background - and because "largest matching wins" is
+  // impossible to reason about in an arbitrary order.
+  //
+  // The preview is a strip of the first cycle rather than a gradient: a ladder
+  // is a sequence of discrete flashes, and drawing it as a blend would
+  // misrepresent the one thing it does.
+  ladder(spec, obj, onInput) {
+    const err = errLine();
+    const rows = el('div', { className: 'ladder-rows' });
+    const preview = el('div', { className: 'ladder-preview' });
+    const body = el('div', { className: 'ladder-body' });
+
+    const current = obj[spec.key] && typeof obj[spec.key] === 'object' ? obj[spec.key] : {};
+    const value = {
+      enabled: !!current.enabled,
+      tick_s: Number(current.tick_s) > 0 ? Number(current.tick_s) : 0.5,
+      base: /^#[0-9a-fA-F]{6}$/.test(current.base || '') ? current.base : '#000000',
+      rungs: (Array.isArray(current.rungs) ? current.rungs : [])
+        .filter((r) => r && Number(r.every_s) > 0)
+        .map((r) => ({ every_s: Number(r.every_s), color: r.color || '#ffffff' })),
+    };
+
+    const commit = () => {
+      value.rungs.sort((a, b) => b.every_s - a.every_s);
+      obj[spec.key] = {
+        enabled: value.enabled, tick_s: value.tick_s, base: value.base,
+        rungs: value.rungs.map((r) => ({ every_s: r.every_s, color: r.color })),
+      };
+      onInput();
+    };
+
+    // Which colour a given moment shows - the same "largest matching rung
+    // wins" rule as ladder.py, in milliseconds for the same reason.
+    const colorAt = (seconds) => {
+      const ms = Math.round(seconds * 1000);
+      let best = null;
+      for (const rung of value.rungs) {
+        const step = Math.round(rung.every_s * 1000);
+        if (step <= 0) continue;
+        const offset = ms % step;
+        if ((offset <= 1 || step - offset <= 1) && (!best || step > Math.round(best.every_s * 1000))) {
+          best = rung;
+        }
+      }
+      return best ? best.color : value.base;
+    };
+
+    const paint = () => {
+      clear(preview);
+      // One full cycle of the longest rung, capped so a 10-minute rung does
+      // not try to draw 1200 cells.
+      const longest = value.rungs.length ? Math.max(...value.rungs.map((r) => r.every_s)) : 1;
+      const count = Math.min(40, Math.max(1, Math.round(longest / value.tick_s) + 1));
+      for (let i = 0; i < count; i += 1) {
+        const cell = el('span', {
+          className: 'ladder-cell', title: `${(i * value.tick_s).toFixed(2)}s`,
+        });
+        cell.style.background = colorAt(i * value.tick_s);
+        preview.append(cell);
+      }
+    };
+
+    const render = () => {
+      clear(rows);
+      value.rungs.sort((a, b) => b.every_s - a.every_s);
+      value.rungs.forEach((rung, index) => {
+        const every = el('input', {
+          type: 'number', className: 'inp ladder-every',
+          min: 0.1, step: 0.1, value: rung.every_s,
+        });
+        every.addEventListener('input', () => {
+          const seconds = Number(every.value);
+          if (seconds > 0) { rung.every_s = seconds; commit(); paint(); }
+        });
+
+        const swatch = el('input', {
+          type: 'color', className: 'inp inp-color', value: rung.color,
+        });
+        swatch.addEventListener('input', () => {
+          rung.color = swatch.value; commit(); paint();
+        });
+
+        const remove = el('button', {
+          type: 'button', className: 'mini danger', textContent: '×',
+          title: 'Remove this interval',
+        });
+        remove.addEventListener('click', () => {
+          value.rungs.splice(index, 1); commit(); render();
+        });
+
+        rows.append(el('div', { className: 'ladder-row' }, [
+          el('span', { className: 'ladder-lbl', textContent: 'every' }),
+          every,
+          el('span', { className: 'ladder-lbl', textContent: 's' }),
+          swatch,
+          remove,
+        ]));
+      });
+
+      const add = el('button', { type: 'button', className: 'mini', textContent: '+ Interval' });
+      add.addEventListener('click', () => {
+        const shortest = value.rungs.length
+          ? Math.min(...value.rungs.map((r) => r.every_s)) : 2;
+        value.rungs.push({ every_s: Math.max(0.1, shortest / 2), color: '#ffffff' });
+        commit();
+        render();
+      });
+      rows.append(add);
+      paint();
+    };
+
+    const enabled = el('input', { type: 'checkbox', checked: value.enabled });
+    enabled.addEventListener('change', () => {
+      value.enabled = enabled.checked;
+      body.hidden = !value.enabled;  // off is the default; hide the detail
+      commit();
+    });
+
+    const tick = el('input', {
+      type: 'number', className: 'inp ladder-every',
+      min: 0.05, step: 0.05, value: value.tick_s,
+    });
+    tick.addEventListener('input', () => {
+      const seconds = Number(tick.value);
+      if (seconds > 0) { value.tick_s = seconds; commit(); paint(); }
+    });
+
+    const base = el('input', { type: 'color', className: 'inp inp-color', value: value.base });
+    base.addEventListener('input', () => { value.base = base.value; commit(); paint(); });
+
+    body.append(
+      el('div', { className: 'ladder-row' }, [
+        el('span', { className: 'ladder-lbl', textContent: 'tick' }),
+        tick,
+        el('span', { className: 'ladder-lbl', textContent: 's, off-beat' }),
+        base,
+      ]),
+      rows,
+      preview,
+    );
+    body.hidden = !value.enabled;
+    render();
+
+    return {
+      el: el('div', { className: 'fld ladder-edit' }, [
+        el('label', { className: 'fld-check' }, [
+          enabled,
+          el('span', { className: 'fld-label', textContent: spec.label }),
+        ]),
+        spec.hint
+          ? el('span', { className: 'fld-hint', 'data-help': true, textContent: spec.hint })
+          : null,
+        body,
+        err,
+      ]),
+      validate() {
+        const msg = value.enabled && !value.rungs.length
+          ? `${spec.label} needs at least one interval` : null;
+        err.textContent = msg ? 'Invalid' : '';
+        return msg;
+      },
+    };
+  },
+
   checkbox(spec, obj, onInput) {
     const input = el('input', { type: 'checkbox', checked: !!obj[spec.key] });
     input.addEventListener('change', () => {

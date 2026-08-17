@@ -680,10 +680,15 @@ def test_all_four_templates_and_enter_mode_roundtrip(tmp_path):
     }))
     dumped = as_dict(cfg)
     assert dumped["modes"][0]["long_press"] == {"action": "enter_mode", "target": "Focus"}
-    assert dumped["modes"][2] == {
+    stopwatch = dumped["modes"][2]
+    # The ladder is asserted separately from the rest: pinning the whole dict
+    # made this test fail every time a template gained a field, which says
+    # nothing about round-tripping (the assert below is what does).
+    assert {k: v for k, v in stopwatch.items() if k != "ladder"} == {
         "name": "Focus", "template": "stopwatch",
         "activation": {"type": "manual"}, "log_as": "focus",
     }
+    assert stopwatch["ladder"]["enabled"] is False  # opt-in, never by surprise
     assert dumped["modes"][3] == {
         "name": "Water", "template": "counter",
         "activation": {"type": "manual"}, "event": "water",

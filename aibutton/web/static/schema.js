@@ -219,6 +219,37 @@ export function describeActivation(activation) {
 //   exits(mode) one plain sentence: which press gets you back out
 // These mirror the takeover loops in main.py - run_alarm, run_stopwatch,
 // run_counter, run_pomodoro. Change a loop, change the sentence.
+// A subdivision ladder: the light as a clock. Mirrors config.py's LadderSpec
+// and _default_rungs - the intervals and colours have to match, because the
+// editor seeding different defaults from the parser is how a "new mode" and a
+// "saved mode" end up looking different for no visible reason.
+//
+// Why these colours: the *rate* tells you the unit before you know the code,
+// and the two most frequent ones are a light/dark pair rather than two hues,
+// which survives both this build's warm ring cast and a colourblind reader.
+export function defaultLadder() {
+  return {
+    enabled: false,
+    tick_s: 0.5,
+    base: '#000000',
+    rungs: [
+      { every_s: 10, color: '#ffffff' },
+      { every_s: 5, color: '#ffff00' },
+      { every_s: 2, color: '#66ccff' },
+      { every_s: 1, color: '#0033aa' },
+    ],
+  };
+}
+
+// Shared by every template with a time reference, so turning the light into a
+// clock is one descriptor rather than one per mode.
+const LADDER_FIELD = {
+  key: 'ladder', label: 'Tell the time with the light', kind: 'ladder',
+  hint: 'Each tick takes the colour of the longest interval that divides it: '
+    + '10s white, 5s yellow, even seconds light blue, odd dark. Off-beat ticks '
+    + 'get the off-beat colour.',
+};
+
 export const TEMPLATES = [
   {
     type: 'actions',
@@ -310,11 +341,12 @@ export const TEMPLATES = [
     allowedActivations: ['manual'], // started by an enter_mode gesture only
     body: 'fields',
     fields: [
+      LADDER_FIELD,
       { key: 'log_as', label: 'Timer name', kind: 'text', required: true,
         placeholder: 'focus',
         hint: 'What the elapsed time is logged as; short press laps, long press stops.' },
     ],
-    defaults: () => ({ log_as: '' }),
+    defaults: () => ({ log_as: '', ladder: defaultLadder() }),
     startedBy: 'gesture',
     exits: () => 'long press (short/double = lap)',
     describe: (mode) => `Stopwatch “${mode.log_as || '…'}”`,
@@ -405,6 +437,10 @@ TEMPLATES.push({
       hint: 'Optional name for the status line. Defaults to the mode name.' },
     { key: 'ring_on_finish', label: 'Ring at zero', kind: 'checkbox',
       hint: 'Off = it finishes quietly, with just the light.' },
+    // The ladder and the ramp both decide *which* colour, so only one runs -
+    // the ladder wins when it is on. It sits after the ramp for that reason:
+    // turning it on is what makes the fields above it stop mattering.
+    LADDER_FIELD,
     { key: 'log_as', label: 'Log each finished run as', kind: 'text', required: true,
       placeholder: 'countdown',
       hint: 'Logged with the length it ran for. A cancelled run logs nothing.' },
@@ -414,6 +450,7 @@ TEMPLATES.push({
     ramp: COUNTDOWN_RAMP.map((color, index) => ({
       color, at: index / (COUNTDOWN_RAMP.length - 1),
     })),
+    ladder: defaultLadder(),
     ring_on_finish: true, log_as: 'countdown',
   }),
   startedBy: 'gesture',
