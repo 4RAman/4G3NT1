@@ -705,11 +705,15 @@ def test_metronome_roundtrips(tmp_path):
         ],
     }))
     dumped = as_dict(cfg)
-    assert dumped["modes"][0] == {
+    # The ladder is checked apart from the rest: pinning the whole dict made
+    # this fail whenever the template gained a field, which says nothing about
+    # round-tripping - the assert below is what does.
+    assert {k: v for k, v in dumped["modes"][0].items() if k != "ladder"} == {
         "name": "Tempo", "template": "metronome", "activation": {"type": "manual"},
         "start_bpm": 120.0, "max_bpm": 300.0, "tap_history": 8,
         "reset_gap_s": 2.0, "sound_on_tap": True, "log_as": "metronome",
     }
+    assert dumped["modes"][0]["ladder"]["enabled"] is False  # opt-in
     assert parse_config(dumped) == cfg  # exact round-trip
 
 

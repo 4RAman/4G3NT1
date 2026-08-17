@@ -64,6 +64,7 @@ def test_the_default_rungs_are_the_readable_ones():
 @pytest.mark.parametrize("template,extra", [
     ("stopwatch", {"log_as": "focus"}),
     ("countdown", {"minutes": 1, "log_as": "cd"}),
+    ("metronome", {"log_as": "metronome"}),
 ])
 def test_both_time_based_templates_accept_one(template, extra):
     cfg = parse_config({"modes": [{
@@ -215,6 +216,53 @@ async def test_the_stopwatch_still_exits_on_a_long_press(tmp_path, monkeypatch):
         device.press(TriggerType.LONG_PRESS)
         await asyncio.sleep(0.4)
         assert device.led_state is LEDState.IDLE
+    finally:
+        await _stop(task)
+
+
+async def test_the_metronome_colours_beats_without_being_tapped(tmp_path, monkeypatch):
+    """Its ladder counts beats, and it runs from start_bpm before the first
+    tap - the light should be keeping time the moment you enter."""
+    beats = dict(CONFIG, modes=[
+        {"name": "Home", "template": "actions", "activation": {"type": "always"},
+         "long_press": {"action": "enter_mode", "target": "Beat"}},
+        {"name": "Beat", "template": "metronome", "activation": {"type": "manual"},
+         "log_as": "metronome", "start_bpm": 240, "sound_on_tap": False,
+         "ladder": {"enabled": True, "base": "#000000", "rungs": [
+             {"every_s": 4, "color": "#ffffff"},
+             {"every_s": 2, "color": "#66ccff"},
+             {"every_s": 1, "color": "#0033aa"},
+         ]}},
+    ])
+    task, device = await _running_stopwatch(tmp_path, monkeypatch, beats)
+    try:
+        assert device.led_state is LEDState.METRONOME
+        seen = set()
+        for _ in range(24):
+            await asyncio.sleep(0.1)
+            if device.led_effect is not None:
+                seen.add(device.led_effect.color)
+        assert len(seen) > 1, f"the beat ladder never changed colour: {seen}"
+    finally:
+        await _stop(task)
+
+
+async def test_a_metronome_without_a_ladder_still_pulses_at_the_tempo(tmp_path, monkeypatch):
+    """The ladder replaces the device-rendered pulse; without one, the old
+    behaviour has to be untouched."""
+    plain = dict(CONFIG, modes=[
+        {"name": "Home", "template": "actions", "activation": {"type": "always"},
+         "long_press": {"action": "enter_mode", "target": "Beat"}},
+        {"name": "Beat", "template": "metronome", "activation": {"type": "manual"},
+         "log_as": "metronome", "start_bpm": 120, "sound_on_tap": False},
+    ])
+    task, device = await _running_stopwatch(tmp_path, monkeypatch, plain)
+    try:
+        assert device.led_state is LEDState.METRONOME
+        # 120 BPM is a 0.5s beat, and the device is asked to pulse at it.
+        assert device.led_effect is not None
+        assert device.led_effect.period_s == pytest.approx(0.5)
+        assert device.led_effect.style != "solid"
     finally:
         await _stop(task)
 

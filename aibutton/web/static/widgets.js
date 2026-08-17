@@ -227,6 +227,49 @@ const WIDGETS = {
     };
   },
 
+  // Brightness for a style that makes its own hues (rainbow). It edits the
+  // *same* `color` field as the picker above, because that is where the value
+  // rides on the wire - the effect's brightest channel is its level - so a
+  // grey is written rather than a new field being invented.
+  //
+  // The floor is 1%, not 0: zero is what an unset colour looks like in a config
+  // written before this meant anything, and the firmware reads that as full.
+  // Offering 0 would let someone pick a value that silently means its opposite.
+  level(spec, obj, onInput) {
+    const read = () => {
+      const text = String(obj[spec.key] || '').replace('#', '');
+      if (text.length !== 6) return 100;
+      const top = Math.max(
+        parseInt(text.slice(0, 2), 16),
+        parseInt(text.slice(2, 4), 16),
+        parseInt(text.slice(4, 6), 16),
+      );
+      return !Number.isFinite(top) || top <= 0 ? 100 : Math.round((top / 255) * 100);
+    };
+    const write = (percent) => {
+      const byte = Math.max(1, Math.min(255, Math.round((percent / 100) * 255)));
+      const pair = byte.toString(16).padStart(2, '0');
+      obj[spec.key] = `#${pair}${pair}${pair}`;
+    };
+
+    const input = el('input', {
+      type: 'range', className: 'inp inp-range', min: 1, max: 100, step: 1,
+      value: read(),
+    });
+    const readout = el('span', { className: 'fld-readout', textContent: `${read()}%` });
+    const err = errLine();
+    input.addEventListener('input', () => {
+      const percent = Number(input.value);
+      write(percent);
+      readout.textContent = `${percent}%`;
+      onInput();
+    });
+    return {
+      el: wrap(spec, el('span', { className: 'range-row' }, [input, readout]), err),
+      validate: () => null,
+    };
+  },
+
   // A colour ramp: an ordered list of stops, each a colour pinned somewhere
   // between the start (0%) and the end (100%). Mirrors ramp.py's Stop, and
   // what config.py's parser accepts.
@@ -463,7 +506,9 @@ const WIDGETS = {
         rows.append(el('div', { className: 'ladder-row' }, [
           el('span', { className: 'ladder-lbl', textContent: 'every' }),
           every,
-          el('span', { className: 'ladder-lbl', textContent: 's' }),
+          // Seconds for a timer, beats for the metronome - the ladder counts,
+          // and what it counts is declared on the descriptor.
+          el('span', { className: 'ladder-lbl', textContent: spec.unit ?? 's' }),
           swatch,
           remove,
         ]));
@@ -500,13 +545,21 @@ const WIDGETS = {
     const base = el('input', { type: 'color', className: 'inp inp-color', value: value.base });
     base.addEventListener('input', () => { value.base = base.value; commit(); paint(); });
 
+    // No tick row where the cadence is not the mode's to set - the metronome's
+    // tempo is tapped in, so offering a tick there would be a control that
+    // does nothing.
     body.append(
-      el('div', { className: 'ladder-row' }, [
-        el('span', { className: 'ladder-lbl', textContent: 'tick' }),
-        tick,
-        el('span', { className: 'ladder-lbl', textContent: 's, off-beat' }),
-        base,
-      ]),
+      spec.showTick === false
+        ? el('div', { className: 'ladder-row' }, [
+            el('span', { className: 'ladder-lbl', textContent: 'off-beat' }),
+            base,
+          ])
+        : el('div', { className: 'ladder-row' }, [
+            el('span', { className: 'ladder-lbl', textContent: 'tick' }),
+            tick,
+            el('span', { className: 'ladder-lbl', textContent: 's, off-beat' }),
+            base,
+          ]),
       rows,
       preview,
     );

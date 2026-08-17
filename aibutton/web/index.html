@@ -279,6 +279,10 @@
   .ladder-edit { gap: 6px; }
   .ladder-body { display: flex; flex-direction: column; gap: 6px;
                  border-left: 2px solid var(--line); padding-left: 10px; margin-top: 4px; }
+  /* An author `display` beats the UA stylesheet's [hidden] { display: none },
+     so a flex container needs to say so itself - otherwise `node.hidden = true`
+     silently does nothing and the panel stays open while its toggle reads off. */
+  .ladder-body[hidden] { display: none; }
   .ladder-rows { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
   .ladder-row { display: flex; align-items: center; gap: 6px; }
   .ladder-lbl { color: var(--dim); font-size: 12px; }

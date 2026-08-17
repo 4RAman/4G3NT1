@@ -21,6 +21,15 @@ import { paint as applySwatch } from './ledPreview.js';
 // reasons worth exposing rather than hiding: it is what the status line
 // reports, and it is what a device too old for ephemeral effects falls back
 // to rendering.
+// Whether `style` renders `spec`. Two specs share the key `color` - a hue
+// picker and a brightness slider - so a spec may declare which *reading* it
+// is with `shows`, and the style's `uses` list names the reading it wants.
+// Without `shows` this is the plain "does this style use this field" it always
+// was, which is why every other field needed no change.
+function usedBy(style, spec) {
+  return style.uses.includes(spec.shows || spec.key);
+}
+
 const TEST_STATE_FIELD = {
   key: 'state', label: 'Reported state', kind: 'select',
   options: LED_STATES.map((s) => ({ value: s.key, label: s.label })),
@@ -463,7 +472,7 @@ export class ConfigMenu {
       const style = LED_STYLE_BY_TYPE[this.testLook.style] || LED_STYLE_BY_TYPE.solid;
       for (const spec of [...LED_FIELDS, TEST_STATE_FIELD]) {
         // Same rule as a palette row: hide what this style ignores.
-        if (spec.key !== 'style' && spec.key !== 'state' && !style.uses.includes(spec.key)) continue;
+        if (spec.key !== 'style' && spec.key !== 'state' && !usedBy(style, spec)) continue;
         const field = createField(spec, this.testLook, () => {
           refresh();
           if (spec.key === 'style') renderFields();
@@ -559,7 +568,7 @@ export class ConfigMenu {
     const fields = el('div', { className: 'settings-grid' });
     for (const fieldSpec of LED_FIELDS) {
       // Hide what this style ignores: a rainbow has no colour to pick.
-      if (fieldSpec.key !== 'style' && !style.uses.includes(fieldSpec.key)) continue;
+      if (fieldSpec.key !== 'style' && !usedBy(style, fieldSpec)) continue;
       const field = createField(fieldSpec, effect, () => {
         this._markDirty();
         applySwatch(swatch, effect);

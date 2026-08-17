@@ -88,7 +88,11 @@ class ButtonPeripheral:
         # not: an ephemeral look is something you can only be shown.
         capabilities = protocol.CAP_PALETTE | protocol.CAP_GESTURE_PARAMS
         if self.led.usable:
-            capabilities |= protocol.CAP_LED | protocol.CAP_EFFECT
+            # Rainbow brightness rides with the LED: it is how this build's
+            # renderer reads an effect, so a working LED is the whole condition.
+            capabilities |= (
+                protocol.CAP_LED | protocol.CAP_EFFECT | protocol.CAP_RAINBOW_LEVEL
+            )
         if self.buzzer.usable:
             capabilities |= protocol.CAP_BUZZER
         _info_char.write(protocol.device_info_payload(capabilities))

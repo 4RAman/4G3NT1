@@ -6,6 +6,7 @@
   "web_enabled": true,
   "web_host": "0.0.0.0",
   "web_port": 8080,
+  "min_flash_period_s": 0.3,
   "modes": [
     {
       "name": "Main Menu",
@@ -23,7 +24,7 @@
       },
       "double_tap": {
         "action": "enter_mode",
-        "target": "Metronome"
+        "target": "Stopwatch"
       },
       "triple_tap": {
         "action": "enter_mode",
@@ -36,7 +37,26 @@
       "activation": {
         "type": "manual"
       },
-      "log_as": "stopwatch"
+      "log_as": "stopwatch",
+      "ladder": {
+        "enabled": true,
+        "tick_s": 0.5,
+        "base": "#000000",
+        "rungs": [
+          {
+            "every_s": 10,
+            "color": "#ffffff"
+          },
+          {
+            "every_s": 2,
+            "color": "#002942"
+          },
+          {
+            "every_s": 1,
+            "color": "#4f6392"
+          }
+        ]
+      }
     },
     {
       "name": "Pomodoro",
@@ -60,6 +80,29 @@
       "template": "metronome",
       "activation": {
         "type": "manual"
+      },
+      "ladder": {
+        "enabled": true,
+        "tick_s": 0.5,
+        "base": "#000000",
+        "rungs": [
+          {
+            "every_s": 8,
+            "color": "#00ff2a"
+          },
+          {
+            "every_s": 4,
+            "color": "#103d00"
+          },
+          {
+            "every_s": 2,
+            "color": "#4c8e9a"
+          },
+          {
+            "every_s": 1,
+            "color": "#1d2062"
+          }
+        ]
       },
       "start_bpm": 120,
       "tap_history": 4,
@@ -151,15 +194,38 @@
         }
       ],
       "ring_on_finish": true,
-      "log_as": "countdown"
+      "log_as": "countdown",
+      "ladder": {
+        "enabled": false,
+        "tick_s": 0.5,
+        "base": "#000000",
+        "rungs": [
+          {
+            "every_s": 10,
+            "color": "#ffffff"
+          },
+          {
+            "every_s": 5,
+            "color": "#ffff00"
+          },
+          {
+            "every_s": 2,
+            "color": "#66ccff"
+          },
+          {
+            "every_s": 1,
+            "color": "#0033aa"
+          }
+        ]
+      }
     }
   ],
   "led_palette": {
     "IDLE": {
-      "style": "breathe",
+      "style": "rainbow",
       "color": "#967d45",
       "color2": "#00fbff",
-      "period_s": 8
+      "period_s": 7.66
     },
     "LISTENING": {
       "style": "breathe",
@@ -235,6 +301,5 @@
       "color2": "#2e62ff",
       "period_s": 0.4
     }
-  },
-  "min_flash_period_s": 0.3
+  }
 }

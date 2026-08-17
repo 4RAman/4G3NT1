@@ -113,6 +113,11 @@ CAP_MIC = 0x0040
 CAP_OTA = 0x0080
 CAP_EFFECT = 0x0100          # a look can be pushed without allocating an LEDState
 CAP_GESTURE_PARAMS = 0x0200  # gestures carry a parameter; GESTURE_CONFIG is read
+# The rainbow style reads its brightness from the effect's colour. No wire
+# change - those bytes were simply discarded for this style before - but it
+# still earns a bit, because the failure without one is silent: a slider that
+# does nothing on an un-reflashed button is worse than a slider that says why.
+CAP_RAINBOW_LEVEL = 0x0400
 
 CAPABILITY_NAMES = {
     CAP_LED: "led",
@@ -125,6 +130,7 @@ CAPABILITY_NAMES = {
     CAP_OTA: "ota",
     CAP_EFFECT: "effect",
     CAP_GESTURE_PARAMS: "gesture-params",
+    CAP_RAINBOW_LEVEL: "rainbow-level",
 }
 
 DEVICE_INFO_LEN = 6
@@ -295,6 +301,12 @@ LED_STYLES = tuple(LED_STYLE_CODES)  # config validation + the web UI's picker
 # fields that would do nothing rather than invite pointless edits.
 STYLE_USES_COLOR = {"solid", "breathe", "flash", "alternate", "fade"}
 STYLE_USES_COLOR2 = {"alternate", "fade"}
+# Styles that read `color` as a *level* rather than as a hue. Rainbow is the
+# only one: it generates its own hues and takes the colour's brightest channel
+# as its brightness. Kept apart from STYLE_USES_COLOR on purpose - the editor
+# has to offer a brightness slider here, not a colour picker, and a mode
+# walking a ramp must know that pushing a colour into this style shows nothing.
+STYLE_USES_LEVEL = {"rainbow"}
 STYLE_USES_PERIOD = {"breathe", "flash", "alternate", "rainbow", "fade"}
 
 # Styles whose period is a hard on/off transition, which is what

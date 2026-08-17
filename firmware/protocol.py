@@ -51,7 +51,7 @@ OTA_CONTROL_UUID = "f3641406-00b0-4240-ba50-05ca45bf8abc"
 # device, and a host that hard-coded it would be describing itself.
 
 PROTOCOL_VERSION = 1
-FIRMWARE_VERSION = (0, 5, 0)
+FIRMWARE_VERSION = (0, 6, 0)
 
 CAP_LED = 0x0001      # an LED came up and can be driven
 CAP_BUZZER = 0x0002   # a buzzer came up and can be driven
@@ -67,6 +67,11 @@ CAP_OTA = 0x0080
 
 CAP_EFFECT = 0x0100          # LED_EFFECT: a look can be pushed without a state code
 CAP_GESTURE_PARAMS = 0x0200  # gestures carry a parameter, and GESTURE_CONFIG is read
+# The rainbow style takes its brightness from the effect's colour. Not a wire
+# change - those bytes were discarded for this style before - but reported so a
+# host can tell the difference between "set to 30%" and "ignored by old
+# firmware", which is otherwise a silent no-op.
+CAP_RAINBOW_LEVEL = 0x0400
 
 DEVICE_INFO_LEN = 6
 

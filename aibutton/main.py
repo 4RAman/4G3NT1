@@ -44,6 +44,7 @@ from pathlib import Path
 from . import ladder, ramp
 from .device import (
     SAFE_MIN_PERIOD_S,
+    STYLE_USES_COLOR,
     ButtonDevice,
     LEDState,
     MockDevice,
@@ -893,13 +894,41 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         set_status("METRONOME")
         status.last_mode = mode_name
 
+        # A ladder here counts *beats*, not seconds - the tempo already decides
+        # the timing, so what a colour adds is an accent ("every 4th beat"). It
+        # also changes who drives the light: normally the device animates the
+        # pulse and the host only sends a period, but a colour per beat has to
+        # come from the host, so the loop grows a beat clock below.
+        laddered = behavior.ladder.enabled
+        shown_beat: str | None = None
+
+        def paint_beat(beat: int) -> None:
+            """Show the ladder's colour for beat number `beat`."""
+            nonlocal shown_beat
+            colour = ladder.color_at(behavior.ladder.rungs, beat, behavior.ladder.base)
+            if colour == shown_beat:
+                return
+            base = base_look(LEDState.METRONOME)
+            if base is None:
+                return
+            shown_beat = colour
+            set_led(LEDState.METRONOME, replace(base, style="solid", color=colour))
+
         def push_tempo(tempo: float) -> int:
             """Show METRONOME beating at `tempo`. The mode's look (or the
             palette entry) supplies the colour and style; only the period is
-            the session's business."""
+            the session's business.
+
+            With a ladder running, the period is *not* pushed: the beat clock
+            is painting a colour per beat, and asking the device to also pulse
+            underneath would be two clocks on one light. `per_flash` is still
+            returned, because it is the number of beats the light may mark
+            without crossing the flash floor - and the ladder obeys the same
+            grouping rather than inventing a second safety rule.
+            """
             base = base_look(LEDState.METRONOME)
             period, per_flash = metronome_flash(tempo, cm.config.min_flash_period_s)
-            if base is not None:
+            if base is not None and not laddered:
                 set_led(LEDState.METRONOME, replace(base, period_s=period))
             return per_flash
 
@@ -910,8 +939,17 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         # The mode owns its starting tempo, so the light is already keeping
         # time before the first tap rather than sitting at whatever period the
         # global palette entry happens to carry.
-        push_tempo(behavior.start_bpm)
+        per_flash = push_tempo(behavior.start_bpm)
         status.last_message = f"tap to set the tempo (from {round(behavior.start_bpm)} BPM)"
+
+        # The beat clock, which only exists when a ladder does. It runs from
+        # `start_bpm` immediately, for the same reason push_tempo does: the
+        # light should already be keeping time before the first tap lands.
+        beat_no = 0
+        beat_step = 60.0 / behavior.start_bpm * per_flash
+        next_beat = loop.time() + beat_step if laddered else None
+        if laddered:
+            paint_beat(0)
 
         if args.demo:
             # --demo is unattended: no tap will ever arrive, so show it
@@ -919,7 +957,18 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             return ActionResult(True, "metronome (demo: no taps)")
         while True:
-            trigger = await _wait_for_trigger(device.events, stop)
+            timeout = None
+            if next_beat is not None:
+                timeout = max(0.0, next_beat - loop.time())
+            trigger = await _wait_for_trigger(device.events, stop, timeout)
+            if trigger is None and next_beat is not None and not stop.is_set():
+                # A beat, not a press. Advancing by `per_flash` keeps the beat
+                # *number* honest at tempos where the light may only mark every
+                # Nth one - the ladder is read in beats, not in flashes.
+                beat_no += per_flash
+                paint_beat(beat_no)
+                next_beat += beat_step
+                continue
             if trigger is None:  # shutting down mid-session
                 return ActionResult(True, "metronome stopped (shutdown)")
             if trigger is TriggerType.LONG_PRESS:
@@ -946,7 +995,14 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             if len(taps) >= 2:
                 intervals = [b - a for a, b in zip(taps, taps[1:])]
                 bpm = min(behavior.max_bpm, 60.0 / (sum(intervals) / len(intervals)))
-                status.last_message = describe(bpm, push_tempo(bpm))
+                per_flash = push_tempo(bpm)
+                status.last_message = describe(bpm, per_flash)
+                if next_beat is not None:
+                    # Re-phase the beat clock onto the tap that just landed,
+                    # rather than letting it keep the old tempo's grid. A
+                    # metronome you retap should follow you immediately.
+                    beat_step = 60.0 / bpm * per_flash
+                    next_beat = now + beat_step
             else:
                 status.last_message = "tap again to set the tempo"
 
@@ -992,9 +1048,23 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         period = look.period_s if look is not None else behavior.period_s
         pushed: str | None = None
 
+        # A ramp can only be seen through a style that renders `color`. A
+        # rainbow is all the hues by definition and ignores it (see
+        # STYLE_USES_COLOR), so walking a ramp underneath one is invisible *and*
+        # costs a radio write every time it moves. Say so once and stop pushing,
+        # rather than sending colour into a style that discards it.
+        colour_shows = style in STYLE_USES_COLOR
+        if not colour_shows:
+            log.info(
+                "countdown %r: a %r look ignores colour, so its ramp is not shown",
+                mode_name, style,
+            )
+
         def paint(progress: float) -> None:
             """Push the ramp's colour for `progress`, if it has visibly moved."""
             nonlocal pushed
+            if not colour_shows:
+                return
             colour = ramp.color_at(behavior.ramp, progress)
             if pushed is not None and not ramp.differs(
                 pushed, colour, _COUNTDOWN_COLOR_STEP

@@ -399,10 +399,27 @@ class LEDController:
             await asyncio.sleep(_FRAME_S)
 
     async def _rainbow(self, effect):
-        """Hue rotates a full turn per period. The configured colour is
-        ignored - the point of a rainbow is that it is all of them."""
+        """Hue rotates a full turn per period.
+
+        The colour is still not a *hue* here - the point of a rainbow is that
+        it is all of them - but its brightest channel is the **brightness**,
+        which is the one thing about a rainbow worth setting. That is an
+        addition rather than a repurpose: these bytes have never meant anything
+        for this style, so nothing that was written before can be misread now.
+
+        Zero means full, deliberately. Every rainbow written before this
+        carried whatever colour happened to be in the field, very often
+        #000000, and a rainbow that renders black is indistinguishable from the
+        light being off - which nobody configures a rainbow to do. So the one
+        value we cannot honour is the one that means "unset", and treating it
+        as full is what makes an un-updated config render exactly as it always
+        did after a reflash.
+        """
+        level = max(effect.color) / 255.0
+        if level <= 0:
+            level = 1.0
         start = now_s()
         while True:
             hue = ((now_s() - start) % effect.period_s) / effect.period_s
-            self._backend.set(*_hsv_to_rgb(hue, 1.0, 1.0))
+            self._backend.set(*_hsv_to_rgb(hue, 1.0, level))
             await asyncio.sleep(_FRAME_S)

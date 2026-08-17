@@ -243,11 +243,24 @@ export function defaultLadder() {
 
 // Shared by every template with a time reference, so turning the light into a
 // clock is one descriptor rather than one per mode.
+//
+// `unit` is why this is a descriptor and not a hard-coded widget: the ladder
+// itself just counts, and what it counts is the consumer's business. Timers
+// count seconds; the metronome counts *beats*, because a tempo already decides
+// the timing and what a colour adds there is an accent.
 const LADDER_FIELD = {
   key: 'ladder', label: 'Tell the time with the light', kind: 'ladder',
+  unit: 's', showTick: true,
   hint: 'Each tick takes the colour of the longest interval that divides it: '
     + '10s white, 5s yellow, even seconds light blue, odd dark. Off-beat ticks '
     + 'get the off-beat colour.',
+};
+
+const LADDER_BEATS_FIELD = {
+  key: 'ladder', label: 'Colour the beats', kind: 'ladder',
+  unit: ' beats', showTick: false,
+  hint: 'Accents by beat number: every 4th beat one colour, every 2nd another. '
+    + 'The tempo you tap supplies the timing, so there is no tick to set.',
 };
 
 export const TEMPLATES = [
@@ -378,6 +391,7 @@ export const TEMPLATES = [
     // The tempo itself is session state and is never stored. Everything here
     // is how the tempo gets read, bounded and shown.
     fields: [
+      LADDER_BEATS_FIELD,
       { key: 'start_bpm', label: 'Starting tempo (BPM)', kind: 'number', min: 1, step: 1,
         hint: 'What the light keeps time at before your first tap lands.' },
       { key: 'max_bpm', label: 'Fastest tempo (BPM)', kind: 'number', min: 1, step: 1,
@@ -398,6 +412,12 @@ export const TEMPLATES = [
     defaults: () => ({
       start_bpm: 120, max_bpm: 300, tap_history: 8, reset_gap_s: 2,
       sound_on_tap: true, log_as: 'metronome',
+      // Beats, not seconds: bar-ish accents rather than a clock.
+      ladder: { ...defaultLadder(), tick_s: 1, rungs: [
+        { every_s: 4, color: '#ffffff' },
+        { every_s: 2, color: '#66ccff' },
+        { every_s: 1, color: '#0033aa' },
+      ] },
     }),
     startedBy: 'gesture',
     exits: () => 'long press (short/double = tap the tempo)',
@@ -644,6 +664,28 @@ export function findEntryPoints(mode, allModes) {
 // rather than inviting edits with no effect. index.html renders the virtual
 // device from these same definitions.
 
+/** A rainbow's brightness, 1-100, read off the colour's brightest channel.
+ *  0 is what "never set" looks like in an old config, and the firmware renders
+ *  that as full - so the editor shows it as full too rather than as off. */
+export function levelPercent(hex) {
+  const text = String(hex || '').replace('#', '');
+  if (text.length !== 6) return 100;
+  const top = Math.max(
+    parseInt(text.slice(0, 2), 16),
+    parseInt(text.slice(2, 4), 16),
+    parseInt(text.slice(4, 6), 16),
+  );
+  if (!Number.isFinite(top) || top <= 0) return 100;
+  return Math.round((top / 255) * 100);
+}
+
+/** The grey that stores `percent` as a level. */
+export function levelHex(percent) {
+  const byte = Math.max(1, Math.min(255, Math.round((percent / 100) * 255)));
+  const pair = byte.toString(16).padStart(2, '0');
+  return `#${pair}${pair}${pair}`;
+}
+
 export const LED_STYLES = [
   { type: 'solid', label: 'Solid', uses: ['color'],
     describe: () => 'held' },
@@ -660,8 +702,11 @@ export const LED_STYLES = [
     describe: (e) => `swapping every ${e.period_s}s` },
   { type: 'fade', label: 'Fade between two colours', uses: ['color', 'color2', 'period_s'],
     describe: (e) => `crossfading every ${e.period_s}s` },
-  { type: 'rainbow', label: 'Rainbow', uses: ['period_s'],
-    describe: (e) => `cycling every ${e.period_s}s` },
+  // `level` rather than `color`: a rainbow generates its own hues and reads
+  // the colour's brightest channel as brightness. Mirrors device.py's
+  // STYLE_USES_LEVEL; test_webui.py fails if they drift.
+  { type: 'rainbow', label: 'Rainbow', uses: ['period_s', 'level'],
+    describe: (e) => `cycling every ${e.period_s}s at ${levelPercent(e.color)}%` },
 ];
 
 export const LED_STYLE_BY_TYPE = Object.fromEntries(LED_STYLES.map((s) => [s.type, s]));
@@ -703,6 +748,10 @@ export const LED_FIELDS = [
   { key: 'style', label: 'Style', kind: 'select',
     options: LED_STYLES.map((s) => ({ value: s.type, label: s.label })) },
   { key: 'color', label: 'Colour', kind: 'color' },
+  // Same key as above, different reading of it. Which one renders is decided
+  // by the style's `uses` list - a rainbow lists 'level', everything that
+  // shows a hue lists 'color' - so this is a data choice, not a branch.
+  { key: 'color', shows: 'level', label: 'Brightness', kind: 'level' },
   { key: 'color2', label: 'Second colour', kind: 'color' },
   // A slider rather than a number box, and its floor is the *configured*
   // flash limit rather than a constant, so it cannot offer a rate the parser

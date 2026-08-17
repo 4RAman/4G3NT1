@@ -234,6 +234,15 @@ class LadderSpec:
     base: str = "#000000"  # ticks landing on no rung; black = a dark off-beat
     rungs: tuple[ladder.Rung, ...] = field(default_factory=_default_rungs)
 
+    # A note on units, because one field name has to serve two meanings.
+    # `every_s` counts *seconds* for the timers and *beats* for the metronome,
+    # and `tick_s` is unused there because the tempo supplies the cadence. The
+    # ladder itself is unit-agnostic - `ladder.color_at` takes a number - so
+    # what a rung counts is the consumer's decision, declared on the field
+    # descriptor in schema.js rather than stored here. Keeping one dataclass
+    # is what lets the parser, the editor widget and the round-trip be written
+    # once.
+
 
 @dataclass(frozen=True)
 class StopwatchBehavior:
@@ -336,6 +345,13 @@ class MetronomeBehavior:
     max_bpm: float = 300.0
     sound_on_tap: bool = True
     log_as: str = "metronome"  # a finished session logs its BPM under this
+    # A subdivision ladder counted in **beats**, not seconds - which is the
+    # only reading that is useful here. The tempo already decides the timing;
+    # what a metronome wants from a colour is an *accent* ("every 4th beat"),
+    # and a seconds-based ladder would drift against the tempo the moment you
+    # tapped a new one. See LadderSpec: the ladder counts, the caller decides
+    # in what.
+    ladder: LadderSpec = field(default_factory=LadderSpec)
 
     @property
     def template(self) -> str:
@@ -1246,6 +1262,7 @@ def _parse_metronome_body(raw: dict, where: str) -> MetronomeBehavior:
         max_bpm=max_bpm,
         sound_on_tap=sound_on_tap,
         log_as=log_as,
+        ladder=_parse_ladder(raw.get("ladder"), f"{where}.ladder"),
     )
 
 
@@ -1799,6 +1816,7 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["log_as"] = mode.behavior.log_as
         entry["ladder"] = _ladder_to_dict(mode.behavior.ladder)
     elif isinstance(mode.behavior, MetronomeBehavior):
+        entry["ladder"] = _ladder_to_dict(mode.behavior.ladder)
         entry["start_bpm"] = mode.behavior.start_bpm
         entry["tap_history"] = mode.behavior.tap_history
         entry["reset_gap_s"] = mode.behavior.reset_gap_s
