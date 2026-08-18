@@ -12,3 +12,14 @@ control-panel.json
 control-panel.lock
 button.ico
 dist/
+# Event logs live in data/, but a throwaway one made while testing a scene or
+# a look lands wherever it was pointed - usually the repo root. They are never
+# worth committing, and the lock beside them even less so.
+*.db
+*.db.lock
+# Agent worktrees: full checkouts of this repo underneath it. Left behind when
+# a background agent dies, and they make every grep report two copies of the
+# same file at two different versions.
+.claude/worktrees/
+# Per-machine tool permissions, like control-panel.json above.
+.claude/settings.local.json

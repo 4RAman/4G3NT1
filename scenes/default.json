@@ -223,7 +223,7 @@
   "led_palette": {
     "IDLE": {
       "style": "rainbow",
-      "color": "#967d45",
+      "color": "#030303",
       "color2": "#00fbff",
       "period_s": 7.66
     },

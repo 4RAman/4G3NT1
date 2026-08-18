@@ -298,6 +298,14 @@ is the one surface that will exist in someone else's pocket.
   new user-facing text says "the button", and new identifiers don't embed it.
 - Firmware changes need a **reflash** before they mean anything. Firmware
   modules import each other by bare name and sit flat on the device.
+- **Keep [TODO.md](TODO.md) current in the same commit as the work.** When an
+  item ships, move it to **Done** and delete the scope the shipped version
+  superseded — a "✔ shipped" banner above the original plan is how that file
+  grew to 1600 lines of instructions nobody should follow any more. Two rules
+  keep the pruning safe: a rule governing *future* code belongs here in
+  CLAUDE.md and TODO.md only records the decision and points at it; and item
+  numbers are never reused or renumbered, because this file, ROADMAP.md and
+  the commit log all cite them.
 
 ## Hardware gotchas
 
