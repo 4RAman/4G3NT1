@@ -444,10 +444,46 @@ class ReminderBehavior:
         return "reminders"
 
 
+@dataclass(frozen=True)
+class LauncherBehavior:
+    """The app launcher: short press cycles the installed apps, long press
+    launches the one showing, double tap backs out.
+
+    Why this exists at all: a takeover app is reached by an `enter_mode` action
+    bound to a gesture, and there are four gestures. Keep one for everyday
+    logging and you can reach three apps, which makes "load the button with as
+    many apps as it will fit" untrue as written (ROADMAP Stage 2). One gesture
+    spent on this reaches all of them.
+
+    `targets` empty means **every takeover mode in config order**, so a newly
+    added app appears in the launcher without anyone editing a list. Naming
+    them explicitly is how you get a shorter menu or a different order; a name
+    that matches nothing is dropped with a warning at run time rather than at
+    parse time, because a launcher whose target is defined later in the file is
+    the normal case, not an error.
+
+    It owns no LED state (see MODE_LED_STATES): the whole point is that it
+    wears the *target's* colour, so the light answers "which app" rather than
+    "which mode is running".
+    """
+
+    targets: tuple[str, ...] = ()
+    # Whether launching replaces the launcher or returns to it when the app
+    # exits. Off by default: a launcher you have to escape twice feels like a
+    # trap, and "the app is the thing you are now in" is the phone-home-screen
+    # model everyone already has.
+    return_after: bool = False
+    log_as: str = ""  # optional: log which app was launched, under this name
+
+    @property
+    def template(self) -> str:
+        return "launcher"
+
+
 Behavior = (
     ActionsBehavior | AlarmBehavior | StopwatchBehavior | CounterBehavior
     | PomodoroBehavior | MetronomeBehavior | CountdownBehavior
-    | ReminderBehavior
+    | ReminderBehavior | LauncherBehavior
 )
 
 # Which activation types each template accepts (per-template allow-list,
@@ -464,6 +500,10 @@ _ALLOWED_ACTIVATIONS = {
     # Manual, not schedule: a countdown that starts itself at a clock time is
     # an alarm, and that template already exists.
     "countdown": (ManualActivation,),
+    # Manual: something has to bind a gesture to reach the launcher, and
+    # a launcher that started itself on a schedule would be an app that
+    # interrupts you to ask which app you wanted.
+    "launcher": (ManualActivation,),
 }
 
 # Which LED states belong to a *mode* rather than to the button.
@@ -489,6 +529,10 @@ MODE_LED_STATES: dict[str, tuple[str, ...]] = {
     "pomodoro": (LEDState.WORKING.value, LEDState.RESTING.value),
     "metronome": (LEDState.METRONOME.value,),
     "countdown": (LEDState.TIMING.value,),
+    # Deliberately none. The launcher shows whichever app is selected, in
+    # *that* app's colour, so giving it a look of its own would be a
+    # setting that only ever overwrites the thing you are trying to read.
+    "launcher": (),
 }
 
 # The rest: the button's own vocabulary, which no mode owns.
@@ -1120,6 +1164,38 @@ def _parse_reminder_body(raw: dict, where: str) -> ReminderBehavior | None:
     )
 
 
+def _parse_launcher_body(raw: dict, where: str) -> LauncherBehavior | None:
+    """Parse the flat launcher fields, each falling back per-key."""
+    defaults = LauncherBehavior()
+
+    targets = raw.get("targets", defaults.targets)
+    if isinstance(targets, (list, tuple)):
+        named = [t for t in targets if isinstance(t, str) and t]
+        if len(named) != len(targets):
+            log.error(
+                "config: %s.targets must be a list of mode names - dropped %d bad entry(s)",
+                where, len(targets) - len(named),
+            )
+        targets = tuple(named)
+    else:
+        log.error("config: %s.targets must be a list - offering every app", where)
+        targets = defaults.targets
+
+    return_after = raw.get("return_after", defaults.return_after)
+    if not isinstance(return_after, bool):
+        log.error("config: %s.return_after must be true or false - using default", where)
+        return_after = defaults.return_after
+
+    log_as = raw.get("log_as", defaults.log_as)
+    if not isinstance(log_as, str):
+        log.error("config: %s.log_as must be a string - using default", where)
+        log_as = defaults.log_as
+
+    return LauncherBehavior(
+        targets=targets, return_after=return_after, log_as=log_as
+    )
+
+
 def _parse_stopwatch_body(raw: dict, where: str) -> StopwatchBehavior | None:
     """Parse the flat stopwatch-template field, falling back per-key."""
     defaults = StopwatchBehavior()
@@ -1348,6 +1424,8 @@ def _parse_mode(raw, idx: int, looks: set[str] | None = None) -> Mode | None:
         behavior = _parse_alarm_body(raw, where)
     elif template == "reminders":
         behavior = _parse_reminder_body(raw, where)
+    elif template == "launcher":
+        behavior = _parse_launcher_body(raw, where)
     elif template == "stopwatch":
         behavior = _parse_stopwatch_body(raw, where)
     elif template == "counter":
@@ -1786,6 +1864,10 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["chime"] = mode.behavior.chime
         entry["cleared_event"] = mode.behavior.cleared_event
         entry["timeout_minutes"] = mode.behavior.timeout_minutes
+    elif isinstance(mode.behavior, LauncherBehavior):
+        entry["targets"] = list(mode.behavior.targets)
+        entry["return_after"] = mode.behavior.return_after
+        entry["log_as"] = mode.behavior.log_as
     elif isinstance(mode.behavior, StopwatchBehavior):
         entry["log_as"] = mode.behavior.log_as
         entry["ladder"] = _ladder_to_dict(mode.behavior.ladder)

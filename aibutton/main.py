@@ -253,11 +253,13 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     from .actions import ActionResult, _fmt_elapsed, execute
     from .audio import ToneLibrary
     from .config import (
+        MODE_LED_STATES,
         AlarmBehavior,
         ConfigManager,
         CountdownBehavior,
         CounterBehavior,
         EnterModeAction,
+        LauncherBehavior,
         MetronomeBehavior,
         PomodoroBehavior,
         ReminderBehavior,
@@ -879,8 +881,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
         How this goes fast. The tempo and the flash rate are different limits.
         `max_bpm` bounds the tempo and is yours to raise;
-        _MIN_FLASH_PERIOD_S bounds how often the light may blink and is a
-        photosensitivity floor, not a preference. Above roughly 180 BPM those
+        `min_flash_period_s` bounds how often the light may blink and defaults
+        to a photosensitivity floor. Above roughly 180 BPM those
         two collide, so rather than clamp the tempo (a lie) or flash through
         the floor (a hazard), the light marks every Nth beat - the smallest N
         that keeps it inside the floor. The tempo stays honest and the LED
@@ -1136,44 +1138,181 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         # one rather than growing a second copy of that loop.
         return await ring_alarm(AlarmBehavior(message=f"{label} finished"), mode_name)
 
+    # Every takeover behaviour, for the two places that ask "is this a mode a
+    # gesture can start". One tuple rather than two isinstance chains that
+    # drift apart - the launcher made that a real risk, since it is the first
+    # thing that both *is* a takeover and *chooses* one.
+    TAKEOVER_BEHAVIORS = (
+        AlarmBehavior, StopwatchBehavior, CounterBehavior, PomodoroBehavior,
+        MetronomeBehavior, CountdownBehavior, LauncherBehavior,
+    )
+
+    def app_look(target):
+        """The colour `target` should be shown in while a launcher offers it.
+
+        Its own named look for the state it owns, else that state's palette
+        entry, else None. This is what makes the launcher answer "which app"
+        rather than "which mode is running" - and it needs no new config,
+        because a mode already knows what it looks like."""
+        states = MODE_LED_STATES.get(target.template, ())
+        if not states:
+            return None
+        state = LEDState(states[0])
+        return look_for(cm.config, target, state) or cm.config.led_palette.get(
+            state.value
+        )
+
+    def launcher_targets(behavior) -> list:
+        """The apps a launcher offers, in the order it offers them.
+
+        An empty `targets` means every takeover mode in config order, so a
+        newly added app shows up without anyone editing a list. Launchers are
+        never offered: a launcher that can launch itself is the one shape that
+        turns "replace, don't nest" back into a loop with no user in it.
+
+        A named target that does not exist is warned about *here* rather than
+        at parse time - config order is not dependency order, and a launcher
+        listed above its apps is the normal way to write one.
+        """
+        apps = [
+            m for m in cm.config.modes
+            if isinstance(m.behavior, TAKEOVER_BEHAVIORS)
+            and not isinstance(m.behavior, LauncherBehavior)
+        ]
+        if not behavior.targets:
+            return apps
+        by_name = {m.name: m for m in apps}
+        chosen = []
+        for name in behavior.targets:
+            target = by_name.get(name)
+            if target is None:
+                log.warning("launcher: no app named %r - skipped", name)
+            else:
+                chosen.append(target)
+        return chosen
+
+    async def run_launcher(behavior, mode_name: str):
+        """Cycle the installed apps and hand one over.
+
+        Returns `(result, chosen)` - the only run_* that returns two things,
+        because it is the only one whose job is to name what runs next. The
+        caller closes this session *before* opening the chosen app's, which is
+        the whole "replace, don't nest" rule.
+
+        Short press cycles, long press launches, double tap backs out. Fixed
+        rather than configurable: this is the one mode whose controls someone
+        has to be able to guess, and a launcher you have to learn defeats the
+        purpose of having one.
+        """
+        apps = launcher_targets(behavior)
+        if not apps:
+            return ActionResult(False, "launcher: no apps to offer"), None
+
+        index = 0
+
+        def show() -> None:
+            target = apps[index]
+            # LISTENING is the state byte, and it is honest: the button is
+            # waiting for you to choose. What you see is the app's own look
+            # pushed over it, so the state only matters to the status line and
+            # to a device too old for effects.
+            set_led(LEDState.LISTENING, app_look(target))
+            status.last_message = f"{target.name} ({index + 1}/{len(apps)})"
+
+        show()
+        set_status("LAUNCHER")
+        status.last_mode = mode_name
+
+        if args.demo:
+            # --demo is unattended: nothing will ever be chosen.
+            await asyncio.sleep(_SUCCESS_DISPLAY_S)
+            return ActionResult(True, f"launcher (demo: {len(apps)} apps)"), None
+
+        while True:
+            trigger = await _wait_for_trigger(device.events, stop)
+            if trigger is None:  # shutting down mid-choice
+                return ActionResult(True, "launcher closed (shutdown)"), None
+            if trigger is TriggerType.LONG_PRESS:
+                chosen = apps[index]
+                if behavior.log_as:
+                    store.log_event(behavior.log_as, mode=mode_name)
+                return ActionResult(True, f"launching {chosen.name}"), chosen
+            if trigger is TriggerType.DOUBLE_TAP:
+                return ActionResult(True, "launcher closed"), None
+            index = (index + 1) % len(apps)
+            show()
+
     async def enter_takeover(mode) -> None:
-        """Enter a takeover mode (reached via a schedule fire or an enter_mode
-        gesture) and surface its result, then drop back to the ambient layer
-        (IDLE). Dispatches by behaviour type: alarm rings, stopwatch times,
-        counter counts. Exception-guarded so a handler bug never kills the
-        main loop (mirrors fire_alarm)."""
+        """Run a takeover mode, then drop back to the ambient layer (IDLE).
+
+        **Replace, don't nest.** A launcher names the app that runs next, and
+        this loop closes the launcher's session before opening the app's - so
+        a takeover starting another takeover is a *sequence*, never a stack.
+        That is the rule TODO 0a asked for, and why it beats a depth guard:
+        with no stack there is no depth to overflow, the event log gets one
+        clean mode_enter/mode_exit pair per app instead of nested ones, and
+        leaving an app returns you to where you actually are rather than to a
+        menu you had forgotten was underneath it.
+
+        No hop limit, deliberately. Every handoff costs a deliberate long
+        press, so no chain runs without someone driving it - and the one shape
+        that *could* spin unattended, a launcher offering itself, is excluded
+        in `launcher_targets` instead.
+
+        Exception-guarded so a handler bug never kills the main loop.
+        """
         nonlocal active_mode
         play_sound(Sound.ACK)
         status.last_trigger = None
-        status.last_mode = mode.name
-        log.info("entering takeover mode %r (%s)", mode.name, mode.template)
-        entered_at = store.log_mode_enter(mode.name)
-        # Set before dispatch so the first set_led inside the loop already
-        # wears this mode's look, and cleared after so the ambient layer's
-        # IDLE below is the palette's again.
-        active_mode = mode
-        try:
-            if isinstance(mode.behavior, AlarmBehavior):
-                result = await ring_alarm(mode.behavior, mode.name)
-            elif isinstance(mode.behavior, StopwatchBehavior):
-                result = await run_stopwatch(mode.behavior, mode.name)
-            elif isinstance(mode.behavior, CounterBehavior):
-                result = await run_counter(mode.behavior, mode.name)
-            elif isinstance(mode.behavior, PomodoroBehavior):
-                result = await run_pomodoro(mode.behavior, mode.name)
-            elif isinstance(mode.behavior, MetronomeBehavior):
-                result = await run_metronome(mode.behavior, mode.name)
-            elif isinstance(mode.behavior, CountdownBehavior):
-                result = await run_countdown(mode.behavior, mode.name)
+        # Set when a launcher hands off and wants the button back afterwards.
+        # Cleared as soon as it is used, so "return to the launcher" happens
+        # once rather than becoming a trap you have to escape twice.
+        return_to = None
+
+        while mode is not None:
+            status.last_mode = mode.name
+            log.info("entering takeover mode %r (%s)", mode.name, mode.template)
+            entered_at = store.log_mode_enter(mode.name)
+            # Set before dispatch so the first set_led inside the loop already
+            # wears this mode's look, and cleared after so the ambient layer's
+            # IDLE below is the palette's again.
+            active_mode = mode
+            chosen = None
+            try:
+                if isinstance(mode.behavior, LauncherBehavior):
+                    result, chosen = await run_launcher(mode.behavior, mode.name)
+                elif isinstance(mode.behavior, AlarmBehavior):
+                    result = await ring_alarm(mode.behavior, mode.name)
+                elif isinstance(mode.behavior, StopwatchBehavior):
+                    result = await run_stopwatch(mode.behavior, mode.name)
+                elif isinstance(mode.behavior, CounterBehavior):
+                    result = await run_counter(mode.behavior, mode.name)
+                elif isinstance(mode.behavior, PomodoroBehavior):
+                    result = await run_pomodoro(mode.behavior, mode.name)
+                elif isinstance(mode.behavior, MetronomeBehavior):
+                    result = await run_metronome(mode.behavior, mode.name)
+                elif isinstance(mode.behavior, CountdownBehavior):
+                    result = await run_countdown(mode.behavior, mode.name)
+                else:
+                    result = ActionResult(
+                        False, f"mode {mode.name!r} is not a takeover mode"
+                    )
+            except Exception as exc:  # a takeover bug must never kill the loop
+                log.exception("takeover %r crashed", mode.name)
+                result = ActionResult(False, f"internal error: {exc}")
+                chosen = None
+            store.log_mode_exit(mode.name, entered_at)
+            active_mode = None
+            status.last_ok = result.ok
+            status.last_message = result.message
+
+            if chosen is not None:
+                if mode.behavior.return_after:
+                    return_to = mode
+                mode = chosen
             else:
-                result = ActionResult(False, f"mode {mode.name!r} is not a takeover mode")
-        except Exception as exc:  # a takeover bug must never kill the loop
-            log.exception("takeover %r crashed", mode.name)
-            result = ActionResult(False, f"internal error: {exc}")
-        store.log_mode_exit(mode.name, entered_at)
-        active_mode = None
-        status.last_ok = result.ok
-        status.last_message = result.message
+                mode, return_to = return_to, None
+
         set_led(LEDState.IDLE)
         set_status("IDLE")
 
@@ -1201,9 +1340,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 (m for m in cm.config.modes if m.name == action.target), None
             )
             if target is not None and isinstance(
-                target.behavior,
-                (AlarmBehavior, StopwatchBehavior, CounterBehavior, PomodoroBehavior,
-                 MetronomeBehavior, CountdownBehavior),
+                target.behavior, TAKEOVER_BEHAVIORS
             ):
                 await enter_takeover(target)
             else:

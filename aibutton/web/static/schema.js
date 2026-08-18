@@ -40,6 +40,11 @@ export const DAYS = [
 // for an `enter_mode` action. Mirrors each template's `nature: 'takeover'`.
 const TAKEOVER_TEMPLATES = new Set([
   'alarm', 'reminders', 'stopwatch', 'counter', 'pomodoro', 'metronome', 'countdown',
+  // A launcher is a takeover, so a gesture can reach it - but it is never a
+  // valid `enter_mode` *target* offered by another launcher (see
+  // launcher_targets in main.py). That exclusion lives host-side because it
+  // is a runtime rule, not a shape rule.
+  'launcher',
 ]);
 
 // The default colour walk for a countdown - red while there is plenty of time,
@@ -117,7 +122,8 @@ export const ACTIONS = [
           const modes = (ctx && typeof ctx.getModes === 'function') ? ctx.getModes() : [];
           return (Array.isArray(modes) ? modes : [])
             .filter((m) => m && TAKEOVER_TEMPLATES.has(m.template)
-              && m.template !== 'alarm' && typeof m.name === 'string' && m.name)
+              && TEMPLATE_BY_TYPE[m.template]?.startedBy === 'gesture'
+              && typeof m.name === 'string' && m.name)
             .map((m) => ({ value: m.name, label: m.name }));
         } },
     ],
@@ -380,6 +386,39 @@ export const TEMPLATES = [
     startedBy: 'gesture',
     exits: () => 'long press (short/double = +1)',
     describe: (mode) => `Counter “${mode.event || '…'}”`,
+  },
+  {
+    // ledStates is none, deliberately: the launcher wears whichever app is
+    // selected, in that app's own colour, so a look of its own would only ever
+    // hide the thing you are reading. (The comment sits above `type` because
+    // test_webui.py's drift guard reads the two lines as a pair.)
+    type: 'launcher',
+    ledStates: [],
+    label: 'App launcher',
+    nature: 'takeover',
+    allowedActivations: ['manual'], // started by an enter_mode gesture only
+    body: 'fields',
+    fields: [
+      { key: 'targets', label: 'Apps to offer', kind: 'textarea',
+        placeholder: 'One mode name per line - blank = every app',
+        hint: 'Blank offers every takeover mode, so a new app appears here on '
+          + 'its own. List names to shorten or reorder the menu.' },
+      { key: 'return_after', label: 'Return here when an app exits',
+        kind: 'checkbox',
+        hint: 'Off = leaving an app drops to idle, like a phone home screen.' },
+      { key: 'log_as', label: 'Log each launch as', kind: 'text',
+        placeholder: 'launched',
+        hint: 'Optional. One event per launch, so you can see which apps you '
+          + 'actually use.' },
+    ],
+    defaults: () => ({ targets: '', return_after: false, log_as: '' }),
+    startedBy: 'gesture',
+    exits: () => 'double tap (short = next app, long = launch)',
+    describe: (mode) => {
+      const listed = String(mode.targets || '').trim();
+      const count = listed ? listed.split(/\n+/).filter(Boolean).length : 0;
+      return count ? `Launcher over ${count} chosen app(s)` : 'Launcher over every app';
+    },
   },
   {
     type: 'metronome',
