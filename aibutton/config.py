@@ -387,8 +387,8 @@ class CountdownBehavior:
     The ramp is stored here rather than in `led_palette` because it belongs to
     *this* countdown - a five-minute tea timer and a two-hour deadline want
     different colours, and the global palette has one entry per LED state for
-    everyone to share. When per-mode looks land (TODO item 3) this is the shape
-    they generalise to.
+    everyone to share. Named looks (item 3) generalised exactly this shape -
+    a mode names its own appearance instead of sharing the global entry.
     """
 
     minutes: float = 10.0
@@ -589,9 +589,13 @@ def bound_triggers(modes) -> set[str]:
 
 
 def _default_modes() -> tuple[Mode, ...]:
-    """The fail-soft floor: one always-on mode that maps all three gestures
+    """The fail-soft floor: one always-on mode binding the everyday gestures
     to primitives needing no setup, so a button with no config (or a broken
-    one) still does something legible instead of erroring on every press."""
+    one) still does something legible instead of erroring on every press.
+
+    It binds three of the five gestures rather than all of them: a longer tap
+    costs every shorter one its instant response (see `max_taps_for`), so the
+    default config must not spend one nobody asked for."""
     return (
         Mode(
             name="Default",

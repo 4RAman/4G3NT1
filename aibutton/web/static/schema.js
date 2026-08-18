@@ -110,14 +110,17 @@ export const ACTIONS = [
     type: 'enter_mode',
     label: 'Enter a mode',
     fields: [
-      // Dynamic <select>: the options are the names of the current takeover
-      // modes (stopwatch + counter) the user can start by hand. The widget
+      // Dynamic <select>: the options are the takeover modes a gesture can
+      // actually start - every template whose descriptor says
+      // `startedBy: 'gesture'`, which excludes the schedule-started ones
+      // (alarm, reminders) that a clock owns instead. The widget
       // calls this with a context object whose `getModes()` returns the
       // sibling modes (injected by menu.js -> modeEditor -> createField), so
       // the picker stays in sync as modes are added/renamed without this
       // module knowing where the list lives (Dependency Inversion).
       { key: 'target', label: 'Mode to enter', kind: 'select', required: true,
-        hint: 'A Stopwatch or Counter mode this gesture starts.',
+        hint: 'Which app this gesture opens. Schedule-started modes '
+          + '(alarm, reminder) are not listed - a clock starts those.',
         options: (ctx) => {
           const modes = (ctx && typeof ctx.getModes === 'function') ? ctx.getModes() : [];
           return (Array.isArray(modes) ? modes : [])

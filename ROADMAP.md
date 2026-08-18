@@ -65,16 +65,18 @@ worth knowing now rather than discovering after building one.
 until it's smooth. No architecture changes. The sprint list is
 [TODO.md](TODO.md).
 
-### The blocker nobody has hit yet: you can only reach three apps
+### The blocker that used to cap you at three apps ✔ solved
 
-This is the one Stage-2 finding worth acting on immediately, because it
-invalidates "load it with as many apps as it will fit" as currently specified.
+This was the one Stage-2 finding worth acting on immediately, because it
+invalidated "load it with as many apps as it will fit" as specified. **The
+launcher shipped** (TODO 0a); the analysis is kept because it is why the
+launcher is shaped the way it is.
 
 A takeover app is reached by an `enter_mode` action bound to a gesture in an
 ambient mode. There were **three gestures**; protocol v1 made tap counts data,
-so there are now four and could be more for the asking. That moves the number
+so there are five now and could be more for the asking. That moved the number
 without changing the shape of the problem: keep one for everyday logging and
-you reach **three apps**, and every further gesture is a longer tap that
+you reach **four apps**, and every further gesture is a longer tap that
 nobody wants to remember — and that costs the double tap its instant response
 the moment you bind one. Time-windowed ambient modes buy you more only if
 you're willing to say *when* you want each app, which is not what an app
@@ -107,7 +109,10 @@ config. The remaining piece of work is host-side and is two things, not three.
 ### Stage 2 exit gates
 
 - [ ] **10 apps**, verified end-to-end on real hardware (TODO items 2, 7)
-- [ ] **A launcher**, so all 10 are reachable without the web UI
+- [x] **A launcher**, so all 10 are reachable without the web UI — one
+      gesture opens a menu that cycles every installed app in its own
+      colour. Long press means "up one level" throughout, so leaving an app
+      lands back in the menu and leaving the menu goes home
 - [ ] **A naive-user run**: someone who has never seen it installs an app and
       uses it, unaided, while you keep your mouth shut and take notes
 - [ ] **24-hour soak** with no manual restart, no wedged BLE, no lost presses
@@ -219,9 +224,10 @@ buys four things at once:
   way to touch the world (see **D2**);
 - adding an app stops touching the core, which is the Stage-3 exit gate.
 
-Migrate the existing six templates onto it one at a time, keeping the tests.
-`metronome` is the honest canary: it already reaches around the abstraction
-to rewrite the palette live from the run loop.
+Migrate the existing eight takeover templates onto it one at a time, keeping
+the tests. `launcher` is the honest canary now: it is the one template that
+chooses *another* app, so whatever the runtime does about one app starting
+another has to express it.
 
 ### 3b — One manifest, served
 

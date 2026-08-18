@@ -133,7 +133,8 @@ interpreted       identically by the device runtime and the host runtime
 
 ### Is that enough power? Test it against what already ships
 
-The honest way to decide this is to check the six templates that exist, not
+The honest way to decide this is to check the eight takeover templates that
+exist, not
 to argue from taste.
 
 | App | State it keeps | What the runtime must therefore have |
@@ -283,7 +284,7 @@ Each phase is independently useful and nothing gets thrown away.
 
 | Phase | Work | Visible change | Risk |
 |---|---|---|---|
-| **A** | Define the app format. Build the **host-side** interpreter. Migrate the six templates onto it behind the existing UI | **None** — same behaviour, same tests | Low. Pure host-side. **Start here** |
+| **A** | Define the app format. Build the **host-side** interpreter. Migrate the eight templates onto it behind the existing UI | **None** — same behaviour, same tests | Low. Pure host-side. **Start here** |
 | **B** | Protocol v1: capability negotiation, ephemeral effects, parameterised gestures, OTA handshake (TODO 0b) | Per-app colours; richer gestures | One reflash |
 | **C** | Port the interpreter to firmware. Apps run on-device, PC still acts as "the phone" | Presses feel instant; feedback survives a stalled host | Medium |
 | **D** | On-device storage, event ring buffer, RTC | **The tether breaks.** Alarms ring with the PC asleep | Medium |

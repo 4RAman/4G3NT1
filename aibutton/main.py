@@ -17,12 +17,18 @@ first match wins), execute the matched action primitive (log /
 timer_toggle / webhook), and surface the result on the LED, the sound,
 and the web UI.
 
-Alarms are *takeover* modes, not gesture-resolved: each loop iteration
-asks scheduler.due_alarm() whether a scheduled alarm mode's occurrence
-has arrived, and if so ring_alarm() owns the device (ALERT LED + looping
-tone) until a press dismisses or snoozes it. The press-wait polls on a
-<=1s timeout so the test clock stays responsive and an alarm added live
-(web UI or SIGHUP) starts firing within a second.
+Takeover modes own the button instead of resolving per gesture, and are
+reached two ways. A *clock* starts the scheduled ones: each loop iteration
+asks scheduler.due_alarm() whether an alarm or reminder is due, and if so it
+owns the device until a press clears it. The press-wait polls on a <=1s
+timeout so the test clock stays responsive and an alarm added live (web UI or
+SIGHUP) starts firing within a second. A *gesture* starts the rest, via an
+enter_mode action - including the launcher, which then hands over to the app
+you pick. enter_takeover runs them in sequence rather than nesting them; see
+its docstring for why.
+
+Long press means "up one level" in every takeover, which is the one gesture
+convention the whole button leans on (CLAUDE.md's invariants).
 
 Signals: SIGHUP reloads the config, SIGTERM/SIGINT shut down cleanly.
 """

@@ -1,10 +1,17 @@
 # AI Button
 
-One physical button, four gestures (short press / long press / double tap /
-triple tap), routed through a **mode machine** — the button is always in exactly
-one mode (the Default, a time-windowed override, a ringing alarm, a
-running stopwatch, an open counter), and the mode decides what each
-gesture means. An RGB LED and feedback sounds show device state.
+One physical button, five gestures (short press / long press / double tap /
+triple tap / five taps), routed through a **mode machine** — the button is
+always in exactly one mode, and the mode decides what each gesture means. An
+RGB LED and feedback sounds show device state.
+
+Modes come in two kinds. **Ambient** modes answer each gesture and hand the
+button straight back (the everyday one, plus time-windowed overrides).
+**Takeover** modes own the button until you leave: alarm, reminder,
+stopwatch, counter, Pomodoro, metronome, countdown, and an app launcher that
+reaches all of them. **Long press always means "up one level"** — out of an
+app, then out of the menu — so there is one escape gesture to learn and it
+works everywhere.
 
 The hardware is an **ESP32** — it detects gestures and shows feedback; this
 Python app is the brain on the PC, connected over BLE. It replaces an
@@ -23,7 +30,7 @@ Ambient modes resolve first-match-wins against four action primitives:
 | `log` | record a timestamped event in SQLite (meds, habits) |
 | `timer_toggle` | start/stop a named stopwatch, durations logged |
 | `webhook` | POST to any URL — the IFTTT / Make / n8n / Home Assistant hook |
-| `enter_mode` | switch into a takeover mode (alarm / stopwatch / counter) |
+| `enter_mode` | open a takeover mode — an app, or the launcher that lists them |
 
 Example: between 05:00 and 07:00, a double tap logs `meds_taken`;
 any other time it falls through to the Default mode. See the `modes`
