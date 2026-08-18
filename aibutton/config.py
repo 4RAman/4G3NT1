@@ -468,11 +468,14 @@ class LauncherBehavior:
     """
 
     targets: tuple[str, ...] = ()
-    # Whether launching replaces the launcher or returns to it when the app
-    # exits. Off by default: a launcher you have to escape twice feels like a
-    # trap, and "the app is the thing you are now in" is the phone-home-screen
-    # model everyone already has.
-    return_after: bool = False
+    # Whether leaving an app returns to the launcher. **On** by default,
+    # because it is what makes long press mean one thing everywhere: *up one
+    # level*. Every takeover already exits on a long press, so with this on the
+    # whole button reads as a hierarchy - long press in an app goes back to the
+    # menu, long press in the menu goes home. Off makes long press skip a level
+    # from inside an app, which is the same gesture meaning two different
+    # distances depending on how you got there.
+    return_after: bool = True
     log_as: str = ""  # optional: log which app was launched, under this name
 
     @property

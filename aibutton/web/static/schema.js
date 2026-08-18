@@ -405,15 +405,16 @@ export const TEMPLATES = [
           + 'its own. List names to shorten or reorder the menu.' },
       { key: 'return_after', label: 'Return here when an app exits',
         kind: 'checkbox',
-        hint: 'Off = leaving an app drops to idle, like a phone home screen.' },
+        hint: 'On = long press means "up one level" everywhere: out of an app '
+          + 'lands here, out of here goes home. Off skips this menu.' },
       { key: 'log_as', label: 'Log each launch as', kind: 'text',
         placeholder: 'launched',
         hint: 'Optional. One event per launch, so you can see which apps you '
           + 'actually use.' },
     ],
-    defaults: () => ({ targets: '', return_after: false, log_as: '' }),
+    defaults: () => ({ targets: '', return_after: true, log_as: '' }),
     startedBy: 'gesture',
-    exits: () => 'double tap (short = next app, long = launch)',
+    exits: () => 'long press (short = next app, double tap = launch)',
     describe: (mode) => {
       const listed = String(mode.targets || '').trim();
       const count = listed ? listed.split(/\n+/).filter(Boolean).length : 0;

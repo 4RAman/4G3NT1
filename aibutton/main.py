@@ -1199,10 +1199,17 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         caller closes this session *before* opening the chosen app's, which is
         the whole "replace, don't nest" rule.
 
-        Short press cycles, long press launches, double tap backs out. Fixed
+        Short press cycles, **double tap launches, long press leaves**. Fixed
         rather than configurable: this is the one mode whose controls someone
         has to be able to guess, and a launcher you have to learn defeats the
         purpose of having one.
+
+        Long press is *out*, never *in*, and that is the point: every other
+        takeover exits on a long press, so it is the closest thing this button
+        has to a universal "up one level". A launcher that launched on long
+        press would be the single place where the escape gesture committed you
+        to something instead - the worst possible exception to a rule you want
+        people to trust without thinking.
         """
         apps = launcher_targets(behavior)
         if not apps:
@@ -1232,12 +1239,12 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             trigger = await _wait_for_trigger(device.events, stop)
             if trigger is None:  # shutting down mid-choice
                 return ActionResult(True, "launcher closed (shutdown)"), None
-            if trigger is TriggerType.LONG_PRESS:
+            if trigger is TriggerType.DOUBLE_TAP:
                 chosen = apps[index]
                 if behavior.log_as:
                     store.log_event(behavior.log_as, mode=mode_name)
                 return ActionResult(True, f"launching {chosen.name}"), chosen
-            if trigger is TriggerType.DOUBLE_TAP:
+            if trigger is TriggerType.LONG_PRESS:
                 return ActionResult(True, "launcher closed"), None
             index = (index + 1) % len(apps)
             show()

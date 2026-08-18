@@ -226,6 +226,23 @@ is and why that was accepted.
 
 ### 2. Verify the takeover modes work end to end
 
+**Partly done — driven on the real button.** The templates have been tuned and
+used on hardware and are described as more than functional as MVPs, so the
+gesture → dispatch → LED/sound → status path is proven for the ones that were
+reachable. Two gaps remain before this gate closes, and neither is a doubt
+about the code:
+
+- **Pomodoro has not been walked**, because in the scene as configured it was
+  unreachable — every gesture was bound to another app and it is not
+  schedule-started. The launcher fixes the reachability; the advance/extend/
+  skip/long-break checks below still want a pass.
+- **Reminder has never existed in a live config**, so its flash-not-ring
+  behaviour, its clear-and-log, and its timeout have only been driven against
+  a MockDevice.
+
+The checks below are the remaining ones, not a fresh start.
+
+
 Not a feature — a correctness pass, and **a Stage-2 exit gate**. The suite
 proves the loops behave against a `MockDevice`; it does not prove the whole
 path (BLE gesture → `main.py` dispatch → LED/sound → web UI status) is right
@@ -762,6 +779,15 @@ it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
   serialiser, `main.py` loop + dispatch, `schema.js` descriptor + takeover set.
   Nine touch points in three core files for one app — which is exactly the tax
   Stage 3's runtime exists to remove.
+
+  **The gestures were wrong on the first cut, and the fix is a rule.** It
+  originally launched on a long press and backed out on a double tap - exactly
+  backwards, since every other takeover leaves on a long press. It now launches
+  on a **double tap** and leaves on a **long press**, and `return_after`
+  defaults to *on*, so long press means "up one level" everywhere: out of an
+  app lands in the menu, out of the menu goes home. Two presses from anywhere,
+  nothing to learn. That is now an invariant in CLAUDE.md rather than a
+  property of this one mode.
 
   Suite: `test_launcher.py`. Also fixed on the way past: the `enter_mode`
   target picker offered schedule-started modes (alarm, and reminders since it

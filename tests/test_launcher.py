@@ -108,7 +108,7 @@ async def test_launching_closes_the_launcher_before_opening_the_app(tmp_path):
     task, device = await _start(tmp_path, _config(db))
     try:
         await _press(device, TriggerType.LONG_PRESS)   # open launcher
-        await _press(device, TriggerType.LONG_PRESS)   # launch the first app
+        await _press(device, TriggerType.DOUBLE_TAP)   # launch the first app
         await asyncio.sleep(0.1)
     finally:
         await _stop(task)
@@ -122,45 +122,69 @@ async def test_launching_closes_the_launcher_before_opening_the_app(tmp_path):
     ], f"nested rather than sequential: {order}"
 
 
-async def test_leaving_the_app_returns_to_idle_not_to_the_launcher(tmp_path):
-    """Default `return_after: false` - leaving an app drops out entirely,
-    like a phone home screen, rather than into a menu you forgot was there."""
+async def test_long_press_means_up_one_level_everywhere(tmp_path):
+    """The rule the whole button leans on. Every takeover already exits on a
+    long press; with `return_after` on by default that makes the gesture mean
+    one distance rather than two - out of an app lands in the menu, out of the
+    menu goes home. Two presses from anywhere, and nothing to learn."""
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
+        await _press(device, TriggerType.LONG_PRESS)  # Home -> launcher
+        await _press(device, TriggerType.DOUBLE_TAP)  # launch Focus (stopwatch)
+        await asyncio.sleep(0.1)
+        assert device.led_state is LEDState.TIMING, "the app did not start"
+
+        await _press(device, TriggerType.LONG_PRESS)  # up: app -> launcher
+        await asyncio.sleep(0.15)
+        assert device.led_state is LEDState.LISTENING, "long press skipped the menu"
+
+        await _press(device, TriggerType.LONG_PRESS)  # up again: launcher -> home
+        await asyncio.sleep(0.15)
+        assert device.led_state is LEDState.IDLE, "long press did not reach home"
+    finally:
+        await _stop(task)
+
+
+async def test_opting_out_makes_an_app_exit_straight_home(tmp_path):
+    """`return_after: false` is still there for someone who wants the app to
+    be the thing they are in - it just is not the default any more."""
+    db = tmp_path / "events.db"
+    modes = list(APPS)
+    modes[1] = dict(modes[1], return_after=False)
+    task, device = await _start(tmp_path, _config(db, modes=modes))
+    try:
         await _press(device, TriggerType.LONG_PRESS)  # launcher
-        await _press(device, TriggerType.LONG_PRESS)  # launch Focus (stopwatch)
-        await _press(device, TriggerType.LONG_PRESS)  # stop the stopwatch
+        await _press(device, TriggerType.DOUBLE_TAP)  # launch Focus
+        await _press(device, TriggerType.LONG_PRESS)  # stop it
         await asyncio.sleep(0.15)
         assert device.led_state is LEDState.IDLE
     finally:
         await _stop(task)
 
 
-async def test_return_after_hands_the_button_back_once(tmp_path):
+async def test_it_returns_to_the_launcher_once_not_forever(tmp_path):
     db = tmp_path / "events.db"
-    modes = list(APPS)
-    modes[1] = dict(modes[1], return_after=True)
-    task, device = await _start(tmp_path, _config(db, modes=modes))
+    task, device = await _start(tmp_path, _config(db))
     try:
         await _press(device, TriggerType.LONG_PRESS)  # launcher
-        await _press(device, TriggerType.LONG_PRESS)  # launch Focus
+        await _press(device, TriggerType.DOUBLE_TAP)  # launch Focus
         await _press(device, TriggerType.LONG_PRESS)  # stop it -> back to launcher
         await asyncio.sleep(0.15)
         assert device.led_state is LEDState.LISTENING, "did not return to the launcher"
-        await _press(device, TriggerType.DOUBLE_TAP)  # and out
+        await _press(device, TriggerType.LONG_PRESS)  # and out
         await asyncio.sleep(0.15)
         assert device.led_state is LEDState.IDLE, "returned more than once"
     finally:
         await _stop(task)
 
 
-async def test_double_tap_backs_out_without_launching(tmp_path):
+async def test_long_press_backs_out_without_launching(tmp_path):
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
-        await _press(device, TriggerType.DOUBLE_TAP)
+        await _press(device, TriggerType.LONG_PRESS)  # open
+        await _press(device, TriggerType.LONG_PRESS)  # and straight back out
         await asyncio.sleep(0.1)
         assert device.led_state is LEDState.IDLE
     finally:
@@ -174,8 +198,8 @@ async def test_a_launch_is_logged_when_asked(tmp_path):
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.LONG_PRESS)  # open
+        await _press(device, TriggerType.DOUBLE_TAP)  # launch
         await asyncio.sleep(0.1)
     finally:
         await _stop(task)
@@ -213,7 +237,7 @@ async def test_a_launcher_never_offers_another_launcher(tmp_path):
         await _press(device, TriggerType.LONG_PRESS)   # open the launcher
         await _press(device, TriggerType.SHORT_PRESS)  # -> Water
         await _press(device, TriggerType.SHORT_PRESS)  # -> back to Focus
-        await _press(device, TriggerType.LONG_PRESS)   # launch whatever shows
+        await _press(device, TriggerType.DOUBLE_TAP)   # launch whatever shows
         await asyncio.sleep(0.1)
     finally:
         await _stop(task)

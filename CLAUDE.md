@@ -225,9 +225,16 @@ Three consequences for code written today:
   second clamp: a floor in three places is a floor with three chances to
   drift. Only `device.STYLE_STROBES` styles are floored, mirrored as
   `strobes: true` in `schema.js`.
-- **A takeover mode must be escapable with a press.** Alarm, stopwatch,
-  counter, pomodoro and metronome all exit on a gesture; the Pomodoro parser
-  warns if you unbind its only exit.
+- **Long press means "up one level", everywhere.** Alarm, stopwatch, counter,
+  pomodoro, metronome, countdown and the launcher all leave on a long press;
+  the Pomodoro parser warns if you unbind its only exit. The launcher is the
+  case that proves it - it launches on a *double tap*, because a menu where the
+  universal escape gesture instead committed you to something would be the one
+  exception to a rule people are supposed to trust without thinking. Modes
+  entered from a launcher return to it (`return_after`, on by default), so the
+  gesture always travels exactly one level rather than one-or-two depending on
+  how you arrived. **A new takeover binds long press to leaving, or has a very
+  good reason.**
 - **A mode names a look; it never owns one.** The pool is `AppConfig.looks`
   and a mode holds `{state: look-name}`. Which states a mode may colour is
   `MODE_LED_STATES` in [config.py](aibutton/config.py), mirrored as
