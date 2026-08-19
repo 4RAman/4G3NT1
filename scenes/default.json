@@ -9,15 +9,14 @@
   "min_flash_period_s": 0.3,
   "modes": [
     {
-      "name": "Main Menu",
-      "template": "actions",
+      "name": "Launcher Mode",
+      "template": "launcher",
       "activation": {
-        "type": "always"
+        "type": "manual"
       },
-      "short_press": {
-        "action": "enter_mode",
-        "target": "Countdown 60s"
-      }
+      "targets": "Stopwatch\nPomodoro\nMetronome\nCounter\nAlarm\nCountdown 60s\nHot / Cold\nReaction",
+      "return_after": true,
+      "log_as": "launcher_"
     },
     {
       "name": "Stopwatch",

@@ -453,6 +453,94 @@ so a backgrounded timer is *asked* rather than watched.
 data; the Counter reading its number from the store; and the concurrency
 paragraph in ARCHITECTURE.md.
 
+### 22. A `midi` action, because Studio One does not speak OSC
+
+**Decided 2026-08-19: build it.** The `osc` action shipped first on the
+assumption that the DAW would be OSC-native. The actual DAW is **Studio One**,
+and it is not.
+
+**What the research found, so nobody repeats it.** PreSonus documents control
+surfaces over **MIDI / Mackie Control**, and Studio One Remote uses their own
+UCNet protocol — neither is OSC. TouchOSC's own documented route into a DAW is
+*TouchOSC Bridge converting OSC to MIDI*, which is what you would expect if the
+DAW could not take OSC directly. **Confidence: high but not certain** — the
+PreSonus forum thread that would have settled it outright was closed in
+November 2024, so this is inference from current docs rather than a definitive
+"no". If someone finds a native OSC listener in Studio One, this item is void.
+
+**Why MIDI is the better fit anyway, not just the necessary one.** Studio One's
+**Control Link** assigns almost any control by right-click → Assign → move the
+controller. That is exactly the assignability the request asked for, and it
+covers transport record/stop/play. OSC into Studio One ends up as MIDI at the
+far end regardless, just with a bridge in the middle to misconfigure.
+
+**The shape.** A **sibling action** to `osc`, not a mode of it — a MIDI note
+does not travel over OSC and vice versa, and
+[CLAUDE.md](CLAUDE.md)'s action union is where siblings go. Follow `osc.py`
+exactly: a pure encoding/message half that is testable without hardware, and
+the I/O in `actions.py` beside the httpx and socket calls.
+
+- `MidiAction(port, channel, kind, number, value)` — `kind` being note-on /
+  note-off / CC covers everything Control Link can learn.
+- **This is the first real runtime dependency added since bleak** — the
+  service is httpx/fastapi/uvicorn/bleak and that restraint is deliberate
+  ([CLAUDE.md](CLAUDE.md)'s conventions). `python-rtmidi` is the cost, and it
+  should degrade the way the control panel's imports do: absent library means
+  a logged error and a failed action, never a service that will not start.
+- **On Windows the user also installs loopMIDI**, because there is no built-in
+  way to create the virtual port a DAW can see. That is a setup step outside
+  this repo and belongs in the README next to the OSC notes.
+- Ship a preset the way the Footswitch preset works today: record / stop /
+  play, every field editable.
+
+**Definition of done.** A gesture sends a note Studio One can learn through
+Control Link; the encoder is unit-tested without a MIDI port attached; a
+missing `python-rtmidi` costs the action and not the service; and README says
+what to install. What OSC cannot honestly do it still cannot do — **live
+looping is out**, 0.4 s of tap window plus radio is 20× what punch-in needs.
+
+### 23. Composition — apps that fire actions at their edges, carrying their data
+
+**Decided 2026-08-19: design it in full before building any of it.** The
+request was for stacked behaviour with logical decision flow — enter a HIIT
+timer and it sets an "exercising" status; leave it and it posts the session's
+numbers somewhere. The pieces are nearly all present and the risk is building
+the cheap half in a shape the expensive half cannot grow into.
+
+**Write the design into [ARCHITECTURE.md](ARCHITECTURE.md), not here**, because
+it settles what an app *is* and that outlives this sprint. Three layers, and
+the document should say plainly which are decided and which are not:
+
+1. **Lifecycle hooks.** `on_enter` / `on_exit` as optional `Action`s on
+   **`Mode`, not on each behaviour** — one change that serves all eleven
+   takeover templates and costs zero per-app work, the same "capability as
+   data" move `SignalState.action` already makes. `enter_takeover` in
+   [main.py](aibutton/main.py) already has both points: it logs
+   `mode_enter`/`mode_exit` there today.
+2. **Variables.** An app's result is a human-readable string
+   (`ActionResult.message`); sending `{rounds: 8, total_s: 480}` needs a
+   structured session summary each app reports, merged into a webhook payload
+   and sent as OSC arguments. **This is the layer that decides whether hooks
+   are useful or decorative**, and the one to think hardest about: what a
+   summary contains is a per-app decision that a runtime will later have to
+   express as data.
+3. **Conditional flow.** "If X then Y" over the event stream is a rule engine
+   and is *not* included above. Name it, bound it, and decide whether it
+   belongs on the host at all or waits for the device runtime — the answer
+   plausibly differs for "when this app ends" versus "when this value crosses
+   a threshold".
+
+**The reason to design rather than build**: ARCHITECTURE.md's Stage-3 effect
+set already contains `Call(webhook)`, so hooks are a host-side rehearsal of
+the runtime rather than throwaway work — *if* they are shaped like the effect
+set. If they are shaped like a special case in `enter_takeover`, they get
+rewritten. That is the whole bet, and it is worth an hour of writing first.
+
+**Definition of done.** ARCHITECTURE.md gains a section covering all three
+layers, saying which are decided; the hook and summary shapes are written as
+data (a `Mode` field and a per-app summary contract), not as prose about
+behaviour; and this item is replaced by numbered build items.
+
 ### 21. WiFi as an alternative transport ⏸ parked, with a trigger
 
 **Decided 2026-08-18: not now. BLE is adequate, and the reason to wait is not
