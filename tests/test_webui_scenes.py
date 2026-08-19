@@ -12,7 +12,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from aibutton.config import AppConfig, ConfigManager
+from aibutton.config import ConfigManager
 from aibutton.webui import WebContext, create_app
 
 

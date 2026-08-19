@@ -166,6 +166,7 @@ export class ModeEditor {
           floor: this.handlers.getFloor?.(),
           api: this.handlers.api,
           label: select.value,
+          previewState: key,
         });
         editorSlot.append(editor.el);
 

@@ -29,9 +29,10 @@ import { paint as applySwatch } from './ledPreview.js';
  * Whether `style` renders `spec`. Two specs share the key `color` - a hue
  * picker and a brightness slider - so a spec may declare which *reading* it
  * is with `shows`, and the style's `uses` list names the reading it wants.
- * Exported because the mode editor and the Lights tab both ask this question.
+ * Module-private: this used to live in menu.js, and now that one component
+ * asks the question there is nobody else to ask it.
  */
-export function usedBy(style, spec) {
+function usedBy(style, spec) {
   return style.uses.includes(spec.shows || spec.key);
 }
 
@@ -60,7 +61,7 @@ const FALLBACK_FLOOR = 1 / 3;  // device.SAFE_MIN_PERIOD_S, for a model with non
  * about strobing, not about being fast. Read off the live config so raising
  * the setting widens the slider rather than lying about what will be accepted.
  */
-export function ledCtx(style, floor) {
+function ledCtx(style, floor) {
   const configured = Number(floor);
   const limit = Number.isFinite(configured) && configured > 0 ? configured : FALLBACK_FLOOR;
   return { minFlashPeriod: style?.strobes ? limit : 0.05 };
@@ -78,6 +79,7 @@ export function ledCtx(style, floor) {
  * @param {string}   [o.meaning] - a subtitle for the head
  * @param {Function} [o.rename]  - (next) => boolean; makes the label editable
  * @param {Function} [o.onRemove]- shows a Delete button
+ * @param {string}   [o.previewState] - LED state a live preview reports as
  * @param {boolean}  [o.openPresets] - start with the library expanded
  * @returns {{el: Element, validate: Function, refresh: Function}}
  */
@@ -107,7 +109,15 @@ export function createLookEditor(o) {
     if (!canPreview) return;
     status.textContent = 'sending…';
     try {
-      const res = await o.api.showLook(body);
+      // The state byte rides along because it is what the status line reports
+      // and what a device too old for effects falls back to rendering. The
+      // *caller* names it rather than the user picking it from a dropdown, as
+      // the old bench made you do: whoever mounted this control already knows
+      // which state it is editing, so asking was always a question with a
+      // knowable answer.
+      const res = await o.api.showLook(
+        body.clear || !o.previewState ? body : { ...body, state: o.previewState },
+      );
       if (res.warnings && res.warnings.length) {
         // What went out is not what was typed - say so, or this reports the
         // LED's answer to a question it was not asked.

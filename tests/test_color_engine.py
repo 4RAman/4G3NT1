@@ -103,3 +103,19 @@ def test_the_diagnostic_colours_survived_the_bench():
     block = engine[engine.index("const DIAGNOSTIC"):engine.index("const FALLBACK_FLOOR")]
     colors = set(re.findall(r"#([0-9a-f]{6})", block))
     assert {"ff0000", "00ff00", "00ffff", "ff00ff"} <= colors
+
+
+def test_a_preview_reports_the_state_it_is_editing():
+    """The bench used to make you pick the reported LED state from a dropdown.
+    Whoever mounts the control already knows which state it edits, so it is
+    passed in - and `/api/dev/led`'s `state` parameter stops being an argument
+    with no caller."""
+    engine = ENGINE_JS.read_text(encoding="utf-8")
+    assert "previewState" in engine
+    # Clearing carries no state: it means "put back whatever the config says".
+    assert "body.clear || !o.previewState ? body" in engine
+
+    menu = MENU_JS.read_text(encoding="utf-8")
+    assert "previewState: state.key" in menu, "the Lights tab knows its state"
+    mode = MODE_EDITOR_JS.read_text(encoding="utf-8")
+    assert "previewState: key" in mode, "a mode page knows its state too"

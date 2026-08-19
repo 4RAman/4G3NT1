@@ -419,7 +419,8 @@ def test_the_page_plays_sound_outside_the_mock_only_branch():
 
 def test_every_integration_is_a_usable_webhook_template():
     source = _SCHEMA_JS.read_text(encoding="utf-8")
-    block = source[source.index("export const INTEGRATIONS"):source.index("INTEGRATION_BY_ID")]
+    start = source.index("export const INTEGRATIONS")
+    block = source[start:source.index("\n];", start)]
     entries = re.findall(r"\bid: '([^']+)'", block)
     urls = re.findall(r"\burl: '([^']+)'", block)
     labels = re.findall(r"\blabel: '([^']+)'", block)

@@ -2211,11 +2211,11 @@ def parse_with_warnings(raw: dict) -> tuple[AppConfig, list[str]]:
 def parse_effect_with_warnings(raw, where: str = "effect") -> tuple[LedEffect, list[str]]:
     """One look, through the config parser's own rules.
 
-    The Lights tab's test bench shows a look the button never stores, but
-    "what counts as a valid look" must not fork: a colour the editor would
-    reject when saved has to be rejected the same way when shown, or the
-    bench stops being a test of the real thing. Same per-field fallback as
-    everywhere else - a bad colour costs you that colour, not the request.
+    A live preview shows a look the button never stores, but "what counts as a
+    valid look" must not fork: a colour the editor would reject when saved has
+    to be rejected the same way when shown, or the preview stops predicting
+    the thing it is previewing. Same per-field fallback as everywhere else - a
+    bad colour costs you that colour, not the request.
     """
     warnings: list[str] = []
     with _collecting(warnings):

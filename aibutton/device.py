@@ -307,7 +307,12 @@ STYLE_USES_COLOR2 = {"alternate", "fade"}
 # has to offer a brightness slider here, not a colour picker, and a mode
 # walking a ramp must know that pushing a colour into this style shows nothing.
 STYLE_USES_LEVEL = {"rainbow"}
-STYLE_USES_PERIOD = {"breathe", "flash", "alternate", "rainbow", "fade"}
+# There is deliberately no STYLE_USES_PERIOD. Which styles read `period_s` is
+# declared once, on the editor's own style descriptors (`uses` in schema.js),
+# because the only consumer is the editor deciding which fields to show. A
+# second copy here had no reader and no drift test - an unwatched mirror is
+# worse than no mirror, since the next person to change one side has nothing
+# telling them about the other.
 
 # Styles whose period is a hard on/off transition, which is what
 # photosensitivity guidance is actually about. `breathe` and `fade` cross the

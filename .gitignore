@@ -10,6 +10,7 @@ typings/
 # "pattern  # note" is one literal pattern that matches nothing.)
 control-panel.json
 control-panel.lock
+control-panel.port
 button.ico
 dist/
 # Event logs live in data/, but a throwaway one made while testing a scene or

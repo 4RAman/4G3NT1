@@ -93,7 +93,7 @@ LED_BRIGHTNESS = 1.0
 # were: pushing solid #ff0000 lit *both* LEDs green and #00ff00 lit both red,
 # while #0000ff was correct - an R/G swap on both at once, which is exactly
 # what swapping these two settings between the two LEDs produces. The Lights
-# tab's test bench is how to repeat that in ten seconds.
+# picker's Diagnostic row is how to repeat that in ten seconds.
 #
 # White is useless for this. It is three equal components, so every
 # permutation of it is still white - a byte-order fault only shows on colours

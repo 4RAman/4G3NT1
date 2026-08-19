@@ -606,7 +606,8 @@ def create_app(ctx: WebContext) -> FastAPI:
     async def dev_led(body: dict = Body(...)):
         """Show one look on the real LED right now, without saving it.
 
-        The Lights tab's test bench. It needs no new device method because
+        What every colour picker's live preview posts to (colorEngine.js).
+        It needs no new device method because
         "show this look" is already what an ephemeral effect means - the same
         call `run_metronome` makes - so this is the seam being used, not
         widened.
@@ -634,11 +635,11 @@ def create_app(ctx: WebContext) -> FastAPI:
         else:
             effect, warnings = parse_effect_with_warnings(body, "look")
 
-        # The bench pushes a look at the real LED, so it is subject to the same
-        # flash floor as anything the run loop pushes - a test bench that could
-        # strobe past the configured limit would be a hole in it, not a test of
-        # it. What comes back is the floored effect, so the page reports what is
-        # actually on the light rather than what was asked for.
+        # This pushes a look at the real LED, so it is subject to the same flash
+        # floor as anything the run loop pushes - a preview that could strobe
+        # past the configured limit would be a hole in the floor rather than a
+        # way to check it. What comes back is the floored effect, so the page
+        # reports what is actually on the light rather than what was asked for.
         effect = flash_safe(effect, ctx.cm.config.min_flash_period_s)
         ctx.device.set_led(state, effect)
         # Mirrors the tail of main.set_led rather than calling it: that one

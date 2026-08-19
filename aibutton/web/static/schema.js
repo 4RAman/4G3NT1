@@ -180,10 +180,6 @@ export const INTEGRATIONS = [
   },
 ];
 
-export const INTEGRATION_BY_ID = Object.fromEntries(
-  INTEGRATIONS.map((i) => [i.id, i]),
-);
-
 // Action primitives - the body of the `actions` template. Two are gone:
 // the standalone `alarm` action (alarms are a template now) and `prompt`
 // (the on-device AI went with the Pi build - reach an AI through a webhook).
@@ -1143,7 +1139,7 @@ export const LED_STYLES = [
   { type: 'breathe', label: 'Breathe', uses: ['color', 'period_s'],
     describe: (e) => `fading every ${e.period_s}s` },
   // `strobes` marks the hard on/off styles - the ones the flash floor applies
-  // to. Mirrors device.py's STYLE_STROBES; test_webui.py fails if they drift.
+  // to. Mirrors device.py's STYLE_STROBES; test_schema_mirror.py fails on drift.
   // A property of the style rather than a list in the renderer, so a new style
   // declares whether it strobes instead of the floor having to learn its name.
   { type: 'flash', label: 'Flash', uses: ['color', 'period_s'], strobes: true,
@@ -1155,7 +1151,7 @@ export const LED_STYLES = [
     describe: (e) => `crossfading every ${e.period_s}s` },
   // `level` rather than `color`: a rainbow generates its own hues and reads
   // the colour's brightest channel as brightness. Mirrors device.py's
-  // STYLE_USES_LEVEL; test_webui.py fails if they drift.
+  // STYLE_USES_LEVEL; test_schema_mirror.py fails on drift.
   { type: 'rainbow', label: 'Rainbow', uses: ['period_s', 'level'],
     describe: (e) => `cycling every ${e.period_s}s at ${levelPercent(e.color)}%` },
 ];

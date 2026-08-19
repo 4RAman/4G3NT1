@@ -101,7 +101,3 @@ export function paint(node, effect) {
     requestAnimationFrame(frame);
   }
 }
-
-export function unpaint(node) {
-  painted.delete(node);
-}

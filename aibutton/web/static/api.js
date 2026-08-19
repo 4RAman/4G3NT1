@@ -48,7 +48,7 @@ export class ConfigApi {
 
   /** Show one look on the button now, saving nothing. `{ clear: true }`
    *  drops back to whatever the config says. Returns what was accepted, so
-   *  the bench can report a colour that fell back rather than lying about
+   *  the picker can report a colour that fell back rather than lying about
    *  what is on the LED. */
   showLook(body) {
     return this._send('/api/dev/led', 'POST', body);

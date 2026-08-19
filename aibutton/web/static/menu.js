@@ -366,6 +366,7 @@ export class ConfigMenu {
           get: () => this.model.led_palette[state.key],
           label: state.label,
           meaning: state.meaning,
+          previewState: state.key,
         }));
       }
       return wrap;
@@ -468,6 +469,7 @@ export class ConfigMenu {
       api: this.api,
       label: spec.label,
       meaning: spec.meaning,
+      previewState: spec.previewState,
       rename: spec.rename && ((next) => {
         if (!spec.rename(next)) return false;
         this._renderLooks();

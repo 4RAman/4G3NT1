@@ -20,9 +20,6 @@ function apply() {
   document.querySelectorAll('[data-help]').forEach((node) => { node.hidden = !on; });
 }
 
-export function isHelpOn() {
-  return on;
-}
 
 export function setHelpOn(next) {
   on = next;

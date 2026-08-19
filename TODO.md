@@ -659,6 +659,42 @@ descriptor change per template, not new code.
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
 
+- ~~**A drift audit, and the mirrors it found unwatched**~~ — a deliberate
+  sweep for dead code, unfinished edges and untested duplication.
+
+  **The real finding was four mirrored tables with no drift test**, in a
+  codebase whose stated rule is that mirrors are tested rather than trusted:
+  the three default ramps (countdown, hot/cold, reaction), `POMODORO_COMMANDS`,
+  the whole style table's `uses`/`strobes` flags, and the Signal template's
+  default positions. Two comments in `schema.js` even claimed *"test_webui.py
+  fails if they drift"* — it did not, and never had.
+  [test_schema_mirror.py](tests/test_schema_mirror.py) now covers all of them
+  and those comments point at something real.
+
+  **Dead code removed**, each verified unreferenced repo-wide first:
+  `device.STYLE_USES_PERIOD` (no reader, no mirror, no test — a copy waiting to
+  drift; which styles use a period is declared once on the editor's own style
+  descriptors now), `INTEGRATION_BY_ID`, `ledPreview.unpaint` (the animation
+  loop already drops disconnected nodes, so it was redundant rather than
+  load-bearing), `help.isHelpOn`, two unused test imports, and two engine
+  helpers that no longer needed exporting.
+
+  **One capability had gone missing in the colour-engine move**:
+  `/api/dev/led`'s `state` parameter had no caller left, so every live preview
+  reported IDLE. It is passed by whoever mounts the control now — which is
+  strictly better than the bench's dropdown, because the caller already knows
+  which state it is editing.
+
+  Also: `control-panel.port` joined `.gitignore` beside its lock and prefs, and
+  the prose that still described a "test bench" was corrected in six places.
+
+  **Deliberately left alone**, so the next sweep does not re-litigate them: the
+  reserved-and-unimplemented `OTA_CONTROL` / `GESTURE_HOLD` (documented as
+  reserved, and the reflash bar is high); the v0.2 `rules` and `*_minutes`
+  migration paths (tested, and the whole point is that old configs keep
+  working); and `schema.js`'s internally-used exports, which are a coherent
+  public surface for a data module and would only churn.
+
 - ~~**19d/e. One colour control, and mode colour moved onto the mode**~~ —
   [colorEngine.js](aibutton/web/static/colorEngine.js) is now the only thing
   that edits a `LedEffect`, mounted by the Lights tab's system states, the
