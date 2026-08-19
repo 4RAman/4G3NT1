@@ -47,6 +47,22 @@ button in front of them. Its own settings live in `control-panel.json`,
 that file wholesale, so a panel setting stored there would not survive a
 Save.
 
+**A second launch talks to the first one instead of refusing.** The panel
+listens on a loopback socket ([beacon.py](aibutton/control/beacon.py)) and
+records the port beside its lock; launching again asks the running panel to
+show its window and exits quietly. That matters because three different
+situations used to look identical — already running, wedged, and running but
+invisible — and Windows files new tray icons into a hidden overflow flyout, so
+"look in the tray" is advice a lot of people cannot act on. **If the holder
+does not answer it is wedged, and the newcomer says so and names the PID
+rather than insisting all is well.** The window is also shown at launch by
+default (`show_on_start`), because a tray icon is not a discoverable place to
+put your only UI.
+
+Never parent a dialog to a withdrawn Tk root. That is what made this wedge so
+hard to read: the modal rendered with no taskbar button and no focus, so the
+process sat forever holding a dialog nobody could see or dismiss.
+
 Stopping is the one non-obvious part. Windows never delivers SIGTERM between
 processes, and `CTRL_BREAK_EVENT` needs a console a tray app does not have —
 so the polite stop is `POST /api/service/stop`, and signals are the fallback

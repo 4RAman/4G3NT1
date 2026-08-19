@@ -683,6 +683,35 @@ runtime. **It resolves for free when METRONOME moves to the mode page (d).**
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
 
+- ~~**The control panel wedged, invisibly**~~ — reported as "it says it's
+  already open but it's not showing in the tray, and the window won't appear".
+  Three separate faults wearing one symptom:
+
+  **The dialog could not be seen or dismissed.** `_already_running()` built a
+  Tk root, *withdrew* it, and put a modal `showinfo` on it. On Windows that
+  renders with no taskbar button and no focus, so the second process sat there
+  forever holding an invisible modal. The rule is now in CLAUDE.md: never
+  parent a dialog to a withdrawn root.
+
+  **The advice was unfollowable.** It said to look in the system tray, and
+  Windows files new tray icons into a hidden overflow flyout by default. The
+  panel now shows its window at launch (`show_on_start`, switchable from the
+  menu), because a tray icon is not a discoverable place to put the only UI.
+
+  **"Already running" and "wedged" were indistinguishable.** A second launch
+  now asks the first over a loopback socket
+  ([beacon.py](aibutton/control/beacon.py)): answered means it raises its own
+  window and the newcomer exits quietly, which is what every other
+  single-instance app does. No answer means wedged, and it says so with the
+  PID instead of reassuring you. The port file is deliberately *not* trusted on
+  its own — connecting is what settles it, the same reason the run lock is an
+  OS lock rather than a PID file.
+
+  Also: `control.pyw` waited on the panel for the whole session, leaving a
+  second `pythonw` with an identical command line — confusing in Task Manager
+  when you are already trying to work out why there seem to be two. It now
+  launches and exits.
+
 - ~~**20. Pomodoro is an interval timer**~~ — generalised, and Tabata and HIIT
   are now **presets costing zero Python**. The template's `type` string stays
   `pomodoro` (its label is "Intervals"): renaming it would have been a

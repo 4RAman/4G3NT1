@@ -23,9 +23,10 @@ from tkinter import scrolledtext
 
 import pystray
 
+from .beacon import Beacon
 from .icon import ensure_ico, status_dot
 from .status import Health, Level, headline, summary_lines
-from .supervisor import Supervisor, web_url
+from .supervisor import Supervisor, load_prefs, save_prefs, web_url
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +49,9 @@ class ControlPanel:
         self.health = Health()
         self._level = Level.STOPPED
         self._quitting = False
+        # Started in run(), not here: constructing a panel must not bind a
+        # socket, or the tests that build one would fight each other for it.
+        self._beacon: Beacon | None = None
 
         self._tk = tk.Tk()
         self._tk.title("Button control")
@@ -245,6 +249,11 @@ class ControlPanel:
                 # the service reads it only at launch.
                 enabled=lambda *_: not self.health.running,
             ),
+            pystray.MenuItem(
+                "Open this window at launch",
+                self._on(self.toggle_show_on_start),
+                checked=lambda *_: self.show_on_start,
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Status and log...", self._on(self.show_window)),
             pystray.MenuItem(
@@ -275,6 +284,19 @@ class ControlPanel:
         if self.sup.flash():
             self.show_window()  # flashing fails in ways you need to read
 
+    @property
+    def show_on_start(self) -> bool:
+        return bool(load_prefs(self.config).get("show_on_start", True))
+
+    def toggle_show_on_start(self) -> None:
+        """On by default and switchable from the menu, because the default is
+        a judgement call: a tray icon is hard to find on Windows, and a window
+        that opens itself every login is a nuisance. Whichever one is wrong for
+        you should cost one click to fix, not an edit to a JSON file."""
+        prefs = load_prefs(self.config)
+        prefs["show_on_start"] = not self.show_on_start
+        save_prefs(self.config, prefs)
+
     def toggle_ble(self) -> None:
         self.sup.set_use_ble(not self.sup.use_ble)
         self.sup.note(
@@ -294,6 +316,8 @@ class ControlPanel:
         if self.sup.owns_process:
             self.sup.stop()
         self.sup.close()
+        if self._beacon is not None:
+            self._beacon.stop()  # takes the port file with it
         self._icon.stop()
         self._tk.quit()
 
@@ -322,6 +346,23 @@ class ControlPanel:
     def run(self) -> None:
         import threading
 
+        # Listening before the tray icon goes up, so a second launch racing
+        # this one gets an answer rather than a "not responding" dialog.
+        self._beacon = Beacon(self.config, self._show_from_beacon)
+        self._beacon.start()
+
         threading.Thread(target=self._icon.run, daemon=True, name="tray").start()
         self._tk.after(0, self._tick)
+        # Shown by default, because a tray icon is not discoverable on Windows:
+        # new ones go into the hidden overflow flyout, so a panel that only
+        # ever lived there looked to its owner like nothing had launched.
+        # Closing the window still just hides it, so anyone who wants it out of
+        # the way says so once and the pref remembers.
+        if load_prefs(self.config).get("show_on_start", True):
+            self._tk.after(0, self.show_window)
         self._tk.mainloop()
+
+    def _show_from_beacon(self) -> None:
+        """Called on the beacon's accept thread - hop to Tk's before touching
+        any widget."""
+        self._tk.after(0, self.show_window)
