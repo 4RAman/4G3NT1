@@ -17,10 +17,11 @@ import {
   TEMPLATES, TEMPLATE_BY_TYPE,
   ACTIVATIONS, ACTIVATION_BY_TYPE, describeActivation,
   describeExit, findEntryPoints,
-  LED_STATE_BY_KEY, describeEffect,
+  LED_STATE_BY_KEY, describeEffect, LOOK_PRESETS, LOOK_PRESET_GROUPS,
 } from './schema.js';
 import { paint as applySwatch } from './ledPreview.js';
 import { createField } from './widgets.js';
+import { createLookEditor } from './colorEngine.js';
 
 export class ModeEditor {
   /**
@@ -122,39 +123,124 @@ export class ModeEditor {
 
       const swatch = el('span', { className: 'palette-swatch' });
       const summary = el('span', { className: 'palette-summary' });
+      // Where the editor for the *named* look appears, when one is named.
+      // This is what makes the mode page the only place mode colour is
+      // edited: picking is not enough if changing it sends you elsewhere.
+      const editorSlot = el('div', { className: 'looks-editor' });
+
+      const setLook = (name) => {
+        if (!this.mode.looks) this.mode.looks = {};
+        if (name) this.mode.looks[key] = name;
+        else delete this.mode.looks[key];
+        // An empty map is how "uses the palette" round-trips, and the Python
+        // serialiser omits the key entirely - so drop it here too.
+        if (!Object.keys(this.mode.looks).length) delete this.mode.looks;
+      };
+
+      const sharedBy = (name) => (this.handlers.getModes?.() || []).filter(
+        (m) => m !== this.mode && Object.values(m.looks || {}).includes(name),
+      ).length;
+
       const paint = () => {
-        const effect = pool[select.value];
+        const current = this.handlers.getLooks?.() || {};
+        const effect = current[select.value];
+        clear(editorSlot);
         if (effect) {
           applySwatch(swatch, effect);
           summary.textContent = describeEffect(effect);
         } else {
           swatch.style.background = '';
-          summary.textContent = select.value ? 'no such look' : 'uses the Lights tab colour';
+          summary.textContent = select.value
+            ? 'no such look'
+            : 'the built-in colour for this state';
+        }
+        if (!effect) return;
+
+        const editor = createLookEditor({
+          get: () => effect,
+          onChange: () => {
+            applySwatch(swatch, effect);
+            summary.textContent = describeEffect(effect);
+            this.handlers.onLooksChanged?.();
+          },
+          floor: this.handlers.getFloor?.(),
+          api: this.handlers.api,
+          label: select.value,
+        });
+        editorSlot.append(editor.el);
+
+        // Editing a shared look from here changes it everywhere, which is
+        // the correct behaviour for a *named* look and a genuinely surprising
+        // one if nobody says so. The copy button is the escape hatch, and it
+        // is offered only when there is something to escape.
+        const others = sharedBy(select.value);
+        if (others) {
+          const copy = el('button', {
+            type: 'button',
+            textContent: `Make a copy just for this mode`,
+          });
+          copy.addEventListener('click', () => {
+            const name = this.handlers.addLook?.(select.value, effect);
+            if (!name) return;
+            rebuildOptions(name);
+            setLook(name);
+            paint();
+            this._changed();
+          });
+          editorSlot.append(el('div', { className: 'looks-shared' }, [
+            el('span', {
+              className: 'menu-hint',
+              textContent: `Shared with ${others} other mode${others > 1 ? 's' : ''} - editing changes it for all of them.`,
+            }),
+            copy,
+          ]));
         }
       };
-      paint();
+
+      const rebuildOptions = (selected) => {
+        const current = Object.keys(this.handlers.getLooks?.() || {}).sort();
+        clear(select);
+        select.append(el('option', { value: '', textContent: '- standard colour -' }));
+        for (const n of current) select.append(el('option', { value: n, textContent: n }));
+        if (selected && !current.includes(selected)) {
+          select.append(el('option', { value: selected, textContent: `${selected} (missing)` }));
+        }
+        select.value = selected || '';
+      };
 
       select.addEventListener('change', () => {
-        if (!this.mode.looks) this.mode.looks = {};
-        if (select.value) this.mode.looks[key] = select.value;
-        else delete this.mode.looks[key];
-        // An empty map is how "uses the palette" round-trips, and the Python
-        // serialiser omits the key entirely - so drop it here too.
-        if (!Object.keys(this.mode.looks).length) delete this.mode.looks;
+        setLook(select.value);
         paint();
         this._changed();
       });
 
+      // Making a look from a preset, without going anywhere. This is the path
+      // that replaces "add one in the Lights tab first" - the pool still owns
+      // it afterwards, so nothing about the shared-look model changes.
+      const fromPreset = el('select', { className: 'inp' }, [
+        el('option', { value: '', textContent: 'New look from a preset…' }),
+        ...LOOK_PRESET_GROUPS.map((group) => el('optgroup', { label: group },
+          LOOK_PRESETS.filter((p) => p.group === group).map(
+            (p) => el('option', { value: p.id, textContent: p.label }),
+          ))),
+      ]);
+      fromPreset.addEventListener('change', () => {
+        const preset = LOOK_PRESETS.find((p) => p.id === fromPreset.value);
+        fromPreset.value = '';
+        if (!preset) return;
+        const name = this.handlers.addLook?.(preset.label, preset.effect);
+        if (!name) return;
+        rebuildOptions(name);
+        setLook(name);
+        paint();
+        this._changed();
+      });
+
+      paint();
       wrap.append(el('div', { className: 'looks-pick' }, [
         el('span', { className: 'palette-name', textContent: state.label }),
-        swatch, select, summary,
-      ]));
-    }
-    if (!names.length) {
-      wrap.append(el('span', {
-        className: 'menu-hint', 'data-help': true,
-        textContent: 'No named looks yet - add one in the Lights tab to give this mode its own colour.',
-      }));
+        swatch, select, fromPreset, summary,
+      ]), editorSlot);
     }
     return wrap;
   }

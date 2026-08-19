@@ -84,21 +84,42 @@ def _order(entries=ENTRIES, static: Path = STATIC) -> list[str]:
     return ordered
 
 
-def _strip(name: str, source: str) -> str:
-    """One module's body: imports removed, aliases rebound, exports unmarked."""
+def _strip(name: str, source: str, aliased: dict[str, str] | None = None) -> str:
+    """One module's body: imports removed, aliases rebound, exports unmarked.
+
+    `aliased` carries alias bindings already emitted by earlier modules.
+    **Two modules aliasing the same import is the normal case**, not an error -
+    `paint as applySwatch` in three files is three modules agreeing on a name -
+    but everything shares one scope after concatenation, so the binding may
+    only be emitted once. Emitting it twice produced `Identifier 'applySwatch'
+    has already been declared`, which kills the whole bundle at parse time: the
+    editor opened to a blank page and every module in it never ran.
+
+    A genuine collision - one alias standing for two different symbols - is
+    still an error, because that one cannot be satisfied in a single scope.
+    """
     if _UNSUPPORTED.search(source):
         raise BuildError(
             f"{name} uses an import/export form this bundler does not handle "
             "(default export, namespace or side-effect import, or a dynamic import)"
         )
+    seen = {} if aliased is None else aliased
     aliases = []
     for _, names in _imports(source):
         for entry in names:
             parts = entry.split(" as ")
-            if len(parts) == 2:
-                # Everything shares one scope once concatenated, so an alias
-                # is just another name for the same binding.
-                aliases.append(f"const {parts[1].strip()} = {parts[0].strip()};")
+            if len(parts) != 2:
+                continue
+            target, alias = parts[0].strip(), parts[1].strip()
+            if alias in seen:
+                if seen[alias] != target:
+                    raise BuildError(
+                        f"{name} aliases {target!r} to {alias!r}, but {alias!r} already "
+                        f"means {seen[alias]!r}; they cannot share one scope"
+                    )
+                continue  # same name for the same thing - already bound
+            seen[alias] = target
+            aliases.append(f"const {alias} = {target};")
     body = _IMPORT.sub("", source)
     body = re.sub(r"^export\s+", "", body, flags=re.MULTILINE)
     return "\n".join([*aliases, body])
@@ -108,6 +129,8 @@ def bundle(entries=ENTRIES, static: Path = STATIC) -> str:
     """Every module, in dependency order, as one module-scope script body."""
     order = _order(entries, static)
     declared: dict[str, str] = {}
+    # Shared across modules so an alias two of them agree on is bound once.
+    aliased: dict[str, str] = {}
     chunks = []
     for name in order:
         source = (static / name).read_text(encoding="utf-8")
@@ -118,7 +141,10 @@ def bundle(entries=ENTRIES, static: Path = STATIC) -> str:
                     "level; they cannot share one scope"
                 )
             declared[symbol] = name
-        chunks.append(f"// ---- {name} " + "-" * max(0, 60 - len(name)) + "\n" + _strip(name, source))
+        chunks.append(
+            f"// ---- {name} " + "-" * max(0, 60 - len(name)) + "\n"
+            + _strip(name, source, aliased)
+        )
     return "\n\n".join(chunks)
 
 

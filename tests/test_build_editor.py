@@ -183,3 +183,45 @@ def test_the_defaults_come_from_python_not_a_second_copy(tmp_path):
 
     assert set(defaults["led_palette"]) == set(AppConfig().led_palette)
     assert "scenes" not in defaults  # the pointer belongs to config.json
+
+
+def test_the_bundle_declares_nothing_twice():
+    """The bug this exists for: menu.js and modeEditor.js both wrote
+    `paint as applySwatch`, the bundler emitted the binding once per module,
+    and the browser refused the whole script with "Identifier 'applySwatch'
+    has already been declared". Every module in the editor then never ran, and
+    the page opened blank - the same "it looked built" failure as the sliver.
+
+    Checked over the emitted bundle rather than over the sources, because the
+    duplicate was *synthesised* by the bundler and appears in neither file.
+    """
+    import re as _re
+
+    source = build_editor.bundle()
+    top_level = _re.findall(
+        r"^(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)", source, _re.MULTILINE
+    )
+    seen, twice = set(), []
+    for name in top_level:
+        if name in seen:
+            twice.append(name)
+        seen.add(name)
+    assert not twice, f"declared more than once in one scope: {sorted(set(twice))}"
+
+
+def test_two_modules_may_agree_on_an_alias():
+    """The normal case, and the one that broke: several modules importing
+    `paint as applySwatch` is them agreeing on a name, not a conflict."""
+    aliased = {}
+    first = build_editor._strip("a.js", "import { paint as applySwatch } from './ledPreview.js';\n", aliased)
+    second = build_editor._strip("b.js", "import { paint as applySwatch } from './ledPreview.js';\n", aliased)
+    assert first.count("const applySwatch = paint;") == 1
+    assert second.count("const applySwatch = paint;") == 0
+
+
+def test_one_alias_for_two_different_symbols_is_still_refused():
+    """The collision that genuinely cannot be satisfied in a single scope."""
+    aliased = {}
+    build_editor._strip("a.js", "import { paint as draw } from './ledPreview.js';\n", aliased)
+    with pytest.raises(build_editor.BuildError):
+        build_editor._strip("b.js", "import { clear as draw } from './dom.js';\n", aliased)

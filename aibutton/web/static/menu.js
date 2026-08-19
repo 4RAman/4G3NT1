@@ -8,45 +8,13 @@
 import { el, clear } from './dom.js';
 import { ConfigApi } from './api.js';
 import {
-  BUILTIN_MODES, GESTURES, LED_FIELDS, LED_STATES, LED_STYLE_BY_TYPE,
-  MODE_LED_STATES, SYSTEM_LED_STATES,
-  MODE_GROUPS, SETTINGS_GROUPS, TEMPLATE_BY_TYPE, describeEffect, describeTemplate,
+  BUILTIN_MODES, GESTURES, SYSTEM_LED_STATES,
+  MODE_GROUPS, SETTINGS_GROUPS, TEMPLATE_BY_TYPE, describeTemplate,
 } from './schema.js';
 import { ModeEditor } from './modeEditor.js';
 import { SceneBar } from './scenes.js';
 import { createField } from './widgets.js';
-import { paint as applySwatch } from './ledPreview.js';
-
-// Which LED_STATE byte rides along with a test look. It matters for two
-// reasons worth exposing rather than hiding: it is what the status line
-// reports, and it is what a device too old for ephemeral effects falls back
-// to rendering.
-// Whether `style` renders `spec`. Two specs share the key `color` - a hue
-// picker and a brightness slider - so a spec may declare which *reading* it
-// is with `shows`, and the style's `uses` list names the reading it wants.
-// Without `shows` this is the plain "does this style use this field" it always
-// was, which is why every other field needed no change.
-function usedBy(style, spec) {
-  return style.uses.includes(spec.shows || spec.key);
-}
-
-const TEST_STATE_FIELD = {
-  key: 'state', label: 'Reported state', kind: 'select',
-  options: LED_STATES.map((s) => ({ value: s.key, label: s.label })),
-};
-
-// One click each, because the colours worth testing are the ones with
-// *unequal* components - white is three equal ones, so it looks the same
-// however the wire is ordered and proves nothing.
-const TEST_SWATCHES = [
-  { label: 'Red', color: '#ff0000' },
-  { label: 'Green', color: '#00ff00' },
-  { label: 'Blue', color: '#0000ff' },
-  { label: 'Yellow', color: '#ffff00' },
-  { label: 'Cyan', color: '#00ffff' },
-  { label: 'Magenta', color: '#ff00ff' },
-  { label: 'White', color: '#ffffff' },
-];
+import { createLookEditor } from './colorEngine.js';
 
 export class ConfigMenu {
   /** @param {{modes: Element, lights: Element, device: Element, bar: Element, scenes?: Element}} mounts */
@@ -55,10 +23,6 @@ export class ConfigMenu {
     this.api = api;
     this.model = null; // working copy of the effective config
     this.dirty = false;
-    // The test bench's look. Deliberately not part of `this.model`: it is
-    // never saved, never marks the config dirty, and has to survive the
-    // re-render a Save or a Revert causes.
-    this.testLook = { style: 'solid', color: '#ff0000', color2: '#000000', period_s: 2, state: 'IDLE' };
     this.selectedMode = null; // the mode object shown in the detail pane
     // The scene bar lives outside the tabs and outlives a re-render: a scene
     // spans modes, lights and settings, so rebuilding it per tab render would
@@ -310,10 +274,18 @@ export class ConfigMenu {
       // (filtered to takeover templates) live, without ModeEditor knowing
       // where the modes list lives.
       getModes: () => this.model.modes,
-      // Same injection for the look pickers: the pool is config-wide and
-      // edited in the Lights tab, so the mode editor reads it rather than
-      // owning it.
+      // The look pool is config-wide, so the mode editor reads and adds to it
+      // rather than owning it. Adding from a mode is the normal way a look
+      // gets made now that mode colour lives here - the Lights tab is where
+      // they are *managed*, not where they have to be born.
       getLooks: () => this.model.looks || {},
+      getFloor: () => this.model.min_flash_period_s,
+      api: this.api,
+      addLook: (name, effect) => this._addLook(name, effect),
+      onLooksChanged: () => {
+        this._renderLooks();
+        this._markDirty();
+      },
     });
     this.modeDetailEl.append(this.detailEditor.el);
   }
@@ -377,14 +349,10 @@ export class ConfigMenu {
     }
   }
 
-  // One row per device state: a live swatch, what the state means, and the
-  // fields the chosen style actually uses. Changing the style re-renders just
-  // that row, so the irrelevant fields disappear as you switch.
-  // Three groups, and the split is the point rather than tidiness: the
-  // button's own vocabulary is edited once and globally, a mode-owned state's
-  // entry is only the *default* a mode falls back to, and a named look is a
-  // mode's own appearance. Mirrors SYSTEM_LED_STATES / MODE_LED_STATES in
-  // config.py.
+  // Two groups, and the split is the point rather than tidiness: the button's
+  // own vocabulary is edited once and globally, and a named look is a shared
+  // appearance any mode can wear. Mode-owned states are edited on the mode -
+  // see the note in the return below. Mirrors SYSTEM_LED_STATES in config.py.
   _renderPaletteSection() {
     if (!this.model.led_palette) this.model.led_palette = {};
     if (!this.model.looks) this.model.looks = {};
@@ -398,7 +366,7 @@ export class ConfigMenu {
           get: () => this.model.led_palette[state.key],
           label: state.label,
           meaning: state.meaning,
-        }, wrap));
+        }));
       }
       return wrap;
     };
@@ -415,107 +383,39 @@ export class ConfigMenu {
       this._markDirty();
     });
 
+    // Two sections, and the omission is the point. **Mode colours are not
+    // here.** A mode's appearance belongs on the mode's own page, or a mode is
+    // not modular: you would edit a Pomodoro in one tab and its colour in
+    // another, and "change every Pomodoro at once" is a thing almost nobody
+    // wants and everybody eventually does by accident.
+    //
+    // The palette entries for those states still exist in config as the
+    // invisible fallback a mode with no named look renders (`base_look` reads
+    // them) - only the editor group is gone. Removing the entries as well
+    // would leave such a mode with nothing to show.
     return el('div', {}, [
-      el('p', { className: 'menu-hint', 'data-help': true, textContent: 'The colours the button itself shows. Saving sends them straight to the device - no reflash, no restart. The preview swatches animate the same way the LED does.' }),
+      el('p', { className: 'menu-hint', 'data-help': true, textContent: "The button's own vocabulary - what it looks like when it is idle, listening, thinking, or reporting a result. Saving sends these straight to the device: no reflash, no restart." }),
       group(SYSTEM_LED_STATES),
-      el('h3', { className: 'palette-group', textContent: 'Mode colours' }),
-      el('p', { className: 'menu-hint', 'data-help': true, textContent: 'What a mode shows when it has not picked a look of its own. Edit these to change every mode of that kind at once.' }),
-      group(MODE_LED_STATES),
       el('h3', { className: 'palette-group', textContent: 'Named looks' }),
-      el('p', { className: 'menu-hint', 'data-help': true, textContent: 'Give a look a name here, then pick it at the top of a mode in the Modes tab. This is how two Pomodoros can look different, and how one colour can be shared by several modes.' }),
+      el('p', { className: 'menu-hint', 'data-help': true, textContent: 'A shared pool of appearances. Name one here and any mode can wear it, or make one straight from a mode - this is where they all end up either way.' }),
       this.looksWrap,
       add,
-      el('h3', { className: 'palette-group', textContent: 'Test bench' }),
-      el('p', { className: 'menu-hint', 'data-help': true, textContent: 'Push any look straight at the button without saving it. Nothing here is written to the config, and the next press puts the LED back to normal - so it is safe to poke at while the button is in use.' }),
-      this._renderTestBench(),
     ]);
   }
 
-  // Shows one look on the real hardware, now. Separate from the palette rows
-  // above because it edits nothing: it is the one place in this tab where
-  // what you see is the *device's* answer rather than the config's intent,
-  // which is what makes it useful for telling a wiring fault from a config
-  // one.
-  _renderTestBench() {
-    const swatch = el('span', { className: 'palette-swatch' });
-    const summary = el('span', { className: 'palette-summary' });
-    const status = el('span', { className: 'menu-status' });
-    const fields = el('div', { className: 'settings-grid' });
-
-    const refresh = () => {
-      applySwatch(swatch, this.testLook);
-      summary.textContent = describeEffect(this.testLook);
-    };
-
-    const send = async (body) => {
-      status.textContent = 'sending…';
-      try {
-        const res = await this.api.showLook(body);
-        if (res.warnings && res.warnings.length) {
-          // What went out is not what was typed - say so, or the bench
-          // reports the LED's answer to a question it wasn't asked.
-          status.textContent = `sent (adjusted): ${res.warnings.join('; ')}`;
-        } else if (!res.connected) {
-          status.textContent = 'sent, but the button is not connected';
-        } else {
-          status.textContent = body.clear
-            ? 'back to the configured colours'
-            : `showing ${describeEffect(res.effect)} as ${res.state}`;
-        }
-      } catch (err) {
-        status.textContent = `failed: ${err.message}`;
-      }
-    };
-
-    const renderFields = () => {
-      clear(fields);
-      const style = LED_STYLE_BY_TYPE[this.testLook.style] || LED_STYLE_BY_TYPE.solid;
-      for (const spec of [...LED_FIELDS, TEST_STATE_FIELD]) {
-        // Same rule as a palette row: hide what this style ignores.
-        if (spec.key !== 'style' && spec.key !== 'state' && !usedBy(style, spec)) continue;
-        const field = createField(spec, this.testLook, () => {
-          refresh();
-          if (spec.key === 'style') renderFields();
-        }, this._ledCtx(style));
-        fields.append(field.el);
-      }
-    };
-
-    const swatches = el('div', { className: 'test-swatches' });
-    for (const preset of TEST_SWATCHES) {
-      const dot = el('button', {
-        type: 'button', className: 'test-dot', title: `${preset.label} - solid ${preset.color}`,
-      });
-      dot.style.background = preset.color;
-      dot.addEventListener('click', () => {
-        // A preset is a whole look, not just a colour: solid, so what lands
-        // on the LED is the colour and nothing else.
-        Object.assign(this.testLook, { style: 'solid', color: preset.color });
-        renderFields();
-        refresh();
-        send(this.testLook);
-      });
-      swatches.append(dot);
-    }
-
-    const mk = (text, cls, fn) => {
-      const b = el('button', { type: 'button', className: cls, textContent: text });
-      b.addEventListener('click', fn);
-      return b;
-    };
-
-    renderFields();
-    refresh();
-    return el('div', { className: 'palette-row' }, [
-      el('div', { className: 'palette-head' }, [swatch, summary]),
-      swatches,
-      fields,
-      el('div', { className: 'test-actions' }, [
-        mk('Show on the button', 'primary', () => send(this.testLook)),
-        mk('Stop', '', () => send({ clear: true })),
-        status,
-      ]),
-    ]);
+  /** Put `effect` in the pool under a free name derived from `name`, and
+   *  return the name actually used. Deduping here rather than at the call
+   *  site is what lets a mode add "Ember" twice without either clobbering the
+   *  first one or having to invent a name itself. */
+  _addLook(name, effect) {
+    if (!this.model.looks) this.model.looks = {};
+    const base = (name || 'look').trim() || 'look';
+    let chosen = base;
+    for (let n = 2; this.model.looks[chosen]; n += 1) chosen = `${base} ${n}`;
+    this.model.looks[chosen] = { ...effect };
+    this._renderLooks();
+    this._markDirty();
+    return chosen;
   }
 
   _renderLooks() {
@@ -553,72 +453,31 @@ export class ConfigMenu {
           this._renderLooks();
           this._markDirty();
         },
-      }, this.looksWrap));
+      }));
     }
   }
 
-  _renderEffectRow(spec, wrap) {
-    const effect = spec.get();
-    const style = LED_STYLE_BY_TYPE[effect.style] || LED_STYLE_BY_TYPE.solid;
-    const row = el('div', { className: 'palette-row' });
-
-    const swatch = el('span', { className: 'palette-swatch' });
-    applySwatch(swatch, effect);
-
-    const fields = el('div', { className: 'settings-grid' });
-    for (const fieldSpec of LED_FIELDS) {
-      // Hide what this style ignores: a rainbow has no colour to pick.
-      if (fieldSpec.key !== 'style' && !usedBy(style, fieldSpec)) continue;
-      const field = createField(fieldSpec, effect, () => {
+  // One control for every colour in the app - see colorEngine.js. This is a
+  // thin adapter: the Lights tab's own concerns are marking the config dirty
+  // and collecting validators, and neither of those belongs in the engine.
+  _renderEffectRow(spec) {
+    const editor = createLookEditor({
+      get: spec.get,
+      onChange: () => this._markDirty(),
+      floor: this.model?.min_flash_period_s,
+      api: this.api,
+      label: spec.label,
+      meaning: spec.meaning,
+      rename: spec.rename && ((next) => {
+        if (!spec.rename(next)) return false;
+        this._renderLooks();
         this._markDirty();
-        applySwatch(swatch, effect);
-        summary.textContent = describeEffect(effect);
-        // Switching style changes which fields belong here.
-        if (fieldSpec.key === 'style') {
-          wrap.replaceChild(this._renderEffectRow(spec, wrap), row);
-        }
-      }, this._ledCtx(style));
-      this.paletteValidators.push(field.validate);
-      fields.append(field.el);
-    }
-
-    const summary = el('span', { className: 'palette-summary', textContent: describeEffect(effect) });
-    const head = [swatch];
-    if (spec.rename) {
-      const input = el('input', { className: 'inp palette-name', value: spec.label });
-      input.addEventListener('change', () => {
-        if (spec.rename(input.value.trim())) {
-          this._renderLooks();
-          this._markDirty();
-        } else {
-          input.value = spec.label; // taken, empty, or unchanged
-        }
-      });
-      head.push(input);
-    } else {
-      head.push(el('span', { className: 'palette-name', textContent: spec.label }));
-    }
-    if (spec.meaning) head.push(el('span', { className: 'palette-meaning', textContent: spec.meaning }));
-    head.push(summary);
-    if (spec.remove) {
-      const del = el('button', { type: 'button', className: 'danger', textContent: 'Delete' });
-      del.addEventListener('click', spec.remove);
-      head.push(del);
-    }
-
-    row.append(el('div', { className: 'palette-head' }, head), fields);
-    return row;
-  }
-
-  // What a period slider needs to know: how slow it has to stay. Only the
-  // hard on/off styles are floored, so a breathe keeps the full range - the
-  // limit is about strobing, not about being fast. Read off the live model so
-  // raising the setting widens the sliders on the next render rather than at
-  // the next reload.
-  _ledCtx(style) {
-    const configured = Number(this.model?.min_flash_period_s);
-    const floor = Number.isFinite(configured) && configured > 0 ? configured : 1 / 3;
-    return { minFlashPeriod: style?.strobes ? floor : 0.05 };
+        return true;
+      }),
+      onRemove: spec.remove,
+    });
+    this.paletteValidators.push(editor.validate);
+    return editor.el;
   }
 
   _renderSettingsSection() {

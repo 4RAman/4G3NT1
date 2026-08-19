@@ -103,6 +103,30 @@
   }
   .side-block + .side-block { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  /* The preset library. Folded away by default: it is a long list on purpose,
+     and a colour control that opened forty swatches every time would bury the
+     fields underneath it. */
+  .preset-drawer { margin: 6px 0; }
+  .preset-drawer > summary { cursor: pointer; font-size: 13px; color: #9ec2ff; }
+  .preset-groups { display: flex; flex-direction: column; gap: 4px; padding: 8px 0 2px; }
+  .preset-group-name { font-size: 11px; text-transform: uppercase;
+                       letter-spacing: .06em; opacity: .65; }
+  .preset-dots { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  .preset-dot { display: inline-flex; align-items: center; gap: 6px;
+                padding: 3px 9px 3px 3px; border-radius: 999px;
+                border: 1px solid var(--line); background: transparent;
+                cursor: pointer; font-size: 12px; }
+  .preset-dot-swatch { width: 16px; height: 16px; border-radius: 50%;
+                       flex: 0 0 auto; box-shadow: inset 0 0 0 1px #0006; }
+  .preset-dot:hover { border-color: #9ec2ff; }
+  .preset-dot-label { color: var(--fg); }
+  /* The per-state look editor on a mode page, indented so it reads as
+     belonging to the row above it rather than as a new section. */
+  .looks-editor:not(:empty) { margin: 4px 0 10px 18px;
+                              border-left: 2px solid var(--line); padding-left: 12px; }
+  .looks-shared { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+                  margin-top: 6px; }
   /* A value and its unit are one control, so they must not wrap apart. */
   .row-tight { display: flex; gap: 6px; align-items: center; }
   .row-tight > .inp:first-child { flex: 1 1 auto; min-width: 0; }

@@ -1195,6 +1195,118 @@ export const MODE_LED_STATES = LED_STATES.filter(
 );
 export const LED_STATE_BY_KEY = Object.fromEntries(LED_STATES.map((s) => [s.key, s]));
 
+// Built-in looks, offered wherever a colour is chosen.
+//
+// **A starting point, never a stored thing.** Picking one copies its effect
+// into whatever you are editing; nothing here lands in config.json unless you
+// save it as a named look. That is why there can be forty of them without
+// anybody's config growing, and why deleting a look you made never disturbs
+// the library it came from.
+//
+// The groups are the useful axis. Nobody wants "all the blues"; they want the
+// one that means *resting*, and the difference between Cooldown and Deep Water
+// is what they are for rather than what hue they are.
+//
+// Two hardware facts shaped the choices, both from README's gotchas:
+//   - This build's ring measures R > G > B, so pure blues read dim and white
+//     reads warm. Anything that has to be *seen* leans red/amber; the blues
+//     are here for calm states where dim is the point.
+//   - Only `flash` and `alternate` strobe, and those are floored at 3 Hz
+//     (WCAG 2.3.1). Every strobing preset below sits at 0.45 s or slower, so
+//     the floor never has to rewrite one - test_look_presets.py fails if that
+//     stops being true.
+//
+// The array is deliberately **strict JSON**: test_look_presets.py slices it
+// out and feeds every effect through the real Python parser, so a preset
+// cannot ship a colour the config would reject or a rate it would clamp.
+// Keep comments outside the brackets.
+export const LOOK_PRESETS = [
+  { "id": "deep-water", "label": "Deep Water", "group": "Calm",
+    "effect": { "style": "breathe", "color": "#0044ff", "color2": "#000000", "period_s": 4.5 } },
+  { "id": "moss", "label": "Moss", "group": "Calm",
+    "effect": { "style": "breathe", "color": "#1e8c46", "color2": "#000000", "period_s": 5 } },
+  { "id": "ember", "label": "Ember", "group": "Calm",
+    "effect": { "style": "breathe", "color": "#ff4400", "color2": "#000000", "period_s": 3.5 } },
+  { "id": "candle", "label": "Candle", "group": "Calm",
+    "effect": { "style": "breathe", "color": "#ff7a1a", "color2": "#000000", "period_s": 2.5 } },
+  { "id": "slow-tide", "label": "Slow Tide", "group": "Calm",
+    "effect": { "style": "fade", "color": "#002a55", "color2": "#00a0c0", "period_s": 6 } },
+  { "id": "nightlight", "label": "Nightlight", "group": "Calm",
+    "effect": { "style": "solid", "color": "#180600", "color2": "#000000", "period_s": 1 } },
+  { "id": "dusk", "label": "Dusk", "group": "Calm",
+    "effect": { "style": "fade", "color": "#2a0a40", "color2": "#ff5500", "period_s": 7 } },
+
+  { "id": "deep-work", "label": "Deep Work", "group": "Focus",
+    "effect": { "style": "solid", "color": "#00a866", "color2": "#000000", "period_s": 1 } },
+  { "id": "flow", "label": "Flow", "group": "Focus",
+    "effect": { "style": "breathe", "color": "#00d488", "color2": "#000000", "period_s": 6 } },
+  { "id": "amber-desk", "label": "Amber Desk", "group": "Focus",
+    "effect": { "style": "solid", "color": "#ffa000", "color2": "#000000", "period_s": 1 } },
+  { "id": "tunnel", "label": "Tunnel", "group": "Focus",
+    "effect": { "style": "fade", "color": "#001a0d", "color2": "#00ff77", "period_s": 4 } },
+  { "id": "lantern", "label": "Lantern", "group": "Focus",
+    "effect": { "style": "breathe", "color": "#ffc040", "color2": "#000000", "period_s": 4 } },
+
+  { "id": "cooldown", "label": "Cooldown", "group": "Rest",
+    "effect": { "style": "breathe", "color": "#00a8ff", "color2": "#000000", "period_s": 4 } },
+  { "id": "meadow", "label": "Meadow", "group": "Rest",
+    "effect": { "style": "fade", "color": "#6ac432", "color2": "#ffe95c", "period_s": 5 } },
+  { "id": "warm-down", "label": "Warm Down", "group": "Rest",
+    "effect": { "style": "fade", "color": "#ff8a00", "color2": "#3a1a00", "period_s": 5 } },
+  { "id": "tea", "label": "Tea", "group": "Rest",
+    "effect": { "style": "breathe", "color": "#b25a1e", "color2": "#000000", "period_s": 3 } },
+
+  { "id": "klaxon", "label": "Klaxon", "group": "Alert",
+    "effect": { "style": "flash", "color": "#ff0000", "color2": "#000000", "period_s": 0.5 } },
+  { "id": "beacon", "label": "Beacon", "group": "Alert",
+    "effect": { "style": "flash", "color": "#ff6a00", "color2": "#000000", "period_s": 0.9 } },
+  { "id": "hazard", "label": "Hazard", "group": "Alert",
+    "effect": { "style": "alternate", "color": "#ffc400", "color2": "#000000", "period_s": 0.6 } },
+  { "id": "siren", "label": "Siren", "group": "Alert",
+    "effect": { "style": "alternate", "color": "#ff0000", "color2": "#0033ff", "period_s": 0.45 } },
+  { "id": "red-alert", "label": "Red Alert", "group": "Alert",
+    "effect": { "style": "breathe", "color": "#ff0000", "color2": "#000000", "period_s": 1.2 } },
+  { "id": "last-call", "label": "Last Call", "group": "Alert",
+    "effect": { "style": "flash", "color": "#ff0044", "color2": "#000000", "period_s": 0.6 } },
+
+  { "id": "green-light", "label": "Green Light", "group": "Done",
+    "effect": { "style": "solid", "color": "#00ff2a", "color2": "#000000", "period_s": 1 } },
+  { "id": "applause", "label": "Applause", "group": "Done",
+    "effect": { "style": "rainbow", "color": "#ffffff", "color2": "#000000", "period_s": 0.7 } },
+  { "id": "confetti", "label": "Confetti", "group": "Done",
+    "effect": { "style": "rainbow", "color": "#ffffff", "color2": "#000000", "period_s": 1.4 } },
+  { "id": "sunrise", "label": "Sunrise", "group": "Done",
+    "effect": { "style": "fade", "color": "#ff1a00", "color2": "#ffd400", "period_s": 4.5 } },
+
+  { "id": "on-air", "label": "On Air", "group": "Status",
+    "effect": { "style": "solid", "color": "#ff0000", "color2": "#000000", "period_s": 1 } },
+  { "id": "standby", "label": "Standby", "group": "Status",
+    "effect": { "style": "solid", "color": "#ffa000", "color2": "#000000", "period_s": 1 } },
+  { "id": "clear", "label": "Clear", "group": "Status",
+    "effect": { "style": "solid", "color": "#00e04a", "color2": "#000000", "period_s": 1 } },
+  { "id": "do-not-disturb", "label": "Do Not Disturb", "group": "Status",
+    "effect": { "style": "breathe", "color": "#ff0033", "color2": "#000000", "period_s": 3 } },
+
+  { "id": "downbeat", "label": "Downbeat", "group": "Time",
+    "effect": { "style": "flash", "color": "#ffffff", "color2": "#000000", "period_s": 0.5 } },
+  { "id": "tick", "label": "Tick", "group": "Time",
+    "effect": { "style": "flash", "color": "#00e5ff", "color2": "#000000", "period_s": 0.5 } },
+  { "id": "pulse", "label": "Pulse", "group": "Time",
+    "effect": { "style": "breathe", "color": "#ff00aa", "color2": "#000000", "period_s": 1 } },
+
+  { "id": "disco", "label": "Disco", "group": "Play",
+    "effect": { "style": "rainbow", "color": "#ffffff", "color2": "#000000", "period_s": 0.5 } },
+  { "id": "lava-lamp", "label": "Lava Lamp", "group": "Play",
+    "effect": { "style": "fade", "color": "#ff0066", "color2": "#ffb400", "period_s": 7 } },
+  { "id": "cyberpunk", "label": "Cyberpunk", "group": "Play",
+    "effect": { "style": "alternate", "color": "#ff00ff", "color2": "#00ffff", "period_s": 0.7 } },
+  { "id": "firefly", "label": "Firefly", "group": "Play",
+    "effect": { "style": "breathe", "color": "#b6ff00", "color2": "#000000", "period_s": 2.2 } }
+];
+
+/** The preset groups, in the order they should be offered. */
+export const LOOK_PRESET_GROUPS = [...new Set(LOOK_PRESETS.map((p) => p.group))];
+
 export const LED_FIELDS = [
   { key: 'style', label: 'Style', kind: 'select',
     options: LED_STYLES.map((s) => ({ value: s.type, label: s.label })) },

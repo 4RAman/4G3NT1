@@ -265,6 +265,24 @@ Three consequences for code written today:
   the device. What is left after the correction is tens of milliseconds of
   radio and scheduling, and that is the real precision floor: ±150 ms games
   are honest, tight rhythm judgement is Stage 3.
+- **One colour control, used everywhere colour is chosen.**
+  [colorEngine.js](aibutton/web/static/colorEngine.js) is the only thing that
+  edits a `LedEffect`: the Lights tab's system states, the named-look pool and
+  a mode's own look all mount the same component, and it returns the widget
+  contract (`{el, validate}`) so it drops into a form beside any field. It
+  absorbed the test bench rather than replacing it — pushing a look at the
+  hardware is a *capability of every picker* now, and the Diagnostic row is the
+  wiring test README's gotchas depend on. **Live preview is optional by
+  construction** (`api.showLook` may be absent): the offline editor has no
+  device, so a colour control that required one would be the wrong seam. New
+  places that need a colour mount the engine; they do not grow their own.
+- **The Lights tab is the button's vocabulary; a mode's colour lives on the
+  mode.** IDLE/LISTENING/THINKING/SUCCESS/ERROR are edited once, globally.
+  Everything a mode owns (ALERT/TIMING/COUNTING/WORKING/RESTING/METRONOME) is
+  edited on that mode's page, because a mode you configure in two tabs is not
+  modular. Their palette entries **stay in config** as the invisible fallback a
+  mode with no named look renders (`base_look` reads them) — only the editor
+  group went away. Deleting the entries would leave such a mode with nothing.
 - **A mode names a look; it never owns one.** The pool is `AppConfig.looks`
   and a mode holds `{state: look-name}`. Which states a mode may colour is
   `MODE_LED_STATES` in [config.py](aibutton/config.py), mirrored as
@@ -352,7 +370,8 @@ is the one surface that will exist in someone else's pocket.
 - **WS2812 byte order varies by board, and this build's two LEDs disagree.**
   The ring is GRB, the onboard one is RGB (`NEOPIXEL_ORDER` /
   `ONBOARD_NEOPIXEL_ORDER` in [hardware.py](firmware/hardware.py)). Diagnose by
-  pushing *known* colours from the Lights tab's test bench, never by watching
+  pushing *known* colours from any colour picker's Diagnostic row
+  ([colorEngine.js](aibutton/web/static/colorEngine.js)), never by watching
   the rainbow — every permutation of a rainbow is still a rainbow, so it shows
   at most a direction reversal and a camera's white balance will happily fake
   one of those. One LED wrong means that LED's setting is wrong; **both wrong

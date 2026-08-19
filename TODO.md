@@ -120,7 +120,7 @@ view.
 | **The gesture engine** — N taps, hold levels | 0b·2 ✔, 5-tap gesture ✔ | Ungated for taps; hold levels still need firmware |
 | **Depth without the wire** — metronome config ✔, event values ✔, filtering/export ✔ | **1** ✔, **9**, **12**, **14** | None — ship freely |
 | **Reach and hosting** — launcher ✔, ten apps ✔, remote UI | **0a** ✔, **7** ✔, **8** | Only the hardware walk left on 7 |
-| **The light as a language** — ladder ✔, stop list, one-offs, where colour is edited | **19** | None for b–e |
+| **The light as a language** — ladder ✔, where colour is edited ✔, stop list | **19** (a ✔, c, d ✔, e ✔) | Only **19b/c** left |
 | **Saying a number** — ambient counting, count readout, progress | **15**, **17** | Wants the stop list (**19b**) first — a readout *is* a stop list |
 | **Play** — timing/rhythm and guessing games | **16** ✔ | Done for forgiving games; tight rhythm still needs Stage 3's on-device runtime |
 | **Reaching other software** — OSC ✔, MIDI if ever | ✔ shipped with **7** | Ungated. MIDI costs a dependency and a virtual port; nothing needs it yet |
@@ -602,30 +602,6 @@ The `ramp` widget exists and is only offered on the countdown. Pomodoro blocks,
 hold levels and any "how far through" surface want the same control. A
 descriptor change per template, not new code.
 
-#### d) Move mode colour fully into the mode, and grow the picker
-
-The Lights tab should hold **system states only** (IDLE / LISTENING / THINKING
-/ SUCCESS / ERROR). Mode-owned states (ALERT / TIMING / COUNTING / WORKING /
-RESTING / METRONOME) belong on each mode's own page.
-
-**Decided:** the global palette entries for mode-owned states **stay in config
-as the invisible fallback** — they are what a mode with no named look renders,
-and `base_look` reads them. Only the *editor group* goes away. Removing the
-entries would leave a mode that names nothing with nothing to show.
-
-The test bench is the right springboard for the per-mode picker: it already
-pushes a look through the real parser and the real seam. What it needs to grow
-is saved user styles — which is what the `looks` pool already is, so this is a
-UI move rather than a new concept.
-
-#### e) The metronome's period field in the Lights tab — confirmed dead
-
-Verified, and nothing depends on it: `push_tempo` does
-`replace(base, period_s=period)` on every tick, so the stored value is
-overridden before it is ever rendered — including before the first tap, where
-`start_bpm` drives it. Removing the field from the editor changes nothing at
-runtime. **It resolves for free when METRONOME moves to the mode page (d).**
-
 ---
 
 ## Smaller, worth doing
@@ -682,6 +658,52 @@ runtime. **It resolves for free when METRONOME moves to the mode page (d).**
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**19d/e. One colour control, and mode colour moved onto the mode**~~ —
+  [colorEngine.js](aibutton/web/static/colorEngine.js) is now the only thing
+  that edits a `LedEffect`, mounted by the Lights tab's system states, the
+  named-look pool and each mode's own page. It returns `{el, validate}` like
+  every widget, so it drops in anywhere.
+
+  **The Lights tab holds the button's vocabulary and nothing else.** Mode-owned
+  states are edited on the mode, because a mode you configure in two tabs is
+  not modular. Their palette entries stay in config as the invisible fallback
+  (19d's original decision, unchanged) — only the editor group went. **19e came
+  free with it**: the metronome's dead period field was in that group.
+
+  **The test bench was scrapped as a place and kept as a capability.** Pushing
+  a look at the hardware now belongs to *every* picker, which is where it
+  should always have been — it is how you tell a wiring fault from a config
+  one. It is optional by construction (`api.showLook` may be absent), so the
+  offline editor still works; the Diagnostic row that README's byte-order
+  diagnosis depends on rides along with it.
+
+  A mode page can now make a look without leaving: pick a preset and it lands
+  in the pool, named and selected. Editing a look shared with other modes says
+  so and offers a copy, because a *named* look changing everywhere is correct
+  and surprising in equal measure.
+
+  **37 built-in presets** in eight groups (`LOOK_PRESETS` in schema.js),
+  offered wherever colour is chosen and stored nowhere until saved.
+  [test_look_presets.py](tests/test_look_presets.py) runs every one through the
+  real parser and the real flash floor, so the library cannot ship a colour the
+  config would reject or a rate it would clamp.
+
+- ~~**The offline editor was dead on arrival, and had been for a while**~~ —
+  found by opening it rather than by a test. `menu.js` and `modeEditor.js` both
+  wrote `paint as applySwatch`; the bundler emitted that binding once per
+  module, and the browser refused the entire script with *"Identifier
+  'applySwatch' has already been declared"*. Every module in the editor never
+  ran and the page opened blank.
+
+  Two modules agreeing on an alias is the normal case, so the bundler now binds
+  it once and only raises when one alias would mean two different symbols.
+  The gap that let it ship is closed too: the suite checked the bundler's
+  *inputs* and never that the bundle it emitted could be parsed. It now asserts
+  nothing is declared twice in the shared scope — over the emitted bundle,
+  because the duplicate appears in neither source file.
+
+  Same lesson as the sliver: **it looked built.**
 
 - ~~**The control panel wedged, invisibly**~~ — reported as "it says it's
   already open but it's not showing in the tray, and the window won't appear".
