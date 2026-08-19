@@ -42,14 +42,15 @@ Read the items — they are written to stand alone.
 
 ## What needs hardware, and why it has not happened
 
-**A reflash is owed.** `firmware/main.py` now dates a press at the edge rather
-than at the debounce, which removes a ~50 ms systematic error from every
-timestamp the host sees. Until it is flashed, the reaction timer still reads
-about 50 ms slow.
+**The reflash is done** — firmware **0.6.1**, flashed and verified on
+2026-08-19 (`/api/status` → `device_info.firmware`). The board rebooted and
+reconnected on its own; no replug was needed, because `mpremote cp` copies over
+the REPL and never enters download mode, so the sticky-bootloader gotcha in
+CLAUDE.md does not apply to this command.
 
-```bash
-.venv/Scripts/python -m mpremote cp firmware/*.py : + reset
-```
+What is *not* verified is how it feels: the timing fix is proven by tests and
+the flash is proven by the version, but nobody has pressed the button since.
+Expect the reaction timer to read about 50 ms faster than before.
 
 Two separate things are waiting on a bench session, and they are independent:
 
@@ -83,7 +84,11 @@ Two separate things are waiting on a bench session, and they are independent:
 - **Phone access**: recommended a mesh VPN (Tailscale/WireGuard) over hosting,
   since the web UI has no auth and a VPN makes that moot. Nothing to build —
   `web_host` already binds `0.0.0.0`. Written up as option (d) in TODO 8.
-- **A pair of control-panel processes** appeared once and I could not explain
-  the parentage. The panel is self-healing about it now (a second launch
-  raises the first, or says the holder is wedged), so it should not matter —
-  but if a duplicate pair shows up again, that is new evidence worth chasing.
+- ~~A pair of `pythonw` processes I could not explain~~ — **resolved, and it
+  was nothing.** The venv's `pythonw.exe` is a redirector stub: it launches the
+  base interpreter as a child with the same command line and waits on it. The
+  giveaway is the profile — the parent had 0.02 s of CPU and one thread after
+  three and a half hours while the child held port 8080 with 106 s and three
+  threads. The single-instance guard was never failing, and a pair is expected
+  for *any* venv-launched process here. Recorded so nobody chases it a third
+  time.

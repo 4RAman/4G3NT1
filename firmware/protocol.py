@@ -51,7 +51,12 @@ OTA_CONTROL_UUID = "f3641406-00b0-4240-ba50-05ca45bf8abc"
 # device, and a host that hard-coded it would be describing itself.
 
 PROTOCOL_VERSION = 1
-FIRMWARE_VERSION = (0, 6, 0)
+# 0.6.1: a press is dated at the edge rather than at the debounce, removing a
+# ~50 ms systematic error from every timestamp the host sees. A behaviour
+# change with no wire change still gets a bump, because this is the only way
+# to tell a flashed board from an un-flashed one - and "did the reflash take?"
+# should be answerable rather than guessed at.
+FIRMWARE_VERSION = (0, 6, 1)
 
 CAP_LED = 0x0001      # an LED came up and can be driven
 CAP_BUZZER = 0x0002   # a buzzer came up and can be driven

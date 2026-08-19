@@ -34,7 +34,12 @@ will port; one that awaits the device directly will be rewritten.
   *accurate* one — the byte-order fault that made both LEDs render red as
   green is fixed and flashed.
 
-**Flashed to 0.6.0** (2026-08-18) — rainbow brightness is live.
+**Flashed to 0.6.1** (2026-08-19) — a press is dated at the edge rather than
+at the debounce, which took a ~50 ms systematic error out of every timestamp
+the host sees. Verified live: `/api/status` reports
+`device_info.firmware = "0.6.1"`. A behaviour change with no wire change still
+earns a version bump, because it is the only way to tell a flashed board from
+an un-flashed one.
 
 The ESP32 itself is untouched and the service runs normally, so the rest of
 the list is unaffected. Re-soldering is **0c**, and the 5 V rework belongs in

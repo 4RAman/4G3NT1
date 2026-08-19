@@ -14,7 +14,7 @@
       "activation": {
         "type": "manual"
       },
-      "targets": "Stopwatch\nPomodoro\nMetronome\nCounter\nAlarm\nCountdown 60s\nHot / Cold\nReaction",
+      "targets": [],
       "return_after": true,
       "log_as": "launcher_"
     },
@@ -281,6 +281,39 @@
           "at": 1
         }
       ]
+    },
+    {
+      "name": "Actions",
+      "template": "actions",
+      "activation": {
+        "type": "always"
+      },
+      "short_press": {
+        "action": "enter_mode",
+        "target": "Pomodoro"
+      }
+    },
+    {
+      "name": "Work Alarm",
+      "template": "alarm",
+      "activation": {
+        "type": "schedule",
+        "at": "07:00",
+        "days": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri"
+        ]
+      },
+      "message": "Go to work!",
+      "label": "",
+      "snooze_minutes": 5,
+      "dismiss_event": "",
+      "looks": {
+        "ALERT": "Cops"
+      }
     }
   ],
   "led_palette": {
@@ -360,9 +393,9 @@
     },
     "Cops": {
       "style": "alternate",
-      "color": "#fd3f3f",
-      "color2": "#2e62ff",
-      "period_s": 0.4
+      "color": "#ff0000",
+      "color2": "#0033ff",
+      "period_s": 0.91
     }
   }
 }
