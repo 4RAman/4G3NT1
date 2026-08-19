@@ -1220,6 +1220,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             sweep_s=behavior.sweep_s,
             rounds=behavior.rounds,
             tolerance=behavior.tolerance,
+            segments=behavior.segments,
             reveal_s=behavior.reveal_s,
             # Asked, not assumed: a real button's gestures arrive a tap-window
             # late and an injected one arrives instantly, and scoring the

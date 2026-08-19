@@ -778,6 +778,11 @@ TEMPLATES.push({
       min: 0.5, max: 60, step: 0.5,
       hint: 'Slower is easier. Under about 2s the press delay starts to '
         + 'matter more than your aim does.' },
+    { key: 'segments', label: 'Places on the wheel', kind: 'number',
+      min: 0, max: 60, step: 1,
+      hint: 'Snaps the target and your guess to the same grid, so landing '
+        + 'anywhere in the right place counts. 0 = a smooth wheel, which is '
+        + 'far harder than it sounds.' },
     { key: 'tolerance', label: 'How close counts as a hit', kind: 'number',
       min: 0.01, max: 1, step: 0.01,
       hint: '0.08 = within 8% of the wheel. Below about 0.03 the radio, not '
@@ -793,7 +798,8 @@ TEMPLATES.push({
         + 'games is something the events table can plot.' },
   ],
   defaults: () => ({
-    sweep_s: 4, rounds: 5, tolerance: 0.08, reveal_s: 1.5, log_as: 'hotcold',
+    sweep_s: 4, rounds: 5, segments: 12, tolerance: 0.08, reveal_s: 1.5,
+    log_as: 'hotcold',
     ramp: HOTCOLD_RAMP.map((color, index) => ({
       color, at: index / (HOTCOLD_RAMP.length - 1),
     })),

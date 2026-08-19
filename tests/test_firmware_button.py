@@ -282,3 +282,36 @@ async def test_the_same_taps_are_a_double_when_nothing_counts_that_far(main):
         until=1.5,
     )
     assert codes == [main.protocol.DOUBLE_TAP, main.protocol.SHORT_PRESS]
+
+
+# --- when a gesture says it happened ---------------------------------------
+# Which gestures fire was covered above; *when* was not, and that is where a
+# 50 ms systematic error lived unnoticed. The host subtracts a known constant
+# (ButtonDevice.press_latency_s) to recover the moment the finger moved, so an
+# error here is one the host cannot see and cannot correct.
+
+
+async def test_a_press_is_dated_at_the_edge_not_at_the_debounce(main):
+    """Press down at 0.10 s: the short press must be emitted one double-tap
+    window after *that*, at 0.50 s - not at 0.55 s, a debounce later.
+
+    Asserted as a deadline rather than a timestamp because the harness sees
+    notifications, not clocks: at 0.52 s it must already have fired.
+    """
+    script = [(0.10, True), (0.20, False)]
+    assert await _run(main, script, until=0.52) == [protocol.SHORT_PRESS]
+
+
+async def test_it_has_not_fired_before_the_window_is_actually_up(main):
+    """The other side of the same clamp, so the test above cannot be satisfied
+    by simply firing early."""
+    script = [(0.10, True), (0.20, False)]
+    assert await _run(main, script, until=0.48) == []
+
+
+async def test_a_hold_is_measured_from_the_edge_too(main):
+    """One second of holding is one second from when the finger landed, so a
+    long press lands at 1.10 s rather than 1.15 s."""
+    script = [(0.10, True), (2.0, False)]
+    assert await _run(main, script, until=1.12) == [protocol.LONG_PRESS]
+    assert await _run(main, script, until=1.05) == []

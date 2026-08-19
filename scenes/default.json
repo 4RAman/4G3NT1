@@ -16,19 +16,7 @@
       },
       "short_press": {
         "action": "enter_mode",
-        "target": "Metronome"
-      },
-      "long_press": {
-        "action": "enter_mode",
-        "target": "Counter"
-      },
-      "double_tap": {
-        "action": "enter_mode",
-        "target": "Stopwatch"
-      },
-      "triple_tap": {
-        "action": "enter_mode",
-        "target": "Pomodoro"
+        "target": "Countdown 60s"
       }
     },
     {
@@ -68,11 +56,13 @@
         "WORKING": "Ponder",
         "RESTING": "Cops"
       },
-      "work_minutes": 0.1,
-      "break_minutes": 0.1,
-      "long_break_minutes": 15,
+      "work_s": 6,
+      "break_s": 6,
+      "long_break_s": 900,
       "blocks_before_long_break": 4,
-      "extend_minutes": 10,
+      "extend_s": 600,
+      "rounds": 0,
+      "lead_in_s": 3,
       "advance": "break_only",
       "log_as": "pomodoro",
       "waiting_style": "solid",
@@ -152,28 +142,28 @@
         "type": "manual"
       },
       "minutes": 1,
-      "label": "",
+      "label": "1min",
       "style": "flash",
       "period_s": 0.5,
       "ramp": [
         {
-          "color": "#ff0000",
+          "color": "#240000",
           "at": 0
         },
         {
-          "color": "#ff8800",
+          "color": "#703c00",
           "at": 0.2
         },
         {
-          "color": "#ffff00",
+          "color": "#999900",
           "at": 0.4
         },
         {
-          "color": "#00ffcc",
+          "color": "#00c79f",
           "at": 0.6
         },
         {
-          "color": "#0011ff",
+          "color": "#000cb8",
           "at": 0.8
         },
         {
@@ -184,8 +174,8 @@
       "ring_on_finish": true,
       "log_as": "countdown",
       "ladder": {
-        "enabled": false,
-        "tick_s": 0.5,
+        "enabled": true,
+        "tick_s": 1,
         "base": "#000000",
         "rungs": [
           {
@@ -194,15 +184,11 @@
           },
           {
             "every_s": 5,
-            "color": "#ffff00"
+            "color": "#00ffd5"
           },
           {
             "every_s": 2,
-            "color": "#66ccff"
-          },
-          {
-            "every_s": 1,
-            "color": "#0033aa"
+            "color": "#6689db"
           }
         ]
       }
@@ -231,6 +217,71 @@
       "chime": true,
       "cleared_event": "done test",
       "timeout_minutes": 1
+    },
+    {
+      "name": "Hot / Cold",
+      "template": "hotcold",
+      "activation": {
+        "type": "manual"
+      },
+      "sweep_s": 4,
+      "rounds": 5,
+      "tolerance": 0.08,
+      "reveal_s": 1.5,
+      "log_as": "hotcold",
+      "ramp": [
+        {
+          "color": "#0000ff",
+          "at": 0
+        },
+        {
+          "color": "#00ffff",
+          "at": 0.25
+        },
+        {
+          "color": "#00ff00",
+          "at": 0.5
+        },
+        {
+          "color": "#ffff00",
+          "at": 0.75
+        },
+        {
+          "color": "#ff0000",
+          "at": 1
+        }
+      ]
+    },
+    {
+      "name": "Reaction",
+      "template": "reaction",
+      "activation": {
+        "type": "manual"
+      },
+      "min_delay_s": 2,
+      "max_delay_s": 6,
+      "rounds": 5,
+      "slowest_ms": 600,
+      "reveal_s": 1.2,
+      "log_as": "reaction",
+      "ramp": [
+        {
+          "color": "#ff0000",
+          "at": 0
+        },
+        {
+          "color": "#ff8800",
+          "at": 0.3333333333333333
+        },
+        {
+          "color": "#ffff00",
+          "at": 0.6666666666666666
+        },
+        {
+          "color": "#00ff00",
+          "at": 1
+        }
+      ]
     }
   ],
   "led_palette": {

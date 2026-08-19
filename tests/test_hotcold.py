@@ -20,6 +20,7 @@ from aibutton.button import DOUBLE_WINDOW_S as LATENCY
 from aibutton.device import LEDState, MockDevice, TriggerType
 from aibutton.store import EventStore
 from aibutton.hotcold import (
+    snap,
     GUESS,
     LEAVE,
     NEXT,
@@ -333,3 +334,68 @@ async def test_a_fixed_round_count_ends_the_session_without_a_press(tmp_path):
         assert device.led_state is LEDState.IDLE
     finally:
         await _stop(task)
+
+
+# --- quantising the wheel --------------------------------------------------
+# A continuous wheel is far harder than it reads: a press is accurate to a few
+# tens of milliseconds against a four-second sweep, so the honest target is
+# about one percent of a turn.
+
+
+@pytest.mark.parametrize("phase,expected", [
+    (0.00, 1 / 24),          # start of the first place -> its centre
+    (1 / 24, 1 / 24),        # already the centre -> unchanged
+    (0.083, 1 / 24),         # just short of the boundary -> still the first
+    (1 / 12, 3 / 24),        # over it -> the second place
+    (0.999, 23 / 24),        # the last place, not wrapped to the first
+])
+def test_snapping_lands_on_the_centre_of_a_place(phase, expected):
+    assert snap(phase, 12) == pytest.approx(expected)
+
+
+def test_a_continuous_wheel_snaps_to_nothing():
+    assert snap(0.37, 0) == 0.37
+
+
+def test_anywhere_in_the_right_place_scores_the_same():
+    """The whole point: two presses that landed in the same place must score
+    identically, however far apart they were inside it.
+
+    Twelve places put a boundary exactly on 0.5, so the target here is 0.55 -
+    comfortably inside place 6, which spans 0.5 to 0.583."""
+    playing = game(segments=12, target=0.55, spun_at=0.0)
+    early, _ = step(playing, GUESS, now=0.51 * 4.0 + LATENCY)
+    late, _ = step(playing, GUESS, now=0.57 * 4.0 + LATENCY)
+    assert early.best == late.best == pytest.approx(1.0)
+    assert early.hits == late.hits == 1
+
+
+def test_a_boundary_is_a_boundary_and_the_grid_does_not_hide_that():
+    """Quantising moves where the edges are; it does not remove them. Two
+    presses 0.06 of a turn apart across a boundary are still different
+    answers, and pretending otherwise would just be a bigger tolerance."""
+    playing = game(segments=12, target=0.55, spun_at=0.0)
+    inside, _ = step(playing, GUESS, now=0.51 * 4.0 + LATENCY)
+    outside, _ = step(playing, GUESS, now=0.49 * 4.0 + LATENCY)
+    assert inside.hits == 1
+    assert outside.hits == 0
+
+
+def test_the_neighbouring_place_is_still_a_miss_at_the_default_tolerance():
+    """Quantising must not make the game free - one place either side is
+    0.167 apart normalised, comfortably outside a 0.08 tolerance."""
+    playing = game(segments=12, target=0.5, spun_at=0.0)
+    after, effects = step(playing, GUESS, now=(0.5 + 1 / 12) * 4.0 + LATENCY)
+    _, reveal = effects
+    assert not reveal.hit
+    assert after.hits == 0
+
+
+def test_a_smooth_wheel_still_behaves_exactly_as_it_did():
+    """segments: 0 is the old game, unchanged - this is the regression guard
+    for everyone who liked it hard."""
+    playing = game(segments=0, target=0.5, spun_at=0.0)
+    _, effects = step(playing, GUESS, now=2.0 + LATENCY)
+    score, reveal = effects
+    assert score == Score(pytest.approx(1.0))
+    assert reveal.hit

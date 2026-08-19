@@ -650,6 +650,12 @@ class HotColdBehavior:
 
     sweep_s: float = 4.0  # one full turn of the wheel
     rounds: int = 5  # 0 = keep dealing until you leave
+    # How many places the wheel has. A continuous wheel (0) turned out to be
+    # far harder than it reads on paper - a press is accurate to a few tens of
+    # milliseconds and the sweep is four seconds, so the honest target is about
+    # one percent of a turn. Twelve places makes "close enough" a real thing
+    # without making it free.
+    segments: int = 12
     tolerance: float = 0.08
     reveal_s: float = 1.5  # how long the answer stays up
     log_as: str = "hotcold"  # each guess logs its closeness as the value
@@ -1728,6 +1734,16 @@ def _parse_hotcold_body(raw: dict, where: str) -> HotColdBehavior:
         )
         rounds = defaults.rounds
 
+    segments = raw.get("segments", defaults.segments)
+    if not (
+        isinstance(segments, int) and not isinstance(segments, bool) and segments >= 0
+    ):
+        log.error(
+            "config: %s.segments must be a whole number >= 0 (0 = a smooth"
+            " wheel) - using %s", where, defaults.segments,
+        )
+        segments = defaults.segments
+
     # Bounded above by 1.0 because that is *half a turn* in the normalised
     # distance hotcold.distance returns - a tolerance of 1 already means every
     # guess is a hit, and anything beyond it is the same game with a number
@@ -1757,6 +1773,7 @@ def _parse_hotcold_body(raw: dict, where: str) -> HotColdBehavior:
     return HotColdBehavior(
         sweep_s=positive("sweep_s", defaults.sweep_s),
         rounds=rounds,
+        segments=segments,
         tolerance=float(tolerance),
         reveal_s=positive("reveal_s", defaults.reveal_s),
         log_as=log_as,
@@ -2427,6 +2444,7 @@ def _mode_to_dict(mode: Mode) -> dict:
     elif isinstance(mode.behavior, HotColdBehavior):
         entry["sweep_s"] = mode.behavior.sweep_s
         entry["rounds"] = mode.behavior.rounds
+        entry["segments"] = mode.behavior.segments
         entry["tolerance"] = mode.behavior.tolerance
         entry["reveal_s"] = mode.behavior.reveal_s
         entry["log_as"] = mode.behavior.log_as

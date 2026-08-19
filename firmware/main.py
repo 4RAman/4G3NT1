@@ -219,10 +219,21 @@ class ButtonPeripheral:
         """Debounce the pin, feed the detector, emit what comes out.
 
         Debounce is "the raw level has to hold for DEBOUNCE_S before it
-        counts", which rejects contact bounce without adding latency to a
-        clean press. on_timeout() is called every tick instead of scheduling
-        a timer - the detector no-ops until the double-tap window closes, so
-        polling it is both simpler and exactly as accurate.
+        counts", which rejects contact bounce. on_timeout() is called every
+        tick instead of scheduling a timer - the detector no-ops until the
+        double-tap window closes, so polling is both simpler and exactly as
+        accurate.
+
+        **A press is dated at the edge, not at the confirmation.** Waiting for
+        the level to hold is how we decide a press was real; it is not when it
+        happened. Stamping the confirmation instead put `DEBOUNCE_S` (50 ms)
+        of systematic error into every timestamp the host ever sees, which the
+        host cannot correct because it does not know it is there - it showed up
+        as a reaction timer that read ~50 ms slow for everybody.
+
+        With contact chatter the edge we date to is the *last* bounce before
+        the level settled, because nothing can tell us which bounce was the
+        finger. A clean press has exactly one edge and dates exactly right.
         """
         from machine import Pin
 
@@ -247,13 +258,16 @@ class ButtonPeripheral:
                 candidate_since = now
             elif raw != stable and (now - candidate_since) >= DEBOUNCE_S:
                 stable = raw
+                # `candidate_since`, not `now`: the edge is when it happened,
+                # the hold is only how we know it was real. See the docstring.
+                edge = candidate_since
                 if stable:
-                    press_t = now
+                    press_t = edge
                     hold_fired = False
-                    self._emit(self._detector.on_press(now))
+                    self._emit(self._detector.on_press(edge))
                 else:
                     press_t = None
-                    event, _deadline = self._detector.on_release(now)
+                    event, _deadline = self._detector.on_release(edge)
                     self._emit(event)
 
             # Long press fires while still held, not on release.

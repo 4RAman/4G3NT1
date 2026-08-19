@@ -94,6 +94,13 @@ class Game:
     rounds: int  # 0 = keep dealing until you leave
     tolerance: float
     reveal_s: float
+    # How many places on the wheel there are. 0 keeps the wheel continuous,
+    # which is what it was before and is *much* harder than it looks: a press
+    # is only ever accurate to a few tens of milliseconds, and against a smooth
+    # sweep that is a smaller slice than anyone can aim at. Quantising snaps
+    # both the target and the guess to the same grid, so landing anywhere in
+    # the right place counts as landing on it.
+    segments: int = 0
     latency_s: float = 0.0  # how late this device's gestures arrive
     target: float = 0.0  # 0..1, where on the wheel the hidden target sits
     spun_at: float = 0.0  # when the sweep effect went out
@@ -136,6 +143,20 @@ def closeness(phase: float, target: float) -> float:
     return 1.0 - distance(phase, target)
 
 
+def snap(phase: float, segments: int) -> float:
+    """The centre of the segment `phase` falls in, or `phase` unchanged when
+    the wheel is continuous.
+
+    Snapping to the *centre* rather than to the leading edge is what makes the
+    grid fair in both directions: aiming at a place and landing anywhere in it
+    scores identically, whether you were early or late.
+    """
+    if segments <= 0:
+        return phase
+    index = int((phase % 1.0) * segments) % segments
+    return (index + 0.5) / segments
+
+
 def summary(game: Game) -> str:
     if not game.played:
         return "hot/cold - no guesses"
@@ -161,9 +182,14 @@ def step(
         return replace(game, target=next_target, spun_at=now), (Spin(game.sweep_s),)
 
     if event == GUESS:
-        got = closeness(
-            phase_at(game.spun_at, now, game.sweep_s, game.latency_s), game.target
+        # Both sides go on the same grid, so a segment is compared with a
+        # segment. `tolerance` still means what it meant - how far off still
+        # counts - which on a quantised wheel decides whether the neighbouring
+        # places count too, and on a continuous one is the whole rule.
+        where = snap(
+            phase_at(game.spun_at, now, game.sweep_s, game.latency_s), game.segments
         )
+        got = closeness(where, snap(game.target, game.segments))
         hit = (1.0 - got) <= game.tolerance
         played = game.played + 1
         game = replace(
