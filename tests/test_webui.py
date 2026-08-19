@@ -387,3 +387,62 @@ async def test_dev_sound_serves_wav(client):
 
 async def test_dev_sound_unknown_404(client):
     assert (await client.get("/api/dev/sound/kazoo")).status_code == 404
+
+
+# --- the browser's own sound, and the integrations catalogue ----------------
+
+_INDEX_HTML = Path(__file__).resolve().parents[1] / "aibutton/web/index.html"
+
+
+def test_every_sound_preview_button_names_a_real_sound():
+    """The preview row is a mirrored table like any other: a button naming a
+    tone that does not exist would 404 silently, since playback deliberately
+    swallows its own errors."""
+    from aibutton.device import Sound
+
+    names = set(re.findall(r"data-sound=\"([^\"]+)\"", _INDEX_HTML.read_text(encoding="utf-8")))
+    assert names == {s.value for s in Sound}
+
+
+def test_the_page_plays_sound_outside_the_mock_only_branch():
+    """The point of the change: hearing what the buzzer just played is most
+    useful when the buzzer is real and in another room. If playSound() ends up
+    back inside `if (d.mock)`, this is the test that says so."""
+    source = _INDEX_HTML.read_text(encoding="utf-8")
+    mock_branch = source.index("virtual device panel (mock mode only)")
+    play_call = source.index("playSound(d.last_sound)")
+    closing = source.index("soundSeq = d.sound_seq;")
+    assert mock_branch < play_call < closing
+    # ...and the call sits after the mock block has been closed off.
+    assert "if (d.last_sound) $('#vsound')" in source[mock_branch:play_call]
+
+
+def test_every_integration_is_a_usable_webhook_template():
+    source = _SCHEMA_JS.read_text(encoding="utf-8")
+    block = source[source.index("export const INTEGRATIONS"):source.index("INTEGRATION_BY_ID")]
+    entries = re.findall(r"\bid: '([^']+)'", block)
+    urls = re.findall(r"\burl: '([^']+)'", block)
+    labels = re.findall(r"\blabel: '([^']+)'", block)
+    assert len(entries) == len(urls) == len(labels) >= 6
+    assert len(set(entries)) == len(entries), "integration ids must be unique"
+    for url in urls:
+        assert url.startswith(("http://", "https://")), url
+        # Every template must be obviously unfinished: one that looked like a
+        # working URL would be pasted into a mode and quietly POST nowhere.
+        assert "YOUR_" in url or "EVENT_NAME" in url or "REGION" in url, url
+
+
+def test_the_integration_picker_is_an_inserter_not_a_stored_field():
+    """`integration` is deliberately unknown to the parser, so it is dropped on
+    save. If it ever becomes a real config key, this test should be the thing
+    that makes someone argue for it."""
+    from aibutton.config import WebhookAction, parse_config
+
+    cfg = parse_config({"modes": [{
+        "name": "Desk", "template": "actions", "activation": {"type": "always"},
+        "short_press": {"action": "webhook", "url": "https://example.test/x",
+                        "integration": "slack"},
+    }]})
+    action = next(m for m in cfg.modes if m.name == "Desk").behavior.actions["short_press"]
+    assert isinstance(action, WebhookAction)
+    assert not hasattr(action, "integration")

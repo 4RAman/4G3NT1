@@ -40,6 +40,7 @@ import asyncio
 import contextlib
 import logging
 import math
+import random
 import signal
 import sys
 import time
@@ -47,7 +48,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import ladder, ramp
+from . import hotcold, ladder, ramp, reaction
 from .device import (
     SAFE_MIN_PERIOD_S,
     STYLE_USES_COLOR,
@@ -100,6 +101,14 @@ _COUNTDOWN_COLOR_STEP = 4
 # How slowly a reminder breathes when it has no look of its own. Slow enough
 # to be obviously not the alarm's flash, which is the whole distinction.
 _REMINDER_PERIOD_S = 2.0
+
+# The reaction timer's two non-ramp colours. Dark is deliberately not *off*:
+# a button that has gone black is indistinguishable from a button that has
+# crashed, and the whole game is spent staring at it waiting for something to
+# happen. The false-start red is bright enough to be obviously a verdict
+# rather than the go signal arriving.
+_REACTION_DARK = "#050515"
+_REACTION_FALSE_START = "#ff0033"
 
 
 def metronome_flash(
@@ -265,10 +274,14 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         CountdownBehavior,
         CounterBehavior,
         EnterModeAction,
+        HotColdBehavior,
         LauncherBehavior,
+        LedEffect,
         MetronomeBehavior,
         PomodoroBehavior,
+        ReactionBehavior,
         ReminderBehavior,
+        SignalBehavior,
         StopwatchBehavior,
         bound_triggers,
         flash_safe,
@@ -758,21 +771,51 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         working = True  # which half of the cycle we are in
         paused = False
         pending = False  # a block has ended and is waiting for a gesture
-        remaining = behavior.work_minutes * 60
+        # A "get ready" pause before the first block. It counts down like a
+        # phase but is not one - nothing is logged and no block is credited,
+        # which is why it is a flag rather than a third value of `working`.
+        leading = behavior.lead_in_s > 0
+        remaining = behavior.lead_in_s if leading else behavior.work_s
         deadline = loop.time() + remaining
 
         def phase_label() -> str:
+            if leading:
+                return "get ready"
             if pending:
                 return "ready for the next block" if working else "ready for a break"
             return "focus" if working else "break"
 
         def show() -> None:
+            state = LEDState.WORKING if working else LEDState.RESTING
+            if leading:
+                # The work phase's colour, frozen - the lead-in is about the
+                # block that is coming, so wearing its colour is what tells you
+                # which one. Same trick as paused/pending below.
+                base = base_look(state)
+                set_led(state, replace(base, style=behavior.waiting_style)
+                        if base is not None else None)
+                set_status("WORKING")
+                status.last_message = (
+                    f"{mode_name}: get ready - "
+                    f"{_fmt_elapsed(max(0.0, deadline - loop.time()))}"
+                )
+                return
             if paused or pending:
-                # A distinct "waiting on you" colour, rather than a phase
-                # colour that would imply the timer is still running.
-                set_led(LEDState.LISTENING)
+                # The same phase's colour - the mode's own look if it named
+                # one, else the palette entry - frozen into waiting_style
+                # instead of its usual animation. Not LISTENING: that is the
+                # button's global "your press registered" state, edited once
+                # in the Lights tab, and a Pomodoro does not own it (see
+                # MODE_LED_STATES) - which is exactly why it used to override
+                # whatever look this mode had chosen.
+                base = base_look(state)
+                effect = (
+                    replace(base, style=behavior.waiting_style)
+                    if base is not None else None
+                )
+                set_led(state, effect)
             else:
-                set_led(LEDState.WORKING if working else LEDState.RESTING)
+                set_led(state)
             set_status("WORKING" if working else "RESTING")
             left = max(0.0, deadline - loop.time()) if not (paused or pending) else remaining
             status.last_message = (
@@ -782,17 +825,17 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             )
 
         def start_phase(work: bool) -> None:
-            nonlocal working, remaining, deadline, paused, pending
+            nonlocal working, remaining, deadline, paused, pending, leading
             working = work
             if work:
-                minutes = behavior.work_minutes
+                seconds = behavior.work_s
             elif completed and completed % behavior.blocks_before_long_break == 0:
-                minutes = behavior.long_break_minutes
+                seconds = behavior.long_break_s
             else:
-                minutes = behavior.break_minutes
-            remaining = minutes * 60
+                seconds = behavior.break_s
+            remaining = seconds
             deadline = loop.time() + remaining
-            paused = pending = False
+            paused = pending = leading = False
 
         def summary(suffix: str = "") -> ActionResult:
             text = f"{completed} block(s), {_fmt_elapsed(focused_s)} focused"
@@ -805,7 +848,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             # --demo is unattended: log one block so the path is exercised,
             # then leave rather than sitting here for 25 minutes.
             store.log_event(behavior.log_as, mode=mode_name)
-            completed, focused_s = 1, behavior.work_minutes * 60
+            completed, focused_s = 1, behavior.work_s
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             return summary(" (demo)")
 
@@ -820,12 +863,24 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 return summary(" (shutdown)")
 
             if trigger is None:
+                if leading:
+                    # The lead-in ran out: nothing is credited, the first block
+                    # just begins.
+                    play_sound(Sound.ACK)
+                    start_phase(True)
+                    show()
+                    continue
                 # The block ran out.
                 if working:
                     completed += 1
-                    focused_s += behavior.work_minutes * 60
+                    focused_s += behavior.work_s
                     store.log_event(behavior.log_as, mode=mode_name)
                     play_sound(Sound.SUCCESS)
+                    if behavior.rounds and completed >= behavior.rounds:
+                        # A counted session ends itself. Checked after the
+                        # block is logged, so the last round counts exactly
+                        # like the ones before it.
+                        return summary(" - session complete")
                 else:
                     play_sound(Sound.ACK)
                 next_is_work = not working
@@ -863,7 +918,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 completed = completed_before  # a restart is not a rewind
                 play_sound(Sound.ACK)
             elif command == "extend":
-                added = behavior.extend_minutes * 60
+                added = behavior.extend_s
                 if paused or pending:
                     remaining += added
                     if pending:  # extending a finished block resumes it
@@ -1144,13 +1199,329 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         # one rather than growing a second copy of that loop.
         return await ring_alarm(AlarmBehavior(message=f"{label} finished"), mode_name)
 
+    async def run_hotcold(behavior: HotColdBehavior, mode_name: str) -> ActionResult:
+        """Hot/Cold: a hue wheel spins, a press stops it, the light says how
+        close you got to a target only the button knows.
+
+        **This loop deliberately holds no game state.** Everything about what a
+        press means lives in [hotcold.py](hotcold.py) as a pure step function,
+        and what is left here is the part that genuinely cannot be pure: a
+        clock, a queue, a radio, a die roll and a database. That is the split
+        ROADMAP Stage 3 is heading for, written that way now because a loop
+        shaped like this ports and a loop that reasons about the game does not.
+
+        One radio write per round, not per frame: the wheel is a single
+        `rainbow` effect and the host works out where it has got to
+        arithmetically (see hotcold.phase_at), which is the only reason a
+        stop-the-spinner game is possible over a fire-and-forget link.
+        """
+        loop = asyncio.get_running_loop()
+        game = hotcold.Game(
+            sweep_s=behavior.sweep_s,
+            rounds=behavior.rounds,
+            tolerance=behavior.tolerance,
+            reveal_s=behavior.reveal_s,
+            # Asked, not assumed: a real button's gestures arrive a tap-window
+            # late and an injected one arrives instantly, and scoring the
+            # second as if it were the first puts every guess 0.4 s of wheel
+            # away from where the player aimed.
+            latency_s=device.press_latency_s,
+        )
+        # LISTENING is the state byte and it is honest - the button is waiting
+        # for you to press - but every look below is pushed explicitly, so what
+        # the palette says about LISTENING never shows. Same bargain the
+        # launcher makes: the state is for the status line and for a device too
+        # old for effects.
+        base = base_look(LEDState.LISTENING)
+
+        def render(effects, state: hotcold.Game) -> str | None:
+            """Turn what the game asked for into light, sound and rows.
+
+            Returns the closing message if the session ended, else None.
+            """
+            leaving = None
+            for effect in effects:
+                if isinstance(effect, hotcold.Spin):
+                    if base is not None:
+                        # White rather than the palette's colour: `rainbow`
+                        # reads its brightest channel as brightness, so
+                        # borrowing LISTENING's entry would let an unrelated
+                        # setting quietly dim the game.
+                        set_led(LEDState.LISTENING, replace(
+                            base, style="rainbow", color="#ffffff",
+                            period_s=effect.period_s,
+                        ))
+                    round_no = state.played + 1
+                    of = f"/{state.rounds}" if state.rounds else ""
+                    status.last_message = f"round {round_no}{of} - stop the wheel"
+                elif isinstance(effect, hotcold.Reveal):
+                    if base is not None:
+                        set_led(LEDState.LISTENING, replace(
+                            base, style="solid",
+                            color=ramp.color_at(behavior.ramp, effect.closeness),
+                        ))
+                    play_sound(Sound.SUCCESS if effect.hit else Sound.ACK)
+                    got = round(effect.closeness * 100)
+                    status.last_message = (
+                        f"{got}% - on target!" if effect.hit else f"{got}%"
+                    )
+                elif isinstance(effect, hotcold.Score):
+                    # The closeness goes in the value column, so a run of
+                    # games is something /api/events can actually plot.
+                    store.log_event(
+                        behavior.log_as, mode=mode_name,
+                        value=round(effect.closeness * 100, 1),
+                    )
+                elif isinstance(effect, hotcold.Leave):
+                    leaving = effect.message
+            return leaving
+
+        set_status("HOTCOLD")
+        status.last_mode = mode_name
+        game, effects = hotcold.step(
+            game, hotcold.START, loop.time(), random.random()
+        )
+        render(effects, game)
+
+        if args.demo:
+            # --demo is unattended: nothing will ever be guessed.
+            await asyncio.sleep(_SUCCESS_DISPLAY_S)
+            return ActionResult(True, f"hot/cold (demo: {behavior.sweep_s:g}s wheel)")
+
+        while True:
+            trigger = await _wait_for_trigger(device.events, stop)
+            if trigger is None or trigger is TriggerType.LONG_PRESS:
+                game, effects = hotcold.step(game, hotcold.LEAVE, loop.time())
+                message = render(effects, game) or hotcold.summary(game)
+                return ActionResult(True, message + ("" if trigger else " (shutdown)"))
+
+            # short press / double tap - the wheel stops here
+            game, effects = hotcold.step(game, hotcold.GUESS, loop.time())
+            ended = render(effects, game)
+
+            # Hold the answer up long enough to read it. A press during that is
+            # discarded: it was aimed at a wheel that had already stopped. The
+            # long press is the exception, because "up one level" has to work
+            # from anywhere or it is not a rule people can trust.
+            until = loop.time() + behavior.reveal_s
+            leaving = False
+            while (left := until - loop.time()) > 0:
+                during = await _wait_for_trigger(device.events, stop, timeout=left)
+                if stop.is_set():
+                    return ActionResult(True, f"{hotcold.summary(game)} (shutdown)")
+                if during is TriggerType.LONG_PRESS:
+                    leaving = True
+                    break
+
+            if ended is not None:
+                return ActionResult(True, ended)
+            if leaving:
+                game, effects = hotcold.step(game, hotcold.LEAVE, loop.time())
+                return ActionResult(True, render(effects, game) or hotcold.summary(game))
+
+            game, effects = hotcold.step(
+                game, hotcold.NEXT, loop.time(), random.random()
+            )
+            render(effects, game)
+
+    async def run_reaction(behavior: ReactionBehavior, mode_name: str) -> ActionResult:
+        """Reaction timer: the light goes out, comes back without warning, and
+        the time until you press is logged.
+
+        Same split as run_hotcold - the rules are pure in
+        [reaction.py](reaction.py) and what is here is the clock, the queue,
+        the die roll and the database. The one thing worth reading that module
+        for before believing a number: the multi-tap window is corrected for
+        and the radio's one-way latency is not, so these times compare with
+        each other rather than with a stopwatch.
+        """
+        loop = asyncio.get_running_loop()
+        game = reaction.Game(
+            rounds=behavior.rounds,
+            reveal_s=behavior.reveal_s,
+            # See run_hotcold: without this a simulated press reads as having
+            # happened before the light did, and every attempt is a false start.
+            latency_s=device.press_latency_s,
+        )
+        base = base_look(LEDState.LISTENING)
+        # None once the light is on: it doubles as "how long until the go
+        # signal" and as "are we still waiting", which is the only piece of
+        # state the driver needs to carry.
+        armed_for: float | None = None
+
+        def delay() -> float:
+            return random.uniform(behavior.min_delay_s, behavior.max_delay_s)
+
+        def show(color: str) -> None:
+            if base is not None:
+                set_led(LEDState.LISTENING, replace(base, style="solid", color=color))
+
+        def render(effects, state: reaction.Game) -> str | None:
+            nonlocal armed_for
+            leaving = None
+            for effect in effects:
+                if isinstance(effect, reaction.Arm):
+                    armed_for = effect.delay_s
+                    show(_REACTION_DARK)
+                    status.last_message = "wait for it..."
+                elif isinstance(effect, reaction.Go):
+                    armed_for = None
+                    # A brightness jump rather than a hue change: it is the
+                    # fastest thing an eye picks up, and the point of the
+                    # signal is to be seen, not to be identified.
+                    show("#ffffff")
+                    status.last_message = "press!"
+                elif isinstance(effect, reaction.Result):
+                    if effect.false_start:
+                        show(_REACTION_FALSE_START)
+                        play_sound(Sound.ERROR)
+                        status.last_message = "too early"
+                    else:
+                        ms = effect.ms or 0.0
+                        # Walked by how well you did, so the good end of the
+                        # ramp is the far end. Anything slower than slowest_ms
+                        # is still logged honestly, it just pins the colour.
+                        good = 1.0 - min(1.0, ms / behavior.slowest_ms)
+                        show(ramp.color_at(behavior.ramp, good))
+                        play_sound(Sound.SUCCESS)
+                        # `state` is the game *after* the step, so best_ms is
+                        # already this attempt if this attempt was the best.
+                        # The played>1 guard stops the first one crowing.
+                        beat_it = state.played > 1 and ms <= (state.best_ms or ms)
+                        status.last_message = f"{round(ms)} ms{' - best yet' if beat_it else ''}"
+                elif isinstance(effect, reaction.Score):
+                    store.log_event(
+                        behavior.log_as, mode=mode_name, value=round(effect.ms, 1)
+                    )
+                elif isinstance(effect, reaction.Leave):
+                    leaving = effect.message
+            return leaving
+
+        set_status("REACTION")
+        status.last_mode = mode_name
+        game, effects = reaction.step(game, reaction.START, loop.time(), delay())
+        render(effects, game)
+
+        if args.demo:
+            # --demo is unattended: nobody is going to react to anything.
+            await asyncio.sleep(_SUCCESS_DISPLAY_S)
+            return ActionResult(True, "reaction (demo: no attempts)")
+
+        while True:
+            trigger = await _wait_for_trigger(device.events, stop, timeout=armed_for)
+            if stop.is_set():
+                return ActionResult(True, f"{reaction.summary(game)} (shutdown)")
+            if trigger is None:
+                if armed_for is None:  # not a timeout - we are shutting down
+                    return ActionResult(True, f"{reaction.summary(game)} (shutdown)")
+                # The wait elapsed with nothing pressed: light up, clock starts.
+                game, effects = reaction.step(game, reaction.GO, loop.time())
+                render(effects, game)
+                continue
+
+            if trigger is TriggerType.LONG_PRESS:
+                game, effects = reaction.step(game, reaction.LEAVE, loop.time())
+                return ActionResult(True, render(effects, game) or reaction.summary(game))
+
+            game, effects = reaction.step(game, reaction.PRESS, loop.time())
+            ended = render(effects, game)
+
+            # Hold the result up long enough to read, discarding presses aimed
+            # at it - the long press excepted, because "up one level" has to
+            # work from anywhere.
+            until = loop.time() + behavior.reveal_s
+            leaving = False
+            while (left := until - loop.time()) > 0:
+                during = await _wait_for_trigger(device.events, stop, timeout=left)
+                if stop.is_set():
+                    return ActionResult(True, f"{reaction.summary(game)} (shutdown)")
+                if during is TriggerType.LONG_PRESS:
+                    leaving = True
+                    break
+
+            if ended is not None:
+                return ActionResult(True, ended)
+            if leaving:
+                game, effects = reaction.step(game, reaction.LEAVE, loop.time())
+                return ActionResult(True, render(effects, game) or reaction.summary(game))
+
+            game, effects = reaction.step(game, reaction.NEXT, loop.time(), delay())
+            render(effects, game)
+
+    async def run_signal(behavior: SignalBehavior, mode_name: str) -> ActionResult:
+        """A signal light: short press moves to the next position and stays
+        there, long press leaves, double tap re-sends where it already is.
+
+        **Entering is not a change.** It shows `start_at` without firing that
+        position's message, because walking up to your own desk should not
+        announce anything - the first *press* is the first announcement. The
+        re-send on double tap is there for the case that follows from it: the
+        receiving end missed one, or was not running yet.
+
+        This loop holds the button for as long as it is showing, which is the
+        "one foreground app" decision (TODO 15) made visible. Long press is
+        how you get the button back.
+        """
+        states = behavior.states
+        index = min(behavior.start_at, len(states) - 1)
+
+        async def announce(state) -> str:
+            """Light the position, and send whatever it carries."""
+            look = LedEffect(style=state.style, color=state.color)
+            set_led(LEDState.LISTENING, look)
+            status.last_message = f"{state.name} ({index + 1}/{len(states)})"
+            if state.action is None:
+                return state.name
+            # Reusing execute() is the whole reason this template is cheap:
+            # webhook, OSC and log all already work here, and so will the next
+            # primitive anyone adds.
+            result = await execute(
+                state.action, trigger="signal", mode_name=mode_name, store=store,
+            )
+            if not result.ok:
+                # A failed send must not strand the light on the old colour -
+                # the button has moved, and saying so is more honest than
+                # pretending the position did not change.
+                log.warning("signal %r: %s", mode_name, result.message)
+                status.last_message = f"{state.name} - {result.message}"
+            return state.name
+
+        set_status("SIGNAL")
+        status.last_mode = mode_name
+        current = states[index]
+        set_led(LEDState.LISTENING, LedEffect(
+            style=current.style, color=current.color,
+        ))
+        status.last_message = f"{current.name} ({index + 1}/{len(states)})"
+
+        if args.demo:
+            await asyncio.sleep(_SUCCESS_DISPLAY_S)
+            return ActionResult(True, f"signal (demo: on {current.name})")
+
+        while True:
+            trigger = await _wait_for_trigger(device.events, stop)
+            if trigger is None:
+                return ActionResult(True, f"signal left on {states[index].name} (shutdown)")
+            if trigger is TriggerType.LONG_PRESS:
+                return ActionResult(True, f"signal left on {states[index].name}")
+            if trigger is TriggerType.DOUBLE_TAP:
+                await announce(states[index])  # same position, sent again
+                continue
+            index = (index + 1) % len(states)
+            name = await announce(states[index])
+            if behavior.log_as:
+                store.log_event(behavior.log_as, mode=mode_name, value=index)
+            status.last_ok = True
+            log.info("signal %r -> %s", mode_name, name)
+
     # Every takeover behaviour, for the two places that ask "is this a mode a
     # gesture can start". One tuple rather than two isinstance chains that
     # drift apart - the launcher made that a real risk, since it is the first
     # thing that both *is* a takeover and *chooses* one.
     TAKEOVER_BEHAVIORS = (
         AlarmBehavior, StopwatchBehavior, CounterBehavior, PomodoroBehavior,
-        MetronomeBehavior, CountdownBehavior, LauncherBehavior,
+        MetronomeBehavior, CountdownBehavior, LauncherBehavior, HotColdBehavior,
+        ReactionBehavior, SignalBehavior,
     )
 
     def app_look(target):
@@ -1306,6 +1677,12 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                     result = await run_metronome(mode.behavior, mode.name)
                 elif isinstance(mode.behavior, CountdownBehavior):
                     result = await run_countdown(mode.behavior, mode.name)
+                elif isinstance(mode.behavior, HotColdBehavior):
+                    result = await run_hotcold(mode.behavior, mode.name)
+                elif isinstance(mode.behavior, ReactionBehavior):
+                    result = await run_reaction(mode.behavior, mode.name)
+                elif isinstance(mode.behavior, SignalBehavior):
+                    result = await run_signal(mode.behavior, mode.name)
                 else:
                     result = ActionResult(
                         False, f"mode {mode.name!r} is not a takeover mode"

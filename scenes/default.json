@@ -28,7 +28,7 @@
       },
       "triple_tap": {
         "action": "enter_mode",
-        "target": "Countdown 60s"
+        "target": "Pomodoro"
       }
     },
     {
@@ -64,13 +64,18 @@
       "activation": {
         "type": "manual"
       },
-      "work_minutes": 0.3,
+      "looks": {
+        "WORKING": "Ponder",
+        "RESTING": "Cops"
+      },
+      "work_minutes": 0.1,
       "break_minutes": 0.1,
       "long_break_minutes": 15,
       "blocks_before_long_break": 4,
       "extend_minutes": 10,
-      "advance": "auto",
+      "advance": "break_only",
       "log_as": "pomodoro",
+      "waiting_style": "solid",
       "short_press": "toggle",
       "long_press": "exit",
       "double_tap": "extend"
@@ -110,23 +115,6 @@
       "max_bpm": 600,
       "sound_on_tap": true,
       "log_as": "metronome"
-    },
-    {
-      "name": "Pomodoro 2",
-      "template": "pomodoro",
-      "activation": {
-        "type": "manual"
-      },
-      "work_minutes": 25,
-      "break_minutes": 5,
-      "long_break_minutes": 15,
-      "blocks_before_long_break": 4,
-      "extend_minutes": 10,
-      "advance": "auto",
-      "log_as": "pomodoro",
-      "short_press": "toggle",
-      "long_press": "exit",
-      "double_tap": "extend"
     },
     {
       "name": "Counter",
@@ -218,12 +206,37 @@
           }
         ]
       }
+    },
+    {
+      "name": "Test Reminder",
+      "template": "reminders",
+      "activation": {
+        "type": "schedule",
+        "at": "12:45",
+        "days": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri",
+          "sat",
+          "sun"
+        ]
+      },
+      "looks": {
+        "ALERT": "Cops"
+      },
+      "message": "Testing testing 123",
+      "label": "test",
+      "chime": true,
+      "cleared_event": "done test",
+      "timeout_minutes": 1
     }
   ],
   "led_palette": {
     "IDLE": {
       "style": "rainbow",
-      "color": "#030303",
+      "color": "#1a1a1a",
       "color2": "#00fbff",
       "period_s": 7.66
     },

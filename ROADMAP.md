@@ -8,7 +8,7 @@ history — the two transitions that got the code to its current shape.
 [TODO.md](TODO.md) is the current sprint. [CLAUDE.md](CLAUDE.md) is how to
 write code here.
 
-**Where we are: Stage 2.** The hardware works, the mode machine works, six
+**Where we are: Stage 2.** The hardware works, the mode machine works, twelve
 templates ship, the suite is green with no hardware attached.
 
 ---
@@ -108,7 +108,10 @@ config. The remaining piece of work is host-side and is two things, not three.
 
 ### Stage 2 exit gates
 
-- [ ] **10 apps**, verified end-to-end on real hardware (TODO items 2, 7)
+- [ ] **10 apps**, verified end-to-end on real hardware (TODO items 2, 7) —
+      **built** (TODO 7 ✔: Hot/Cold, Reaction and Signal took it to ten), and
+      eight of the ten are verified. The three new ones have not met the
+      hardware yet, which is all this gate is still waiting on
 - [x] **A launcher**, so all 10 are reachable without the web UI — one
       gesture opens a menu that cycles every installed app in its own
       colour. Long press means "up one level" throughout, so leaving an app
@@ -224,10 +227,20 @@ buys four things at once:
   way to touch the world (see **D2**);
 - adding an app stops touching the core, which is the Stage-3 exit gate.
 
-Migrate the existing eight takeover templates onto it one at a time, keeping
+Migrate the existing eleven takeover templates onto it one at a time, keeping
 the tests. `launcher` is the honest canary now: it is the one template that
 chooses *another* app, so whatever the runtime does about one app starting
 another has to express it.
+
+**Two of them are already in this shape and are worth copying from.**
+[hotcold.py](aibutton/hotcold.py) and [reaction.py](aibutton/reaction.py) are
+pure `step(state, event, now)` functions over a small closed effect set, with
+the `run_*` loops reduced to drivers that own the clock, the queue, the die
+roll and the store. They were written that way deliberately, as the canary for
+this stage rather than as a game-specific flourish — including the detail that
+randomness is *passed in* so `step` stays a total function checkable against a
+table. Whatever the manifest format turns out to be, those two should need a
+manifest and nothing else.
 
 ### 3b — One manifest, served
 
@@ -439,9 +452,14 @@ worth starting before anything else.
 Elevated from [TODO.md](TODO.md)'s parking lot, with the reason each is
 parked:
 
-- **WiFi transport** — would remove the host-awake constraint, but D1 may
-  remove it more thoroughly. Don't build a transport before deciding where
-  the brain lives.
+- **WiFi transport** — the old reason to park this ("don't build a transport
+  before deciding where the brain lives") has expired: **D1 is decided.** It is
+  still parked, for a better reason. While the host owns the brain, WiFi is a
+  second way to do what BLE already does and has to share one radio with a live
+  link. After the runtime moves onto the device the button needs *occasional
+  sync*, which is WiFi's good case and has no coexistence problem at all. Same
+  feature, expensive now and natural later. Trigger conditions and the power /
+  RAM numbers it waits on are [TODO.md](TODO.md) item **21**.
 - **Offline press buffering** — needs a time sync, and is a subset of D1.
 - **Phone app** — the REST API already supports it; it's a Stage 3/4
   deliverable once D1 says what the phone actually *is* (a host, or a remote

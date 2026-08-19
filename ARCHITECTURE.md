@@ -133,8 +133,7 @@ interpreted       identically by the device runtime and the host runtime
 
 ### Is that enough power? Test it against what already ships
 
-The honest way to decide this is to check the eight takeover templates that
-exist, not
+The honest way to decide this is to check the templates that exist, not
 to argue from taste.
 
 | App | State it keeps | What the runtime must therefore have |
@@ -146,6 +145,19 @@ to argue from taste.
 | `pomodoro` | phase, block count, remaining, paused/pending | **modulo arithmetic** (`completed % blocks_before_long_break`), boolean conditions, a *pausable* countdown |
 | `metronome` | ring of 8 tap timestamps | **bounded buffer, float mean, and a computed effect parameter** (LED period = f(BPM)) |
 | launcher *(0a)* | selected index | enumerate installed apps, enter by index — *privileged* |
+| `signal` | selected index | as above, minus the privilege: land on a position, fire its effect |
+| `hotcold` | target, spin start, tallies | **float modulo** (where the wheel is), a ramp lookup, and *the press timestamp as an input* |
+| `reaction` | when the light came on, tallies | subtraction against the same timestamp, plus a randomised one-shot timer |
+
+The two games were written as pure `step(state, event, now)` functions against
+this design rather than despite it, and they turned up one requirement the
+table above had not stated: **an app must be able to read when a gesture
+happened, not merely that it did.** Both correct for the multi-tap window
+before they do anything else, and neither can be expressed at all if the event
+is a bare symbol. Randomness is the other one, and it stays *injected* rather
+than callable — an app that could roll its own dice would no longer be
+checkable against a table, which is most of what "bounded by construction"
+is for.
 
 `metronome` is the stress case and it's the one that settles the design: a
 static transition table cannot express "average the last eight intervals and

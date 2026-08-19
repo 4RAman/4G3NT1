@@ -40,6 +40,7 @@ export const DAYS = [
 // for an `enter_mode` action. Mirrors each template's `nature: 'takeover'`.
 const TAKEOVER_TEMPLATES = new Set([
   'alarm', 'reminders', 'stopwatch', 'counter', 'pomodoro', 'metronome', 'countdown',
+  'hotcold', 'reaction', 'signal',
   // A launcher is a takeover, so a gesture can reach it - but it is never a
   // valid `enter_mode` *target* offered by another launcher (see
   // launcher_targets in main.py). That exclusion lives host-side because it
@@ -55,6 +56,20 @@ const COUNTDOWN_RAMP = [
   '#ff0000', '#ff8800', '#ffff00', '#00ff00', '#4b0082', '#8f00ff',
 ];
 
+// Cold to hot, for Hot/Cold's "how close were you" flash. Mirrors
+// _default_hotcold_ramp() in config.py. Five stops rather than two because the
+// blend is a straight RGB lerp, and blue straight to red goes through a grey
+// that reads as the light having given up.
+const HOTCOLD_RAMP = [
+  '#0000ff', '#00ffff', '#00ff00', '#ffff00', '#ff0000',
+];
+
+// Sluggish to sharp, for the reaction timer. Mirrors
+// _default_reaction_ramp() in config.py. Walked by how *well* you did rather
+// than by how long you took, which is why green is at the far end here and
+// red is at the far end of the countdown's.
+const REACTION_RAMP = ['#ff0000', '#ff8800', '#ffff00', '#00ff00'];
+
 // What a gesture can be bound to inside a running Pomodoro. Mirrors
 // POMODORO_COMMANDS in config.py; '' means the gesture does nothing.
 const POMODORO_COMMANDS = [
@@ -65,6 +80,109 @@ const POMODORO_COMMANDS = [
   { value: 'skip', label: 'Skip to the next block' },
   { value: 'exit', label: 'Leave the Pomodoro' },
 ];
+
+// Named services the webhook action can be pointed at, offered as a
+// "start from" picker above the URL field.
+//
+// **They are all the same action.** Every entry here is a `webhook` with its
+// URL shape and payload pre-filled - there is no per-brand code, no SDK and no
+// dependency, which is exactly why a list like this is affordable at all. The
+// button gets to look like it integrates with eight services because the
+// services all agreed on HTTP POST years ago.
+//
+// Two honest caveats, both stated in the hints rather than hidden:
+//
+//   - Hosts drift. Make has regional subdomains, n8n and Home Assistant are
+//     wherever you put them. Every template carries obvious YOUR_ tokens and
+//     none of them is a working URL until you paste yours in.
+//   - This is the one place the button talks to the outside world on purpose.
+//     ROADMAP's "nothing is extracted from the user" is a promise about the
+//     *product* not phoning home; a webhook you configured is your own call,
+//     and it is worth knowing it leaves the machine.
+//
+// **MCP is deliberately not here.** It is not webhook-shaped: an MCP server is
+// something a model calls *into*, so it would mean the button exposing a
+// server over its own event log and config, not making a request. That is the
+// parked "second control surface" item in TODO.md's parking lot, and putting a
+// broken entry in this list would be worse than leaving it out.
+export const INTEGRATIONS = [
+  {
+    id: 'ifttt',
+    label: 'IFTTT',
+    blurb: 'Webhooks applet - one event name per applet.',
+    url: 'https://maker.ifttt.com/trigger/EVENT_NAME/with/key/YOUR_KEY',
+    payload: { value1: '', value2: '', value3: '' },
+    hint: 'From IFTTT: Create -> Webhooks -> "Receive a web request". The '
+      + 'three value1/2/3 fields are the only ones applets can read.',
+  },
+  {
+    id: 'make',
+    label: 'Make',
+    blurb: 'Custom webhook trigger (was Integromat).',
+    url: 'https://hook.REGION.make.com/YOUR_WEBHOOK_ID',
+    payload: {},
+    hint: 'Copy the whole URL from the Custom Webhook module - the region '
+      + 'part differs per account, so do not hand-type it.',
+  },
+  {
+    id: 'zapier',
+    label: 'Zapier',
+    blurb: 'Catch Hook trigger.',
+    url: 'https://hooks.zapier.com/hooks/catch/YOUR_ID/YOUR_HOOK/',
+    payload: {},
+    hint: 'Zapier reads whatever JSON arrives, so the trigger/mode/ts fields '
+      + 'the button adds are usable as Zap fields with no extra payload.',
+  },
+  {
+    id: 'home_assistant',
+    label: 'Home Assistant',
+    blurb: 'Webhook trigger on a local automation.',
+    url: 'http://homeassistant.local:8123/api/webhook/YOUR_WEBHOOK_ID',
+    payload: {},
+    hint: 'Local and needs no token - a webhook trigger is deliberately '
+      + 'unauthenticated, so treat the ID as the secret.',
+  },
+  {
+    id: 'n8n',
+    label: 'n8n',
+    blurb: 'Webhook node, self-hosted or cloud.',
+    url: 'https://YOUR_HOST/webhook/YOUR_PATH',
+    payload: {},
+    hint: 'Use the Production URL, not the Test URL - the test one only '
+      + 'listens while you have the editor open.',
+  },
+  {
+    id: 'slack',
+    label: 'Slack',
+    blurb: 'Incoming webhook, posts a message.',
+    url: 'https://hooks.slack.com/services/YOUR_TEAM/YOUR_CHANNEL/YOUR_TOKEN',
+    payload: { text: 'Button pressed' },
+    hint: 'Slack only reads "text" here; the other fields ride along and are '
+      + 'ignored.',
+  },
+  {
+    id: 'discord',
+    label: 'Discord',
+    blurb: 'Channel webhook, posts a message.',
+    url: 'https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN',
+    payload: { content: 'Button pressed' },
+    hint: 'Discord only reads "content" here. Server Settings -> Integrations '
+      + '-> Webhooks.',
+  },
+  {
+    id: 'node_red',
+    label: 'Node-RED',
+    blurb: 'http in node on your own flow.',
+    url: 'http://YOUR_HOST:1880/YOUR_ENDPOINT',
+    payload: {},
+    hint: 'Pair the http in node with an http response node or the request '
+      + 'hangs until it times out.',
+  },
+];
+
+export const INTEGRATION_BY_ID = Object.fromEntries(
+  INTEGRATIONS.map((i) => [i.id, i]),
+);
 
 // Action primitives - the body of the `actions` template. Two are gone:
 // the standalone `alarm` action (alarms are a template now) and `prompt`
@@ -97,6 +215,14 @@ export const ACTIONS = [
     type: 'webhook',
     label: 'Call a webhook',
     fields: [
+      // An inserter, not a setting: it writes the two fields below and stores
+      // nothing of its own, which is why it needs no place in WebhookAction
+      // and no round-trip. Picking one twice is idempotent; editing the URL
+      // afterwards is the normal case.
+      { key: 'integration', label: 'Start from a service', kind: 'preset',
+        presets: () => INTEGRATIONS,
+        hint: 'Fills in the URL shape and payload below. Every template has '
+          + 'YOUR_ placeholders to replace - none is a working URL as-is.' },
       { key: 'url', label: 'URL', kind: 'text', required: true,
         placeholder: 'https://…',
         hint: 'POSTed to on press - the IFTTT / Make / n8n / Home Assistant hook.' },
@@ -105,6 +231,32 @@ export const ACTIONS = [
     ],
     defaults: () => ({ action: 'webhook', url: '', payload: {} }),
     describe: (a) => `Webhook → ${a.url || '…'}`,
+  },
+  {
+    type: 'osc',
+    label: 'Send an OSC message',
+    fields: [
+      { key: 'address', label: 'OSC address', kind: 'text', required: true,
+        placeholder: '/transport/play',
+        hint: 'The path your software listens on. Must start with a slash - '
+          + 'a typo here reaches the wrong handler rather than failing.' },
+      { key: 'host', label: 'Host', kind: 'text', required: true,
+        placeholder: '127.0.0.1',
+        hint: 'An IP is best. A hostname works and costs a lookup on the '
+          + 'first press.' },
+      { key: 'port', label: 'Port', kind: 'number', min: 1, max: 65535, step: 1,
+        hint: 'Whatever the receiving end is listening on - Reaper, TouchOSC, '
+          + 'QLab, Resolume, VCV Rack.' },
+      { key: 'args', label: 'Arguments', kind: 'json',
+        hint: 'A JSON list. Types are inferred: true/false go as OSC T/F, '
+          + 'whole numbers as int, decimals as float, anything else as text. '
+          + 'Most receivers want [1] to mean "pressed".' },
+    ],
+    defaults: () => ({
+      action: 'osc', host: '127.0.0.1', port: 8000, address: '', args: [1],
+    }),
+    // No delivery to report: OSC is UDP, so the arrow means "sent at".
+    describe: (a) => `OSC ${a.address || '…'} → ${a.host || '…'}:${a.port ?? '…'}`,
   },
   {
     type: 'enter_mode',
@@ -149,6 +301,18 @@ export function describeAction(action) {
 // a bespoke body (the window/schedule day+time editors) rather than plain
 // widget fields. `describe()` returns a one-line summary for the collapsed
 // card. `defaults()` returns a fresh activation object.
+
+/**
+ * A duration in seconds, written the way a person would say it. Mirrors the
+ * `duration` widget's unit inference so a summary and the field you edit it in
+ * never disagree about whether something is "25 min" or "1500 sec".
+ */
+export function fmtDuration(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return '0s';
+  if (value >= 60 && value % 60 === 0) return `${value / 60}m`;
+  return `${value}s`;
+}
 
 function fmtDays(days) {
   if (!Array.isArray(days) || !days.length) return '';
@@ -526,19 +690,30 @@ TEMPLATES.push({
 TEMPLATES.push({
   type: 'pomodoro',
   ledStates: ['WORKING', 'RESTING'],
-  label: 'Pomodoro',
+  // "Intervals", because a Pomodoro is one preset of this and Tabata and HIIT
+  // are two others. The `type` string stays `pomodoro` on purpose - it is what
+  // MODE_LED_STATES, config.py and every saved config key off, and renaming it
+  // would be a migration in exchange for a tidier word. See TODO item 20.
+  label: 'Intervals',
   nature: 'takeover',
   allowedActivations: ['manual'], // started by an enter_mode gesture only
   body: 'fields',
   fields: [
-    { key: 'work_minutes', label: 'Work minutes', kind: 'number', min: 0.1, step: 1,
-      hint: 'How long one focus block lasts.' },
-    { key: 'break_minutes', label: 'Break minutes', kind: 'number', min: 0.1, step: 1,
-      hint: 'The short break after each work block.' },
-    { key: 'long_break_minutes', label: 'Long break minutes', kind: 'number', min: 0.1, step: 1,
-      hint: 'The longer break you get after the number of blocks set below.' },
-    { key: 'blocks_before_long_break', label: 'Blocks before a long break', kind: 'number', min: 1, step: 1,
-      hint: 'How many work blocks to finish before the long break.' },
+    { key: 'work_s', label: 'Work block', kind: 'duration', min: 1,
+      hint: 'How long one work interval lasts. 25 min for a Pomodoro, '
+        + '20 sec for Tabata.' },
+    { key: 'break_s', label: 'Rest', kind: 'duration', min: 1,
+      hint: 'The short rest after each work interval.' },
+    { key: 'long_break_s', label: 'Long rest', kind: 'duration', min: 1,
+      hint: 'The longer rest you get after the number of blocks set below.' },
+    { key: 'blocks_before_long_break', label: 'Blocks before a long rest', kind: 'number', min: 1, step: 1,
+      hint: 'How many work blocks to finish before the long rest.' },
+    { key: 'rounds', label: 'Rounds (0 = no end)', kind: 'number', min: 0, step: 1,
+      hint: 'Stops itself after this many work blocks. 0 keeps alternating '
+        + 'until you leave, which is what a Pomodoro does.' },
+    { key: 'lead_in_s', label: 'Get-ready countdown', kind: 'duration', min: 0,
+      hint: 'A pause before the first block, for anything you have to put the '
+        + 'phone down for. 0 starts immediately.' },
     { key: 'advance', label: 'Between blocks', kind: 'select',
       hint: 'How much the button asks of you when a block ends.',
       options: [
@@ -546,7 +721,16 @@ TEMPLATES.push({
         { value: 'manual', label: 'Wait for a press every time' },
         { value: 'break_only', label: 'Breaks start themselves, work waits for a press' },
       ] },
-    { key: 'extend_minutes', label: 'Minutes added by "Add more time"', kind: 'number', min: 0.1, step: 1,
+    // A function, not an array: LED_STYLES is declared further down this
+    // module - see the countdown template's identical comment above its own
+    // style field.
+    { key: 'waiting_style', label: 'While paused or waiting for a press', kind: 'select',
+      options: () => LED_STYLES.map((s) => ({ value: s.type, label: s.label })),
+      hint: 'Shown instead of the usual animation whenever the timer is not '
+        + 'actually running. Colour still comes from Work/Break above - '
+        + '"Solid" is a good default because breathing or flashing already '
+        + 'means "still counting".' },
+    { key: 'extend_s', label: 'Added by "Add more time"', kind: 'duration', min: 1,
       hint: 'How much time the "Add more time" gesture puts back on the clock.' },
     { key: 'log_as', label: 'Log each finished block as', kind: 'text', required: true,
       placeholder: 'pomodoro',
@@ -559,9 +743,10 @@ TEMPLATES.push({
       hint: 'What this press does while the Pomodoro is running.' },
   ],
   defaults: () => ({
-    work_minutes: 25, break_minutes: 5, long_break_minutes: 15,
-    blocks_before_long_break: 4, extend_minutes: 10, advance: 'auto',
-    log_as: 'pomodoro',
+    work_s: 25 * 60, break_s: 5 * 60, long_break_s: 15 * 60,
+    blocks_before_long_break: 4, extend_s: 10 * 60, advance: 'auto',
+    rounds: 0, lead_in_s: 0,
+    log_as: 'pomodoro', waiting_style: 'solid',
     short_press: 'toggle', long_press: 'exit', double_tap: 'extend',
   }),
   startedBy: 'gesture',
@@ -572,8 +757,147 @@ TEMPLATES.push({
   },
   describe: (mode) => {
     const advance = { auto: 'auto', manual: 'press to advance', break_only: 'auto breaks' };
-    return `Pomodoro ${mode.work_minutes}/${mode.break_minutes}`
+    const rounds = Number(mode.rounds) > 0 ? `, ${mode.rounds} rounds` : '';
+    return `${fmtDuration(mode.work_s)}/${fmtDuration(mode.break_s)}${rounds}`
       + ` (${advance[mode.advance] || mode.advance})`;
+  },
+});
+
+// ledStates is none, deliberately, and for the launcher's reason one step
+// along: every frame this game shows is a colour it worked out for itself, so
+// a named look would only ever be one wrong frame before the game paints over
+// it. (The comment sits above `type` because the drift test in test_webui.py
+// reads the two keys as adjacent lines.)
+TEMPLATES.push({
+  type: 'hotcold',
+  ledStates: [],
+  label: 'Hot / Cold',
+  nature: 'takeover',
+  allowedActivations: ['manual'], // a game that started itself would interrupt you
+  body: 'fields',
+  fields: [
+    { key: 'ramp', label: 'Colour for how close you got', kind: 'ramp',
+      hint: 'Left is as wrong as the wheel allows, right is dead on.' },
+    { key: 'sweep_s', label: 'Seconds per turn of the wheel', kind: 'number',
+      min: 0.5, max: 60, step: 0.5,
+      hint: 'Slower is easier. Under about 2s the press delay starts to '
+        + 'matter more than your aim does.' },
+    { key: 'tolerance', label: 'How close counts as a hit', kind: 'number',
+      min: 0.01, max: 1, step: 0.01,
+      hint: '0.08 = within 8% of the wheel. Below about 0.03 the radio, not '
+        + 'you, decides whether you win.' },
+    { key: 'rounds', label: 'Rounds per game', kind: 'number', min: 0, step: 1,
+      hint: '0 = keep dealing until you long-press out.' },
+    { key: 'reveal_s', label: 'Seconds the answer stays up', kind: 'number',
+      min: 0.1, max: 30, step: 0.1,
+      hint: 'Presses during this are ignored - the wheel has already stopped.' },
+    { key: 'log_as', label: 'Log each guess as', kind: 'text', required: true,
+      placeholder: 'hotcold',
+      hint: 'Logged with how close you got (0-100) as its value, so a run of '
+        + 'games is something the events table can plot.' },
+  ],
+  defaults: () => ({
+    sweep_s: 4, rounds: 5, tolerance: 0.08, reveal_s: 1.5, log_as: 'hotcold',
+    ramp: HOTCOLD_RAMP.map((color, index) => ({
+      color, at: index / (HOTCOLD_RAMP.length - 1),
+    })),
+  }),
+  startedBy: 'gesture',
+  exits: () => 'long press (short = stop the wheel)',
+  describe: (mode) => {
+    const rounds = Number(mode.rounds) > 0 ? `${mode.rounds} rounds` : 'endless';
+    return `Hot/Cold - ${rounds}, ${mode.sweep_s ?? 4}s wheel`;
+  },
+});
+
+// ledStates is none for the reason Hot/Cold's is - every frame is computed.
+// (Comment above `type` so the drift test reads the two keys as adjacent.)
+TEMPLATES.push({
+  type: 'reaction',
+  ledStates: [],
+  label: 'Reaction timer',
+  nature: 'takeover',
+  allowedActivations: ['manual'],
+  body: 'fields',
+  fields: [
+    { key: 'ramp', label: 'Colour for how sharp you were', kind: 'ramp',
+      hint: 'Left is the slow end, right is instant.' },
+    { key: 'min_delay_s', label: 'Shortest wait (seconds)', kind: 'number',
+      min: 0.2, max: 60, step: 0.5,
+      hint: 'The light goes out for somewhere between this and the longest '
+        + 'wait, so the go signal cannot be anticipated.' },
+    { key: 'max_delay_s', label: 'Longest wait (seconds)', kind: 'number',
+      min: 0.2, max: 60, step: 0.5,
+      hint: 'Set below the shortest wait and the two are swapped for you.' },
+    { key: 'slowest_ms', label: 'Slow end of the colour (ms)', kind: 'number',
+      min: 50, max: 5000, step: 50,
+      hint: 'Only where the ramp bottoms out. A slower press is still logged '
+        + 'honestly, it just cannot look any worse.' },
+    { key: 'rounds', label: 'Attempts per game', kind: 'number', min: 0, step: 1,
+      hint: '0 = keep going until you long-press out.' },
+    { key: 'reveal_s', label: 'Seconds the time stays up', kind: 'number',
+      min: 0.1, max: 30, step: 0.1,
+      hint: 'Presses during this are ignored.' },
+    { key: 'log_as', label: 'Log each attempt as', kind: 'text', required: true,
+      placeholder: 'reaction',
+      hint: 'Logged with the milliseconds as its value. A false start logs '
+        + 'nothing - there is no time to record.' },
+  ],
+  defaults: () => ({
+    min_delay_s: 2, max_delay_s: 6, rounds: 5, slowest_ms: 600, reveal_s: 1.2,
+    log_as: 'reaction',
+    ramp: REACTION_RAMP.map((color, index) => ({
+      color, at: index / (REACTION_RAMP.length - 1),
+    })),
+  }),
+  startedBy: 'gesture',
+  exits: () => 'long press (short = press when it lights up)',
+  describe: (mode) => {
+    const rounds = Number(mode.rounds) > 0 ? `${mode.rounds} attempts` : 'endless';
+    return `Reaction timer - ${rounds}`;
+  },
+});
+
+// ledStates is none: a Signal wears whichever position it is on, and those
+// are the app's own colours rather than the button's vocabulary.
+// (Comment above `type` so the drift test reads the two keys as adjacent.)
+TEMPLATES.push({
+  type: 'signal',
+  ledStates: [],
+  label: 'Signal light',
+  nature: 'takeover',
+  allowedActivations: ['manual'],
+  body: 'fields',
+  fields: [
+    // A JSON field rather than a bespoke repeating sub-form, and that is a
+    // known rough edge rather than a preference - `webhook`'s payload made the
+    // same call. What makes it acceptable is that the two presets below are
+    // complete, so nobody has to write one of these to use the app; editing
+    // the list is a tinker-tier job (TODO 14). A proper widget is the follow-up.
+    { key: 'states', label: 'Positions', kind: 'json',
+      hint: 'A list of {name, color} - add "action" to send something when you '
+        + 'land on it. Short press moves to the next and stays there.' },
+    { key: 'start_at', label: 'Opens on position', kind: 'number', min: 0, step: 1,
+      hint: 'Counting from 0. Opening on a position does not send its message '
+        + '- only pressing does.' },
+    { key: 'log_as', label: 'Log each change as', kind: 'text',
+      placeholder: 'status',
+      hint: 'Optional. One row per change, with the position number as its value.' },
+  ],
+  defaults: () => ({
+    states: [
+      { name: 'Free', color: '#00ff00', style: 'solid' },
+      { name: 'Busy', color: '#ff0000', style: 'solid' },
+    ],
+    start_at: 0, log_as: '',
+  }),
+  startedBy: 'gesture',
+  exits: () => 'long press (short = next, double tap = send again)',
+  describe: (mode) => {
+    const states = Array.isArray(mode.states) ? mode.states : [];
+    const names = states.map((s) => s && s.name).filter(Boolean);
+    if (!names.length) return 'Signal light - no positions yet';
+    return `Signal light - ${names.join(' / ')}`;
   },
 });
 
@@ -583,6 +907,9 @@ export const TEMPLATE_BY_TYPE = Object.fromEntries(TEMPLATES.map((t) => [t.type,
 // object the parser accepts as-is - a starting point to edit, not a special
 // kind of mode. Names are checked for collisions when one is added.
 export const BUILTIN_MODES = [
+  // Three presets over the one interval template, which is the whole point of
+  // TODO 20: none of these costs a line of Python, and a fourth (60/10 study
+  // blocks, 90-minute deep work, stand up every hour) costs nothing either.
   {
     id: 'pomodoro',
     label: 'Pomodoro',
@@ -590,6 +917,32 @@ export const BUILTIN_MODES = [
     mode: () => ({
       name: 'Pomodoro', template: 'pomodoro', activation: { type: 'manual' },
       ...TEMPLATE_BY_TYPE.pomodoro.defaults(),
+    }),
+  },
+  {
+    id: 'tabata',
+    label: 'Tabata',
+    blurb: '20s on, 10s off, 8 rounds. 10s to get ready first.',
+    mode: () => ({
+      name: 'Tabata', template: 'pomodoro', activation: { type: 'manual' },
+      ...TEMPLATE_BY_TYPE.pomodoro.defaults(),
+      work_s: 20, break_s: 10, long_break_s: 60,
+      blocks_before_long_break: 8, rounds: 8, lead_in_s: 10,
+      extend_s: 10, log_as: 'tabata',
+      // Auto, and it has to be: nobody presses a button mid-burpee.
+      advance: 'auto',
+    }),
+  },
+  {
+    id: 'hiit',
+    label: 'HIIT intervals',
+    blurb: '40s work, 20s rest, 8 rounds, 60s rest every 4th.',
+    mode: () => ({
+      name: 'HIIT', template: 'pomodoro', activation: { type: 'manual' },
+      ...TEMPLATE_BY_TYPE.pomodoro.defaults(),
+      work_s: 40, break_s: 20, long_break_s: 60,
+      blocks_before_long_break: 4, rounds: 8, lead_in_s: 10,
+      extend_s: 20, log_as: 'hiit', advance: 'auto',
     }),
   },
   {
@@ -636,6 +989,61 @@ export const BUILTIN_MODES = [
     mode: () => ({
       name: 'Metronome', template: 'metronome', activation: { type: 'manual' },
       ...TEMPLATE_BY_TYPE.metronome.defaults(),
+    }),
+  },
+  {
+    id: 'hotcold',
+    label: 'Hot / Cold',
+    blurb: 'Stop the spinning colour wheel on a target only the button knows.',
+    mode: () => ({
+      name: 'Hot / Cold', template: 'hotcold', activation: { type: 'manual' },
+      ...TEMPLATE_BY_TYPE.hotcold.defaults(),
+    }),
+  },
+  {
+    id: 'reaction',
+    label: 'Reaction timer',
+    blurb: 'Press the moment it lights up. Logs your milliseconds.',
+    mode: () => ({
+      name: 'Reaction', template: 'reaction', activation: { type: 'manual' },
+      ...TEMPLATE_BY_TYPE.reaction.defaults(),
+    }),
+  },
+  // The two faces of the Signal template. Both are complete as they stand,
+  // which is what lets its positions live in a JSON field without that being
+  // the first thing a new user meets.
+  {
+    id: 'status_light',
+    label: 'Status light',
+    blurb: 'Free / heads-down / on air. Press to change, and it stays.',
+    mode: () => ({
+      name: 'Status', template: 'signal', activation: { type: 'manual' },
+      states: [
+        { name: 'Free', color: '#00ff00', style: 'solid' },
+        { name: 'Heads-down', color: '#ff8800', style: 'solid' },
+        { name: 'On air', color: '#ff0000', style: 'solid' },
+      ],
+      start_at: 0, log_as: 'status',
+    }),
+  },
+  {
+    id: 'footswitch',
+    label: 'Footswitch (OSC)',
+    blurb: 'Stop / play / record, sent to your DAW over OSC. Edit the port.',
+    mode: () => ({
+      name: 'Footswitch', template: 'signal', activation: { type: 'manual' },
+      states: [
+        { name: 'Stop', color: '#ff0000', style: 'solid',
+          action: { action: 'osc', host: '127.0.0.1', port: 8000,
+                    address: '/stop', args: [1] } },
+        { name: 'Play', color: '#00ff00', style: 'solid',
+          action: { action: 'osc', host: '127.0.0.1', port: 8000,
+                    address: '/play', args: [1] } },
+        { name: 'Record', color: '#ff00ff', style: 'breathe',
+          action: { action: 'osc', host: '127.0.0.1', port: 8000,
+                    address: '/record', args: [1] } },
+      ],
+      start_at: 0, log_as: '',
     }),
   },
 ];

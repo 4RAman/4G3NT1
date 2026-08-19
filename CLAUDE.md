@@ -226,7 +226,8 @@ Three consequences for code written today:
   drift. Only `device.STYLE_STROBES` styles are floored, mirrored as
   `strobes: true` in `schema.js`.
 - **Long press means "up one level", everywhere.** Alarm, stopwatch, counter,
-  pomodoro, metronome, countdown and the launcher all leave on a long press;
+  pomodoro, metronome, countdown, both games, the signal light and the
+  launcher all leave on a long press;
   the Pomodoro parser warns if you unbind its only exit. The launcher is the
   case that proves it - it launches on a *double tap*, because a menu where the
   universal escape gesture instead committed you to something would be the one
@@ -235,6 +236,19 @@ Three consequences for code written today:
   gesture always travels exactly one level rather than one-or-two depending on
   how you arrived. **A new takeover binds long press to leaving, or has a very
   good reason.**
+- **A gesture happened earlier than it arrived, and only the device knows how
+  much earlier.** A single press is held back until the multi-tap window
+  closes, *unconditionally* — `max_taps_for` floors at `DEFAULT_MAX_TAPS = 2`,
+  so no config makes a press instant, and binding only a short press does not
+  either. It is a constant rather than jitter, so anything measuring human
+  timing subtracts it: `ButtonDevice.press_latency_s`, read from the device
+  the way `info` is, because an injected press (the web UI's simulate buttons,
+  every test) arrives the instant it is made and correcting *that* would be
+  the same bug backwards. **Never hardcode the window in an app** — a game
+  that did would be wrong under simulation and would not survive the move onto
+  the device. What is left after the correction is tens of milliseconds of
+  radio and scheduling, and that is the real precision floor: ±150 ms games
+  are honest, tight rhythm judgement is Stage 3.
 - **A mode names a look; it never owns one.** The pool is `AppConfig.looks`
   and a mode holds `{state: look-name}`. Which states a mode may colour is
   `MODE_LED_STATES` in [config.py](aibutton/config.py), mirrored as

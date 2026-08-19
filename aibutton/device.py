@@ -378,6 +378,25 @@ class ButtonDevice(ABC):
         # its own hardware knows its own answer; BLEDevice replaces this with
         # what it read off the wire.
         self.info: DeviceInfo = ASSUMED_INFO
+        # How much earlier than its arrival a gesture from this device actually
+        # happened. An attribute for `info`'s reason: it is device state the
+        # host reads and never asserts, so nothing has to be implemented to
+        # satisfy it.
+        #
+        # Zero here because an *injected* gesture (`press` below, which is what
+        # the web UI's simulate buttons and the tests use) is delivered the
+        # instant it is made. A real detector is the case that is late: a
+        # single press is held back until the multi-tap window closes to prove
+        # it is not a double, unconditionally, since `max_taps` floors at 2.
+        # BLEDevice sets it accordingly.
+        #
+        # Only two things read it, both games, and both would be visibly wrong
+        # without it - a reaction timer would score every attempt as a false
+        # start. The known gap: simulate-press *into a real device* borrows the
+        # radio's figure and reads early. That is a debugging path, and the
+        # alternative is a per-event latency the whole queue would have to
+        # carry.
+        self.press_latency_s: float = 0.0
 
     def press(self, trigger: TriggerType) -> None:
         """Inject a gesture as if the hardware had detected one - what the

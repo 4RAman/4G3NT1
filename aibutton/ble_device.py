@@ -25,6 +25,7 @@ import logging
 
 from bleak import BleakClient, BleakScanner
 
+from .button import DOUBLE_WINDOW_S
 from .device import (
     ASSUMED_INFO,
     BUTTON_EVENT_UUID,
@@ -69,6 +70,10 @@ class BLEDevice(ButtonDevice):
         retry_s: float = RETRY_S,
     ) -> None:
         super().__init__()
+        # Gestures off a real button come from the detector in
+        # firmware/trigger.py, which holds a single press back until the
+        # multi-tap window closes. See ButtonDevice.press_latency_s.
+        self.press_latency_s = DOUBLE_WINDOW_S
         self._name = name
         self._scan_timeout_s = scan_timeout_s
         self._retry_s = retry_s

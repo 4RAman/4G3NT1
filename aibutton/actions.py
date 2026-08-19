@@ -8,6 +8,12 @@ The webhook primitive is the entire IFTTT/Make/n8n/Home Assistant
 integration surface: anything smarter than these primitives should live
 on the receiving end of a webhook, not in the button - AI included.
 
+The osc primitive is the same idea pointed at music and show-control
+software, which listens on UDP rather than HTTP. It is a separate action
+rather than a webhook setting because the two differ in kind: one is a
+request with an answer, the other is a datagram that either leaves or
+does not. See [osc.py](osc.py).
+
 Alarm modes are *not* handled here: ringing until dismissed/snoozed needs
 the LED/sound/button-event loop that only main.py's run() owns (its
 ring_alarm), so alarms fire via the scheduler, never through execute().
@@ -15,13 +21,22 @@ ring_alarm), so alarms fire via the scheduler, never through execute().
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import socket
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
 
-from .config import Action, LogAction, TimerToggleAction, WebhookAction
+from . import osc
+from .config import (
+    Action,
+    LogAction,
+    OscAction,
+    TimerToggleAction,
+    WebhookAction,
+)
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +95,29 @@ async def execute(
         if total > elapsed:
             message += f" ({_fmt_elapsed(total)} today)"
         return ActionResult(True, message)
+
+    if isinstance(action, OscAction):
+        payload = osc.message(action.address, action.args)
+        try:
+            # Resolved on the loop rather than inside sendto: a hostname would
+            # otherwise cost a blocking DNS lookup in the middle of a press,
+            # and "feedback is fire-and-forget" is a promise about the whole
+            # path, not just the last call in it.
+            loop = asyncio.get_running_loop()
+            info = await loop.getaddrinfo(
+                action.host, action.port, type=socket.SOCK_DGRAM
+            )
+            family, socktype, proto, _canon, sockaddr = info[0]
+            with socket.socket(family, socktype, proto) as sock:
+                sock.setblocking(False)
+                sock.sendto(payload, sockaddr)
+            # "Sent", never "delivered". UDP has nothing to report back, and
+            # claiming more than that is the one thing this result must not do.
+            return ActionResult(
+                True, f"OSC {action.address} -> {action.host}:{action.port}"
+            )
+        except (OSError, ValueError) as exc:
+            return ActionResult(False, f"OSC failed: {type(exc).__name__}: {exc}")
 
     if isinstance(action, WebhookAction):
         payload = {

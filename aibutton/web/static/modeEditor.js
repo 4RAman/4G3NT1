@@ -451,7 +451,12 @@ export class ModeEditor {
       const descriptor = action && ACTION_BY_TYPE[action.action];
       if (!descriptor) return;
       for (const spec of descriptor.fields) {
-        const field = createField(spec, action, () => this._changed(), this._fieldCtx());
+        // `rebuild` lets a widget that writes *sibling* keys (the integration
+        // picker fills in url + payload) redraw the fields it overwrote.
+        // Scoped to this gesture's own field set, so redrawing one action
+        // never disturbs another gesture's half-typed input.
+        const ctx = { ...this._fieldCtx(), rebuild: buildFields };
+        const field = createField(spec, action, () => this._changed(), ctx);
         fields.append(field.el);
         fieldValidators.push(field.validate);
       }

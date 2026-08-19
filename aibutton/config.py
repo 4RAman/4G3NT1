@@ -112,6 +112,29 @@ class WebhookAction:
 
 
 @dataclass(frozen=True)
+class OscAction:
+    """Fire one OSC message at something listening on UDP - a DAW, a lighting
+    desk, a TouchOSC layout, anything in that family.
+
+    A sibling of WebhookAction rather than a mode of it, because the two
+    differ in kind: a webhook is a request with an answer and a failure mode,
+    and this is a datagram that either leaves or does not. It is the same
+    "reach something else on the network" primitive at the other end of the
+    reliability scale, which is exactly why the button can afford it - see
+    [osc.py](osc.py) on why fire-and-forget is the right contract here.
+
+    `args` are JSON values and their OSC types are inferred: bool -> T/F,
+    int -> i, float -> f, anything else -> s. That inference is the whole type
+    system, and it is why the editor's hint says what it says.
+    """
+
+    host: str
+    port: int
+    address: str  # the OSC path, e.g. "/transport/play"
+    args: tuple = ()
+
+
+@dataclass(frozen=True)
 class EnterModeAction:
     """Switch into the named takeover mode (alarm/stopwatch/counter). This is
     how a gesture in an ambient mode starts a takeover, so "entered by a
@@ -124,7 +147,7 @@ class EnterModeAction:
     target: str
 
 
-Action = LogAction | TimerToggleAction | WebhookAction | EnterModeAction
+Action = LogAction | TimerToggleAction | WebhookAction | OscAction | EnterModeAction
 
 
 # --- activations -------------------------------------------------------
@@ -279,9 +302,25 @@ class CounterBehavior:
 
 @dataclass(frozen=True)
 class PomodoroBehavior:
-    """The takeover Pomodoro template: alternating work and break blocks,
-    with a long break every `blocks_before_long_break`. Handled by main.py's
-    run_pomodoro loop, not actions.execute().
+    """Alternating work and rest blocks, with a longer rest every
+    `blocks_before_long_break`. Handled by main.py's run_pomodoro loop, not
+    actions.execute().
+
+    **This is the interval-timer template, and "Pomodoro" is one preset of
+    it.** A Pomodoro is 25/5 with a long break every fourth and no end; Tabata
+    is 20s/10s for eight rounds; HIIT is 40s/20s. They are the same machine
+    with different numbers, so they ship as entries in `BUILTIN_MODES` rather
+    than as three templates (see TODO item 20). The `template` string stays
+    `"pomodoro"` deliberately - it is the key `MODE_LED_STATES`, schema.js and
+    every existing config are written against, and renaming it would be a
+    migration that bought nothing but a tidier word.
+
+    **Durations are seconds, and `*_minutes` is still accepted.** The old
+    names were unusable for the short end (`work_minutes: 0.667` is not a way
+    to write forty seconds), so seconds are canonical and the parser converts
+    the legacy names on the way in - "add, don't repurpose" applied to config.
+    Nothing anybody has written stops working; it is rewritten as seconds the
+    next time it is saved.
 
     `advance` is the setting that decides how much the button asks of you:
 
@@ -291,15 +330,32 @@ class PomodoroBehavior:
 
     `gestures` maps a trigger to a POMODORO_COMMANDS entry, so what each
     press does is yours to change - the defaults are toggle / exit / extend.
+
+    `waiting_style` is shown, instead of the phase's usual animation, whenever
+    the timer is not actually running - paused, or a block has ended and
+    `advance` is waiting for a press. It still wears WORKING's or RESTING's
+    *colour* (the mode's own look if it has named one, else the palette
+    entry) - only the movement changes, exactly like a countdown's ramp
+    borrows TIMING's appearance rather than switching state. LISTENING is not
+    an option here: it is the button's global "your press registered" state,
+    edited once in the Lights tab, and this is not that (see MODE_LED_STATES).
     """
 
-    work_minutes: float = 25
-    break_minutes: float = 5
-    long_break_minutes: float = 15
+    work_s: float = 25 * 60
+    break_s: float = 5 * 60
+    long_break_s: float = 15 * 60
     blocks_before_long_break: int = 4
-    extend_minutes: float = 10  # what `extend` adds
+    extend_s: float = 10 * 60  # what `extend` adds
+    # 0 = alternate until you leave, which is what a Pomodoro has always done
+    # and therefore the default. A workout sets it: eight rounds and stop.
+    rounds: int = 0
+    # A "get ready" pause before the first work block. Zero for a Pomodoro -
+    # you started it deliberately - and ten seconds for anything you have to
+    # put the phone down for.
+    lead_in_s: float = 0.0
     advance: str = "auto"
     log_as: str = "pomodoro"  # a completed work block is logged under this
+    waiting_style: str = "solid"  # frozen, not animated - "not counting"
     gestures: dict[str, str] = field(
         default_factory=lambda: {
             "short_press": "toggle",
@@ -483,10 +539,176 @@ class LauncherBehavior:
         return "launcher"
 
 
+@dataclass(frozen=True)
+class SignalState:
+    """One position of a Signal: what it is called, what it looks like, and
+    what goes out when you land on it.
+
+    The outbound message is an ordinary `Action`, which is the whole reason
+    this template is cheap: a status can fire a webhook, an OSC message or a
+    log row without this template knowing what any of those are, and a fourth
+    action primitive works here on the day it is added. `None` is a position
+    that only shows a colour, which is a real thing to want - "on air" is
+    often just a light.
+    """
+
+    name: str
+    color: str = "#ffffff"
+    style: str = "solid"
+    action: Action | None = None
+
+
+def _default_signal_states() -> tuple[SignalState, ...]:
+    """A two-position light, which is the smallest thing that is still a
+    signal. Colours only: a default that fired a webhook at somebody's server
+    on first press would be a surprising thing to ship."""
+    return (
+        SignalState(name="Free", color="#00ff00"),
+        SignalState(name="Busy", color="#ff0000"),
+    )
+
+
+@dataclass(frozen=True)
+class SignalBehavior:
+    """A signal light: short press moves to the next position, and it *stays*
+    there. Long press leaves; double tap re-sends the current position.
+
+    **This is the first app whose point is to persist rather than to finish.**
+    Every other takeover is doing something and then done - a timer runs out, a
+    game ends, a launcher hands off. This one is an output device: the button
+    sits there being your status until you change it, and the reason to hold
+    the foreground is precisely that holding the light *is* the feature.
+
+    That has an honest cost, and it is the "one foreground app" decision (TODO
+    item 15) becoming visible for the first time: while a Signal is showing,
+    nothing else on the button is reachable. Long press releases it.
+
+    Two shapes fall out of one machine, which is why there is one template and
+    two presets rather than two templates:
+
+        a status light   Free / Heads-down / On air, firing a webhook
+        a footswitch     Stop / Play / Record, firing OSC at a DAW
+
+    They differ in what the positions are called and what they send, and in
+    nothing else. See [osc.py](osc.py) for what a footswitch can honestly do
+    over this link - not live looping, and the reason why.
+
+    Positions carry their colour inline rather than naming a look, because a
+    look is bound to an `LEDState` and these are not states - there can be five
+    of them and they mean whatever you say. `CountdownBehavior.ramp` is the
+    precedent for a template owning colours that are not states.
+    """
+
+    states: tuple[SignalState, ...] = field(default_factory=_default_signal_states)
+    start_at: int = 0  # which position it opens on, not counting as a change
+    log_as: str = ""  # optional: one row per change, with the position's index
+
+    @property
+    def template(self) -> str:
+        return "signal"
+
+
+def _default_hotcold_ramp() -> tuple[ramp.Stop, ...]:
+    """Cold to hot - the one colour metaphor nobody has to be taught.
+
+    Five stops rather than two because `ramp.mix` is a straight RGB lerp: blue
+    straight to red passes through a muddy grey that reads as "no signal"
+    exactly where the game most needs to be legible.
+    """
+    return ramp.even([
+        "#0000ff",  # ice: as wrong as the wheel allows
+        "#00ffff",
+        "#00ff00",
+        "#ffff00",
+        "#ff0000",  # dead on
+    ])
+
+
+@dataclass(frozen=True)
+class HotColdBehavior:
+    """The Hot/Cold game: a hue wheel spins, a press stops it, and the light
+    says how close you landed to a target only the button knows.
+
+    The rules are not here. They are a pure step function in
+    [hotcold.py](hotcold.py), driven by main.py's run_hotcold - which is the
+    shape ROADMAP Stage 3 wants every app in, and the reason this one can be
+    tested with numbers instead of a device. What lives here is only what the
+    editor stores.
+
+    It owns no LED state (see MODE_LED_STATES), for the same reason the
+    launcher owns none: the colour *is* the game. Every frame it shows is an
+    ephemeral effect it computed - the spinning rainbow, then the ramp colour
+    for how close you got - so a palette entry would only ever be the thing
+    briefly overwritten before you could read it.
+
+    `tolerance` is measured in the same normalised distance `hotcold.distance`
+    returns, where 1.0 is half a turn away. It is not tighter by default
+    because the press latency correction leaves tens of milliseconds of
+    genuine residual (see hotcold.PRESS_LATENCY_S), and a game that demands
+    more precision than the radio can deliver reads as a broken game.
+    """
+
+    sweep_s: float = 4.0  # one full turn of the wheel
+    rounds: int = 5  # 0 = keep dealing until you leave
+    tolerance: float = 0.08
+    reveal_s: float = 1.5  # how long the answer stays up
+    log_as: str = "hotcold"  # each guess logs its closeness as the value
+    ramp: tuple[ramp.Stop, ...] = field(default_factory=_default_hotcold_ramp)
+
+    @property
+    def template(self) -> str:
+        return "hotcold"
+
+
+def _default_reaction_ramp() -> tuple[ramp.Stop, ...]:
+    """Slow at the left, fast at the right - the ramp is walked by *how well
+    you did*, not by how long you took, so the good end is the far end here
+    exactly as it is on hot/cold."""
+    return ramp.even([
+        "#ff0000",  # sluggish
+        "#ff8800",
+        "#ffff00",
+        "#00ff00",  # sharp
+    ])
+
+
+@dataclass(frozen=True)
+class ReactionBehavior:
+    """The reaction timer: the light goes out, then comes on without warning,
+    and the time until you press is logged in milliseconds.
+
+    The rules are a pure step function in [reaction.py](reaction.py), driven by
+    main.py's run_reaction. Read that module's header before trusting a number
+    off this: the multi-tap window is corrected for, the one-way radio latency
+    cannot be, so readings are comparable with each other rather than with a
+    stopwatch.
+
+    It owns no LED state (see MODE_LED_STATES) for the same reason the other
+    game owns none - every frame is computed, so a named look would be one
+    wrong frame before the game paints over it.
+
+    `slowest_ms` is only the ramp's far end: a press slower than it is still
+    logged honestly, it just cannot look any redder.
+    """
+
+    min_delay_s: float = 2.0
+    max_delay_s: float = 6.0
+    rounds: int = 5  # 0 = keep dealing until you leave
+    slowest_ms: float = 600.0
+    reveal_s: float = 1.2
+    log_as: str = "reaction"  # each attempt logs its milliseconds as the value
+    ramp: tuple[ramp.Stop, ...] = field(default_factory=_default_reaction_ramp)
+
+    @property
+    def template(self) -> str:
+        return "reaction"
+
+
 Behavior = (
     ActionsBehavior | AlarmBehavior | StopwatchBehavior | CounterBehavior
     | PomodoroBehavior | MetronomeBehavior | CountdownBehavior
-    | ReminderBehavior | LauncherBehavior
+    | ReminderBehavior | LauncherBehavior | HotColdBehavior | ReactionBehavior
+    | SignalBehavior
 )
 
 # Which activation types each template accepts (per-template allow-list,
@@ -507,6 +729,11 @@ _ALLOWED_ACTIVATIONS = {
     # a launcher that started itself on a schedule would be an app that
     # interrupts you to ask which app you wanted.
     "launcher": (ManualActivation,),
+    # Manual: a game that started itself would be a game interrupting you.
+    "hotcold": (ManualActivation,),
+    "reaction": (ManualActivation,),
+    # Manual: a signal is something you set, so something has to reach it.
+    "signal": (ManualActivation,),
 }
 
 # Which LED states belong to a *mode* rather than to the button.
@@ -536,6 +763,15 @@ MODE_LED_STATES: dict[str, tuple[str, ...]] = {
     # *that* app's colour, so giving it a look of its own would be a
     # setting that only ever overwrites the thing you are trying to read.
     "launcher": (),
+    # Also none, and for the same reason one level along: every frame this
+    # game shows is a colour it worked out (the wheel, then the answer), so
+    # a named look would be a setting whose only effect is one frame of the
+    # wrong thing before the game paints over it.
+    "hotcold": (),
+    "reaction": (),
+    # None: a Signal wears the colour of whichever position it is on, and
+    # those are the app's own, not the button's vocabulary.
+    "signal": (),
 }
 
 # The rest: the button's own vocabulary, which no mode owns.
@@ -888,6 +1124,28 @@ def _parse_action(raw, where: str) -> Action | None:
             and isinstance(payload, dict)
         ):
             return WebhookAction(url=url, payload=payload)
+    elif kind == "osc":
+        host = raw.get("host", "127.0.0.1")
+        port = raw.get("port")
+        address = raw.get("address")
+        args = raw.get("args", [])
+        if (
+            isinstance(host, str)
+            and host
+            and isinstance(port, int)
+            and not isinstance(port, bool)
+            and 0 < port <= 65535
+            and isinstance(address, str)
+            and address.startswith("/")
+            and isinstance(args, list)
+        ):
+            return OscAction(
+                host=host, port=port, address=address, args=tuple(args)
+            )
+        # Nothing is guessed here, unlike osc.message's leading slash: an
+        # address is the one field where a typo silently reaches the wrong
+        # handler on the receiving end, so a malformed one is dropped loudly
+        # rather than repaired quietly.
     elif kind == "enter_mode":
         # The target is validated as a non-empty string only; whether a
         # takeover mode by that name actually exists is left to the runtime
@@ -1230,12 +1488,49 @@ def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior | None:
     duration costs you that duration, not the whole mode."""
     defaults = PomodoroBehavior()
 
-    def minutes(key: str, default: float) -> float:
-        value = raw.get(key, default)
+    def duration(key: str, default: float) -> float:
+        """Seconds under `<key>_s`, or the legacy `<key>_minutes`.
+
+        The legacy name is read only when the seconds one is absent, so a
+        config carrying both (a hand-edit mid-migration) resolves to the
+        canonical field rather than to whichever the parser happened to try
+        second. Both are validated identically - a bad duration costs you that
+        duration, never the mode.
+        """
+        seconds_key, minutes_key = f"{key}_s", f"{key}_minutes"
+        if seconds_key in raw:
+            value, name, scale = raw[seconds_key], seconds_key, 1.0
+        elif minutes_key in raw:
+            value, name, scale = raw[minutes_key], minutes_key, 60.0
+        else:
+            return default
         if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-            return float(value)
-        log.error("config: %s.%s must be a number > 0 - using %s", where, key, default)
+            return float(value) * scale
+        log.error(
+            "config: %s.%s must be a number > 0 - using %s seconds",
+            where, name, default,
+        )
         return default
+
+    rounds = raw.get("rounds", defaults.rounds)
+    if not (isinstance(rounds, int) and not isinstance(rounds, bool) and rounds >= 0):
+        log.error(
+            "config: %s.rounds must be a whole number >= 0 (0 = until you leave)"
+            " - using %s", where, defaults.rounds,
+        )
+        rounds = defaults.rounds
+
+    lead_in = raw.get("lead_in_s", defaults.lead_in_s)
+    if not (
+        isinstance(lead_in, (int, float))
+        and not isinstance(lead_in, bool)
+        and lead_in >= 0
+    ):
+        log.error(
+            "config: %s.lead_in_s must be a number >= 0 - using %s",
+            where, defaults.lead_in_s,
+        )
+        lead_in = defaults.lead_in_s
 
     blocks = raw.get("blocks_before_long_break", defaults.blocks_before_long_break)
     if not (isinstance(blocks, int) and not isinstance(blocks, bool) and blocks > 0):
@@ -1258,6 +1553,14 @@ def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior | None:
         log.error("config: %s.log_as must be a non-empty string - using %r",
                   where, defaults.log_as)
         log_as = defaults.log_as
+
+    waiting_style = raw.get("waiting_style", defaults.waiting_style)
+    if not (isinstance(waiting_style, str) and waiting_style in LED_STYLES):
+        log.error(
+            "config: %s.waiting_style must be one of %s - using %r",
+            where, "/".join(LED_STYLES), defaults.waiting_style,
+        )
+        waiting_style = defaults.waiting_style
 
     gestures = dict(defaults.gestures)
     for trigger in TRIGGER_TYPES:
@@ -1282,13 +1585,16 @@ def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior | None:
         )
 
     return PomodoroBehavior(
-        work_minutes=minutes("work_minutes", defaults.work_minutes),
-        break_minutes=minutes("break_minutes", defaults.break_minutes),
-        long_break_minutes=minutes("long_break_minutes", defaults.long_break_minutes),
+        work_s=duration("work", defaults.work_s),
+        break_s=duration("break", defaults.break_s),
+        long_break_s=duration("long_break", defaults.long_break_s),
         blocks_before_long_break=blocks,
-        extend_minutes=minutes("extend_minutes", defaults.extend_minutes),
+        extend_s=duration("extend", defaults.extend_s),
+        rounds=rounds,
+        lead_in_s=float(lead_in),
         advance=advance,
         log_as=log_as,
+        waiting_style=waiting_style,
         gestures=gestures,
     )
 
@@ -1399,6 +1705,194 @@ def _parse_countdown_body(raw: dict, where: str) -> CountdownBehavior:
     )
 
 
+def _parse_hotcold_body(raw: dict, where: str) -> HotColdBehavior:
+    """Parse the flat hot/cold fields, falling back per key."""
+    defaults = HotColdBehavior()
+
+    def positive(key: str, default: float) -> float:
+        value = raw.get(key, default)
+        if not (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value > 0
+        ):
+            log.error("config: %s.%s must be a number > 0 - using %s", where, key, default)
+            return default
+        return float(value)
+
+    rounds = raw.get("rounds", defaults.rounds)
+    if not (isinstance(rounds, int) and not isinstance(rounds, bool) and rounds >= 0):
+        log.error(
+            "config: %s.rounds must be a whole number >= 0 (0 = until you leave)"
+            " - using %s", where, defaults.rounds,
+        )
+        rounds = defaults.rounds
+
+    # Bounded above by 1.0 because that is *half a turn* in the normalised
+    # distance hotcold.distance returns - a tolerance of 1 already means every
+    # guess is a hit, and anything beyond it is the same game with a number
+    # that lies about how generous it is.
+    tolerance = raw.get("tolerance", defaults.tolerance)
+    if not (
+        isinstance(tolerance, (int, float))
+        and not isinstance(tolerance, bool)
+        and 0 < tolerance <= 1.0
+    ):
+        log.error(
+            "config: %s.tolerance must be a number > 0 and <= 1 - using %s",
+            where, defaults.tolerance,
+        )
+        tolerance = defaults.tolerance
+
+    log_as = raw.get("log_as", defaults.log_as)
+    if not (isinstance(log_as, str) and log_as):
+        log.error("config: %s.log_as must be a non-empty string - using %r",
+                  where, defaults.log_as)
+        log_as = defaults.log_as
+
+    stops = defaults.ramp
+    if "ramp" in raw:
+        stops = _parse_ramp(raw["ramp"], f"{where}.ramp", defaults.ramp)
+
+    return HotColdBehavior(
+        sweep_s=positive("sweep_s", defaults.sweep_s),
+        rounds=rounds,
+        tolerance=float(tolerance),
+        reveal_s=positive("reveal_s", defaults.reveal_s),
+        log_as=log_as,
+        ramp=stops,
+    )
+
+
+def _parse_signal_body(raw: dict, where: str) -> SignalBehavior:
+    """Parse the Signal template, falling back per key and per position.
+
+    A broken position costs that position, not the mode - and a mode left with
+    no positions at all falls back to the defaults rather than being dropped,
+    because a signal light with nothing to show is the one shape that would
+    take over the button and then do nothing.
+    """
+    defaults = SignalBehavior()
+
+    entries = raw.get("states", None)
+    states: list[SignalState] = []
+    if entries is None:
+        states = list(defaults.states)
+    elif not isinstance(entries, list):
+        log.error("config: %s.states must be a list - using the defaults", where)
+        states = list(defaults.states)
+    else:
+        for index, entry in enumerate(entries):
+            spot = f"{where}.states[{index}]"
+            if not isinstance(entry, dict):
+                log.error("config: %s must be an object - skipped", spot)
+                continue
+            name = entry.get("name")
+            if not (isinstance(name, str) and name):
+                log.error("config: %s.name must be a non-empty string - skipped", spot)
+                continue
+            style = entry.get("style", "solid")
+            if not (isinstance(style, str) and style in LED_STYLES):
+                log.error(
+                    "config: %s.style must be one of %s - using 'solid'",
+                    spot, "/".join(LED_STYLES),
+                )
+                style = "solid"
+            action = None
+            if entry.get("action") is not None:
+                # A broken message costs the message, not the position: a
+                # status light whose webhook has a typo should still light up.
+                action = _parse_action(entry["action"], f"{spot}.action")
+            states.append(SignalState(
+                name=name,
+                color=_parse_color(entry.get("color"), f"{spot}.color", "#ffffff"),
+                style=style,
+                action=action,
+            ))
+        if not states:
+            log.error(
+                "config: %s.states left nothing usable - using the defaults", where,
+            )
+            states = list(defaults.states)
+
+    start_at = raw.get("start_at", defaults.start_at)
+    if not (
+        isinstance(start_at, int)
+        and not isinstance(start_at, bool)
+        and 0 <= start_at < len(states)
+    ):
+        log.error(
+            "config: %s.start_at must be a whole number from 0 to %s - using 0",
+            where, len(states) - 1,
+        )
+        start_at = 0
+
+    log_as = raw.get("log_as", defaults.log_as)
+    if not isinstance(log_as, str):
+        log.error("config: %s.log_as must be a string - using %r", where, defaults.log_as)
+        log_as = defaults.log_as
+
+    return SignalBehavior(
+        states=tuple(states), start_at=start_at, log_as=log_as,
+    )
+
+
+def _parse_reaction_body(raw: dict, where: str) -> ReactionBehavior:
+    """Parse the flat reaction-timer fields, falling back per key."""
+    defaults = ReactionBehavior()
+
+    def positive(key: str, default: float) -> float:
+        value = raw.get(key, default)
+        if not (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value > 0
+        ):
+            log.error("config: %s.%s must be a number > 0 - using %s", where, key, default)
+            return default
+        return float(value)
+
+    rounds = raw.get("rounds", defaults.rounds)
+    if not (isinstance(rounds, int) and not isinstance(rounds, bool) and rounds >= 0):
+        log.error(
+            "config: %s.rounds must be a whole number >= 0 (0 = until you leave)"
+            " - using %s", where, defaults.rounds,
+        )
+        rounds = defaults.rounds
+
+    log_as = raw.get("log_as", defaults.log_as)
+    if not (isinstance(log_as, str) and log_as):
+        log.error("config: %s.log_as must be a non-empty string - using %r",
+                  where, defaults.log_as)
+        log_as = defaults.log_as
+
+    minimum = positive("min_delay_s", defaults.min_delay_s)
+    maximum = positive("max_delay_s", defaults.max_delay_s)
+    if maximum < minimum:
+        # Swapped rather than rejected: the pair is obviously meant as a range,
+        # and picking a delay out of an inverted one would hang on the first
+        # round with nothing on screen to explain why.
+        log.error(
+            "config: %s.max_delay_s (%s) is below min_delay_s (%s) - swapping them",
+            where, maximum, minimum,
+        )
+        minimum, maximum = maximum, minimum
+
+    stops = defaults.ramp
+    if "ramp" in raw:
+        stops = _parse_ramp(raw["ramp"], f"{where}.ramp", defaults.ramp)
+
+    return ReactionBehavior(
+        min_delay_s=minimum,
+        max_delay_s=maximum,
+        rounds=rounds,
+        slowest_ms=positive("slowest_ms", defaults.slowest_ms),
+        reveal_s=positive("reveal_s", defaults.reveal_s),
+        log_as=log_as,
+        ramp=stops,
+    )
+
+
 def _parse_mode(raw, idx: int, looks: set[str] | None = None) -> Mode | None:
     """Parse one mode. A mode with a broken activation, a template<->
     activation nature mismatch, or no usable body is skipped entirely
@@ -1443,6 +1937,12 @@ def _parse_mode(raw, idx: int, looks: set[str] | None = None) -> Mode | None:
         behavior = _parse_metronome_body(raw, where)
     elif template == "countdown":
         behavior = _parse_countdown_body(raw, where)
+    elif template == "hotcold":
+        behavior = _parse_hotcold_body(raw, where)
+    elif template == "reaction":
+        behavior = _parse_reaction_body(raw, where)
+    elif template == "signal":
+        behavior = _parse_signal_body(raw, where)
     else:  # pragma: no cover - allow-list keys and this dispatch stay in sync
         log.error("config: %s (%r) has unknown template %r - skipped", where, name, template)
         return None
@@ -1799,6 +2299,11 @@ def _action_to_dict(action: Action) -> dict:
         return {"action": "timer_toggle", "log_as": action.log_as}
     if isinstance(action, WebhookAction):
         return {"action": "webhook", "url": action.url, "payload": action.payload}
+    if isinstance(action, OscAction):
+        return {
+            "action": "osc", "host": action.host, "port": action.port,
+            "address": action.address, "args": list(action.args),
+        }
     if isinstance(action, EnterModeAction):
         return {"action": "enter_mode", "target": action.target}
     raise TypeError(f"unknown action type {type(action).__name__}")
@@ -1881,13 +2386,20 @@ def _mode_to_dict(mode: Mode) -> dict:
     elif isinstance(mode.behavior, CounterBehavior):
         entry["event"] = mode.behavior.event
     elif isinstance(mode.behavior, PomodoroBehavior):
-        entry["work_minutes"] = mode.behavior.work_minutes
-        entry["break_minutes"] = mode.behavior.break_minutes
-        entry["long_break_minutes"] = mode.behavior.long_break_minutes
+        # Seconds only. A config that came in with the legacy `*_minutes`
+        # names is rewritten the first time it is saved, which is the whole
+        # migration - there is no second format to keep supporting on the way
+        # out, only on the way in.
+        entry["work_s"] = mode.behavior.work_s
+        entry["break_s"] = mode.behavior.break_s
+        entry["long_break_s"] = mode.behavior.long_break_s
         entry["blocks_before_long_break"] = mode.behavior.blocks_before_long_break
-        entry["extend_minutes"] = mode.behavior.extend_minutes
+        entry["extend_s"] = mode.behavior.extend_s
+        entry["rounds"] = mode.behavior.rounds
+        entry["lead_in_s"] = mode.behavior.lead_in_s
         entry["advance"] = mode.behavior.advance
         entry["log_as"] = mode.behavior.log_as
+        entry["waiting_style"] = mode.behavior.waiting_style
         for trigger, command in mode.behavior.gestures.items():
             entry[trigger] = command
     elif isinstance(mode.behavior, CountdownBehavior):
@@ -1912,6 +2424,35 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["max_bpm"] = mode.behavior.max_bpm
         entry["sound_on_tap"] = mode.behavior.sound_on_tap
         entry["log_as"] = mode.behavior.log_as
+    elif isinstance(mode.behavior, HotColdBehavior):
+        entry["sweep_s"] = mode.behavior.sweep_s
+        entry["rounds"] = mode.behavior.rounds
+        entry["tolerance"] = mode.behavior.tolerance
+        entry["reveal_s"] = mode.behavior.reveal_s
+        entry["log_as"] = mode.behavior.log_as
+        entry["ramp"] = [
+            {"color": stop.color, "at": stop.at} for stop in mode.behavior.ramp
+        ]
+    elif isinstance(mode.behavior, SignalBehavior):
+        entry["states"] = [
+            {
+                "name": state.name, "color": state.color, "style": state.style,
+                **({"action": _action_to_dict(state.action)} if state.action else {}),
+            }
+            for state in mode.behavior.states
+        ]
+        entry["start_at"] = mode.behavior.start_at
+        entry["log_as"] = mode.behavior.log_as
+    elif isinstance(mode.behavior, ReactionBehavior):
+        entry["min_delay_s"] = mode.behavior.min_delay_s
+        entry["max_delay_s"] = mode.behavior.max_delay_s
+        entry["rounds"] = mode.behavior.rounds
+        entry["slowest_ms"] = mode.behavior.slowest_ms
+        entry["reveal_s"] = mode.behavior.reveal_s
+        entry["log_as"] = mode.behavior.log_as
+        entry["ramp"] = [
+            {"color": stop.color, "at": stop.at} for stop in mode.behavior.ramp
+        ]
     return entry
 
 

@@ -34,10 +34,7 @@ will port; one that awaits the device directly will be rewritten.
   *accurate* one — the byte-order fault that made both LEDs render red as
   green is fixed and flashed.
 
-**A reflash is pending.** The device is on firmware 0.5.0; the tree is 0.6.0
-(rainbow brightness). Until it is flashed, the brightness slider saves fine and
-the light ignores it — see **Done → rainbow brightness** for why that
-degradation is the designed one rather than a bug.
+**Flashed to 0.6.0** (2026-08-18) — rainbow brightness is live.
 
 The ESP32 itself is untouched and the service runs normally, so the rest of
 the list is unaffected. Re-soldering is **0c**, and the 5 V rework belongs in
@@ -93,16 +90,23 @@ confirm with the user first if it might be running against the real button.
 |---|---|
 | Protocol v1 frozen | ✔ done — item **0b** |
 | Single-instance guard | ✔ done |
-| **10 apps** verified on hardware | **8 takeover templates exist**, none verified end-to-end on the button — items **2**, **7** |
+| **10 apps** verified on hardware | **built — item 7 ✔.** Eight verified on hardware (item **2** ✔); **Hot/Cold, Reaction and Signal are code-complete and unverified** |
 | **A launcher** | ✔ done — item **0a** |
 | Naive-user run | not started; wants item **14** first |
 | 24-hour soak | not started |
-| Verified power-cycle recovery | not started — needs real hardware |
+| Verified power-cycle recovery | ✔ done — reconnected cleanly on a real replug |
 
-**Three gates are done, four are not, and none of the four is blocked on
-design.** What is left is hardware time (items **2**, **0c**, the soak,
-power-cycle recovery) and building apps now that they are reachable
-(item **7**). The launcher was the last item whose blocker was a decision.
+**Four gates are done, one is a hardware session away, and two are not
+started. Nothing left is blocked on design.** Ten apps now exist; what the
+gate still wants is the three new ones walked against a real button, the way
+item **2** walked the first eight. Then hardware time (**0c**, the soak) and a
+naive-user run (**14**).
+
+**The three new apps have never met the hardware.** Two of them are the first
+things here whose *correctness depends on timing*, so they are the ones most
+likely to behave differently on a radio than on a MockDevice — that is
+precisely why `press_latency_s` exists (CLAUDE.md's invariants). Walk them
+with `--ble` before believing the gate.
 
 ## Six bodies of work, not twenty items
 
@@ -115,10 +119,12 @@ view.
 | **The colour engine** — named looks, ramps, the safety floor | **3** ✔, **4** ✔, 0b·3 ✔ | Done. What is left of it is the stop list, in **19b** |
 | **The gesture engine** — N taps, hold levels | 0b·2 ✔, 5-tap gesture ✔ | Ungated for taps; hold levels still need firmware |
 | **Depth without the wire** — metronome config ✔, event values ✔, filtering/export ✔ | **1** ✔, **9**, **12**, **14** | None — ship freely |
-| **Reach and hosting** — launcher ✔, remote UI | **0a** ✔, **7**, **8** | ~~0a gates 7~~ — **ungated**; apps are reachable now |
+| **Reach and hosting** — launcher ✔, ten apps ✔, remote UI | **0a** ✔, **7** ✔, **8** | Only the hardware walk left on 7 |
 | **The light as a language** — ladder ✔, stop list, one-offs, where colour is edited | **19** | None for b–e |
 | **Saying a number** — ambient counting, count readout, progress | **15**, **17** | Wants the stop list (**19b**) first — a readout *is* a stop list |
-| **Play** — timing/rhythm and guessing games | **16** | Forgiving games ungated; tight rhythm needs Stage 3's on-device runtime |
+| **Play** — timing/rhythm and guessing games | **16** ✔ | Done for forgiving games; tight rhythm still needs Stage 3's on-device runtime |
+| **Reaching other software** — OSC ✔, MIDI if ever | ✔ shipped with **7** | Ungated. MIDI costs a dependency and a virtual port; nothing needs it yet |
+| **One machine, many timers** — Pomodoro/HIIT/Tabata as presets | **20** ✔ | Done |
 
 Two things sit outside the table. **0c** is hardware (re-solder + the 5 V
 rework) and gates nothing but its own verification. **18** (Notion) is process
@@ -127,8 +133,9 @@ and is **parked**.
 **The news since the last triage.** The colour engine is finished and the
 protocol freeze paid off exactly as intended: named looks, richer colour, more
 tap counts and the whole subdivision ladder all landed as **host-side data
-changes with no reflash under them**. The one reflash pending is rainbow
-brightness, which is a firmware *rendering* change rather than a wire change.
+changes with no reflash under them**. Rainbow brightness was the one reflash
+pending (a firmware *rendering* change rather than a wire change) and it
+shipped 2026-08-18.
 
 **What that leaves.** Three structures now describe every light this thing can
 make, and only one of them is unbuilt:
@@ -141,8 +148,15 @@ make, and only one of them is unbuilt:
 
 A ramp answers "how far through are you", a ladder answers "what time is it",
 a stop list answers "what happens next". None can express the others, and
-**items 15, 16 and 17 all queue behind the stop list** — a count readout *is*
-a stop list. Build it once, deliberately, and three items get cheap.
+**items 15 and 17 queue behind the stop list** — a count readout *is* a stop
+list. Build it once, deliberately, and both get cheap.
+
+**16 no longer queues behind it**, which is worth recording because it was the
+assumption that made games look expensive. A host-pushed *sequence* needs the
+stop list; a game that pushes **one** effect and then does arithmetic does not.
+Hot/Cold spins a single rainbow and computes where it has got to, so it costs
+one radio write per round. Simon Says is still on the far side of 19b — that
+one genuinely is a sequence.
 
 ---
 
@@ -224,54 +238,6 @@ recorded in [hardware.py](firmware/hardware.py)'s wiring block; and `#ffffff`
 reading as white on the ring, or an explicit note saying how far off it still
 is and why that was accepted.
 
-### 2. Verify the takeover modes work end to end
-
-**Partly done — driven on the real button.** The templates have been tuned and
-used on hardware and are described as more than functional as MVPs, so the
-gesture → dispatch → LED/sound → status path is proven for the ones that were
-reachable. Two gaps remain before this gate closes, and neither is a doubt
-about the code:
-
-- **Pomodoro has not been walked**, because in the scene as configured it was
-  unreachable — every gesture was bound to another app and it is not
-  schedule-started. The launcher fixes the reachability; the advance/extend/
-  skip/long-break checks below still want a pass.
-- **Reminder has never existed in a live config**, so its flash-not-ring
-  behaviour, its clear-and-log, and its timeout have only been driven against
-  a MockDevice.
-
-The checks below are the remaining ones, not a fresh start.
-
-
-Not a feature — a correctness pass, and **a Stage-2 exit gate**. The suite
-proves the loops behave against a `MockDevice`; it does not prove the whole
-path (BLE gesture → `main.py` dispatch → LED/sound → web UI status) is right
-on real hardware. Walk each one with `--ble --config config.json` and confirm:
-
-- **Stopwatch**: enter via its gesture, short press laps (check
-  `last_message`), long press stops and the elapsed time is what you'd expect,
-  `TIMING` shows the whole time. With a ladder on, the colours change on the
-  second without eating presses.
-- **Pomodoro**: work→break→work matches `advance` (`auto`/`manual`/
-  `break_only`), `extend`/`skip`/`restart` do what their names say, the long
-  break fires on the right block count, `WORKING`/`RESTING` switch at the right
-  moments, and a finished work block is logged under `log_as`.
-- **Alarm**: fires at its scheduled time even if another takeover is running
-  (`main.py` says a due alarm takes priority — confirm it actually
-  interrupts), snoozes for exactly `snooze_minutes` and rings again, dismiss
-  logs `dismiss_event` once and only once.
-- **Reminder** (new, never run on hardware): flashes rather than rings, any
-  press clears it and logs `cleared_event`, a timeout logs nothing, and it is
-  visibly not an alarm.
-- **Metronome**: tapped tempo tracks, the beat ladder accents correctly, and
-  retapping re-phases the beat clock.
-- **Countdown**: the ramp walks, or the ladder counts down, and it rings at
-  zero.
-
-File anything broken as its own item rather than fixing inline if it's
-non-trivial — this item is about finding gaps, not closing them all in one
-sitting.
-
 ### 5. Make the floor mode permanent, rename it to "Home", route into takeovers
 
 Two things tangled together — do the resolution-semantics half first, it's the
@@ -301,48 +267,6 @@ return a single mode — it must also seed default Pomodoro and Stopwatch modes
 changes what a from-scratch `config.json` looks like. Depends on (a): renaming
 and repurposing only make sense once this mode can't be deleted out from under
 the defaults it routes to.
-
-### 7. Build at least 10 modes total
-
-**Unblocked: the launcher shipped**, so an app no longer costs a gesture to
-reach. Build as many as you like and add them to the menu — or to nothing,
-since an empty target list offers every takeover mode automatically.
-
-**Eight takeover templates exist** — alarm, reminders, stopwatch, counter,
-pomodoro, metronome, countdown, launcher. Counting the launcher as an app is
-arguable (it launches apps rather than being one), so call it seven and two
-to go, and the gate is really item **2**: none of them has been walked on
-hardware. The Morse code logger is on hold in favour of a
-bigger idea — see "Recorded/translated communication mode" in the parking lot.
-
-**Sort ideas into two very different costs before inventing the rest:**
-
-- *Cheap*: a new **preset** of an existing template (`BUILTIN_MODES` in
-  `schema.js`) — zero Python. A mood check-in (`actions`, three gestures log
-  three moods), a dice/random picker, an interval timer built from Pomodoro's
-  shape.
-- *Expensive*: a genuinely new template — a `*Behavior` dataclass in
-  `config.py`, a `run_*` loop in `main.py`, a `TEMPLATES` entry in
-  `schema.js`, plus tests. It no longer usually means a new `LEDState`: push a
-  look with `set_led(state, effect)` and borrow whichever existing state
-  describes what the button is *doing*. Allocating `0x0C` now needs an argument
-  for why the whole system should have a name for it.
-
-**Known hardware constraint, and it moved:** the LED renders one animation at a
-time, on-device — but the host can push *any* one at any moment without it
-being a named state, as often as it likes. So a mode can drive a sequence of
-looks by pushing them one after another, which is what a Simon-Says memory game
-needs and could not do before. What is still true: the *shape* of an animation
-is one of the six styles, and a host-driven sequence needs the host awake and
-costs a radio write per step. **The stop list (19b) is what makes a sequence
-one push instead of many.**
-
-**Candidates** (a starting list, not a spec): reaction-timer (random-delay
-flash, logs response time), interval/HIIT timer, a scheduled counter-nudge
-(`ALERT`-flashes if it hasn't been bumped in N hours), per-gesture counter
-increments (+1/+10/+20). A standalone "just play a sound" action is also
-missing even though `device.play_sound` exists — cheap, and useful for several
-of the above.
 
 ### 8. Host the web UI on the user's server (docker / nginx / SSL)
 
@@ -387,6 +311,25 @@ is not for the everyday surface.
 authentication.** [config.py](aibutton/config.py) says so next to `web_host`.
 Hosting it publicly exposes the config editor and the whole event log. **Auth
 comes before a Dockerfile, not after.**
+
+**(d) A mesh VPN, which this item had not considered and which dominates
+(a)–(c) for a single user.** Tailscale or plain WireGuard on the PC and the
+phone: the UI is reachable from anywhere at a stable private address, and
+**the auth prerequisite above simply does not apply, because nothing is
+public**. `web_host` already defaults to `0.0.0.0`, so there is nothing to
+build — it is an install and a login, not a feature.
+
+That is worth stating plainly because this item was framed as "host the web UI
+on the user's server", and hosting is the expensive way to answer "reach it
+from my phone". The relay in (a) is still the right answer for *shipping* this
+to other people, where a stranger cannot be asked to join your tailnet; it is
+the wrong answer for one person who wants their own dashboard on their own
+phone. **Cloudflare Tunnel with Access in front** is the middle option: a real
+public hostname, no port forwarding, and the SSO handled at the edge rather
+than by code that does not exist yet.
+
+So: (d) now, (a) if and when this becomes a product. Auth is still owed before
+anything is genuinely public.
 
 **Once that's settled**: containerize (deps are already in
 `requirements.txt`), confirm whether the target server already runs nginx +
@@ -510,50 +453,45 @@ so a backgrounded timer is *asked* rather than watched.
 data; the Counter reading its number from the store; and the concurrency
 paragraph in ARCHITECTURE.md.
 
-### 16. Games — timing, rhythm, and a hot/cold guesser
+### 21. WiFi as an alternative transport ⏸ parked, with a trigger
 
-Simon-Says-style timing games; a hot/cold detector that cycles a rainbow, stops
-on a press, and flashes how close you were. Creative latitude wanted.
+**Decided 2026-08-18: not now. BLE is adequate, and the reason to wait is not
+cost — it is that waiting makes this cheaper *and* more useful.**
 
-**Read [ARCHITECTURE.md](ARCHITECTURE.md)'s "What this deliberately cannot
-express" before designing any of it** — it names Simon Says specifically, as
-the worked example of what a bounded state machine *can't* do. It gives three
-sanctioned answers, in order: push the work to the phone, extend the **effect
-set** (a system decision, not an app's), or ship it as a native app compiled
-into the firmware. A scripting language is explicitly refused. So a game is not
-a reason to reopen that; it is a reason to grow the effect set, which is the
-same work as **19b**.
+**The motivation is real.** Range, and flexibility; and the S3 already has the
+radio, so the BOM cost is zero and the capability is sitting there unused. That
+is a genuine argument and it is why this is an item rather than a line in the
+parking lot.
 
-**The latency budget decides which games are possible now.** "Press → the app
-decides what it means" is **≤ 50 ms, on device, no exceptions**. A host-side
-game over BLE cannot meet that. Therefore:
+**What it would cost today.** A second transport in the firmware — note that
+`ButtonDevice` abstracts only the *host* half, so the device half doubles with
+nothing to hide behind. One shared 2.4 GHz radio, so coexistence adds jitter to
+the budget ARCHITECTURE.md pins at ≤50 ms. RAM: MicroPython plus BLE plus lwIP
+on an S3FH4R2 is tight. Power is the decisive one — BLE connected is
+single-digit mA, WiFi associated is an order of magnitude more with 100–300 mA
+bursts, which is a different battery and therefore a different enclosure
+(Stage 4).
 
-- **Forgiving games are buildable today** — hot/cold, guessing, anything with a
-  window of ±150 ms or looser.
-- **Tight rhythm judgement is Stage 3 work**, on-device. Pretending otherwise
-  produces a game that feels broken and gets blamed on the radio.
+**Why later is genuinely better, not just cheaper.** ROADMAP's old reason for
+parking this — "don't build a transport before deciding where the brain lives"
+— has expired: **D1 is decided.** But deciding it changed what WiFi *is* here.
+While the host owns the brain, WiFi is a second way to do exactly what BLE
+already does, and it must coexist with a live link. After the runtime moves
+onto the device, the button needs **occasional sync, not a live link** — and
+periodic wake → connect → sync → sleep is precisely WiFi's good case, with no
+coexistence problem because there is no live BLE session to share the radio
+with. The same feature is expensive now and natural later.
 
-**A non-obvious constraint that will bite whoever writes the first game:** a
-single press does not fire until the multi-tap window has elapsed, and how long
-that is comes from `max_taps`, derived from *what the config binds*. A mode
-binding only short press gets an instant press; the same mode with a double tap
-bound eats 0.4 s before every single press. **So a timing game must bind
-exactly one gesture** — a config fact, not something to fix in firmware.
+**The trigger.** Revisit when any of these is true: the button must reach a
+host that is not in the room (a real complaint, not a hypothetical); the
+Stage-3 spike (ROADMAP **3c**) reports RAM headroom that makes it comfortable;
+or Stage 4 picks a battery that can carry it.
 
-**Hot/cold has one real problem:** the host does not know the device's rainbow
-phase, because `_rainbow` renders on-device. Two ways out — drive the sweep
-from the host (fights fire-and-forget, burns radio), or compute the phase from
-send-time plus period, which works precisely because press latency is bounded
-once the mode binds one gesture. **Prefer the second.**
-
-**The "how close were you" flash is already built.** `ramp.color_at` maps
-progress 0→1 onto a ramp, which is exactly cold → warm → hot. Do not write a
-second distance-to-colour function.
-
-**Definition of done.** One shipped game (hot/cold is the cheap one), written
-as a step function over `(state, event, now)` rather than as a loop that awaits
-the device — that is the difference between porting to the Stage-3 runtime
-unchanged and being rewritten.
+**The shape, if it is ever built.** A **config-time either-or, never
+concurrent** — one transport per boot, chosen like `--ble` is. Measure first
+(3c's idle/TX current and RAM numbers), build second. Do not start with a
+Dockerfile or a protocol change: the wire vocabulary is transport-agnostic
+already and should stay that way.
 
 ### 17. A number you can read off one light
 
@@ -692,9 +630,6 @@ runtime. **It resolves for free when METRONOME moves to the mode page (d).**
 
 ## Smaller, worth doing
 
-- **Verify power-cycle recovery.** A Stage-2 exit gate: pull the ESP32's USB
-  mid-session and confirm the host reconnects on its own. Reconnect logic is
-  tested against a fake bleak, not against real hardware.
 - **Presses dropped while busy.** The loop runs one action at a time and
   discards presses during the 2 s SUCCESS display. Deliberate, but it makes
   fast repeated taps feel dead — worth revisiting if it grates in daily use.
@@ -747,6 +682,139 @@ runtime. **It resolves for free when METRONOME moves to the mode page (d).**
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**20. Pomodoro is an interval timer**~~ — generalised, and Tabata and HIIT
+  are now **presets costing zero Python**. The template's `type` string stays
+  `pomodoro` (its label is "Intervals"): renaming it would have been a
+  migration for every saved config in exchange for a tidier word, and
+  `MODE_LED_STATES`, `schema.js` and `test_webui.py`'s drift test all key off
+  it.
+
+  **Seconds are canonical and `*_minutes` still parses.** The old names could
+  not express the short end — `work_minutes: 0.333` is not a way to write
+  twenty seconds — so `work_s`/`break_s`/`long_break_s`/`extend_s` are the
+  fields and the parser converts the legacy names on the way in. One format
+  out: a minutes config is rewritten as seconds the first time it is saved,
+  so the migration completes itself and there is no second format to keep
+  supporting forward. Both live configs here were checked and parse with **no
+  new warnings**.
+
+  Two fields were added, both defaulting to exactly what a Pomodoro already
+  did: **`rounds`** (0 = alternate until you leave) and **`lead_in_s`** (0 = no
+  get-ready countdown). A workout sets them to 8 and 10.
+
+  The editor got a **`duration` widget** out of it — a number plus a sec/min
+  unit, storing seconds and *inferring* the unit for display, so 1500 opens as
+  "25 min" and 20 opens as "20 sec" with nothing stored about which it "is".
+  Without it the merge would have been a straight regression for anyone editing
+  a Pomodoro.
+
+  The old test config said `2 * (1/60)` minutes to mean two seconds. That it
+  now just says `work_s: 2` is the clearest evidence the unit was wrong.
+
+- ~~**7. Build at least 10 modes total**~~ — three new templates took the
+  count to ten (not counting the launcher, which launches apps rather than
+  being one): **Hot/Cold**, **Reaction timer** and **Signal**. All three are
+  code-complete and **none has met the hardware** — that is what the Stage-2
+  gate still wants.
+
+  **Two of them are written the way Stage 3 wants every app written**, which
+  was the point of doing the games first: [hotcold.py](aibutton/hotcold.py) and
+  [reaction.py](aibutton/reaction.py) are pure `step(state, event, now)`
+  functions returning a small closed effect set, and the `run_*` loops in
+  `main.py` are drivers holding only the clock, the queue, the die roll and the
+  store. A whole session is a list of calls with numbers in it, so the scoring
+  is tested without asyncio and without a device. Randomness is passed *in*
+  (`next_target`, `next_delay`) precisely so `step` stays checkable against a
+  table.
+
+  **Signal is the first app whose point is to persist rather than finish**, and
+  it is what made the "one foreground app" decision (item **15**) visible:
+  while it holds the light, nothing else on the button is reachable. It is also
+  the economy in the set — a status light and an OSC footswitch are the *same*
+  machine (cycle named positions, hold one, send something on arrival), so they
+  ship as two presets over one template rather than two templates. Each
+  position carries an ordinary `Action`, which is why the template does not
+  know what a webhook or an OSC message is and why the next primitive will work
+  there for free.
+
+  Cost, noted rather than normalised: three templates × the usual
+  `config.py`/`main.py`/`schema.js` tax, about 27 touch points in three core
+  files. **No new `LEDState`, no protocol change, no reflash** — all three own
+  no state and push effects, which is exactly the bar 0b set.
+
+  Left open: Signal's positions are edited as a **JSON field**, because there
+  is no repeating-sub-form widget and `webhook`'s payload set that precedent.
+  The two presets are complete so nobody has to write one, but a real widget is
+  the follow-up (and is item **14**'s tinker/basic split arriving early).
+
+- ~~**16. Games**~~ — **Hot/Cold** shipped, to its own definition of done: a
+  hue wheel spins, a press stops it, `ramp.color_at` flashes how close you got,
+  and each guess logs its closeness in the `value` column. **Reaction timer**
+  came nearly free beside it, sharing the shape rather than the code.
+
+  **Two things this item asserted turned out to be wrong, and both mattered:**
+
+  - *"A mode binding only short press gets an instant press."* It does not.
+    `max_taps_for` floors at `DEFAULT_MAX_TAPS = 2`, so **every** single press
+    on **every** config waits out the 0.4 s window. There is no such thing as
+    an instant press, and "bind exactly one gesture" buys nothing. What saves a
+    timing game is that the delay is a *constant*: subtract it and you recover
+    the moment the player meant. That is now an invariant in CLAUDE.md, and it
+    is read from `ButtonDevice.press_latency_s` rather than hardcoded — because
+    an *injected* press (the web UI's simulate buttons, every test) arrives
+    instantly, and correcting that would be the same bug backwards. Without
+    this the reaction timer scores every simulated attempt as a false start.
+  - *"The host does not know the device's rainbow phase."* It can know it
+    exactly. `_rainbow` sets `start = now_s()` when the effect arrives, and
+    pushing an effect restarts that coroutine — so phase 0 **is** the push, and
+    "compute it from send-time plus period" is arithmetic rather than the
+    approximation this item took it for. One radio write per round, not one per
+    frame, which is the only reason a stop-the-spinner game works over a
+    fire-and-forget link at all.
+
+  What this item said about *tight rhythm* still stands and is untouched: ±150 ms
+  games are honest today, judging a beat is Stage 3 on-device work.
+
+- ~~**An OSC action, and no dependency for it**~~ — `osc` joins log /
+  timer_toggle / webhook / enter_mode, so any gesture in any mode can drive
+  Reaper, TouchOSC, QLab, Resolume, VCV Rack or TouchDesigner.
+  [osc.py](aibutton/osc.py) is pure encoding — address, type tags, big-endian
+  args, everything null-padded to four bytes — over stdlib UDP, so it cost
+  **zero new runtime dependencies**.
+
+  A sibling of `webhook` rather than a setting on it: one is a request with an
+  answer and a failure mode, the other is a datagram that either leaves or does
+  not, and the result says "sent" and never "delivered" because UDP cannot know.
+  Fire-and-forget also happens to be the contract the rest of the feedback path
+  already has.
+
+  **MIDI is deliberately not here.** It would need `python-rtmidi` *and*, on
+  Windows, a virtual port like loopMIDI, because there is no built-in way to
+  hand MIDI to another application. It is a sibling module and a sibling action
+  if it is ever wanted, not a mode of this one — a MIDI note does not travel
+  over OSC. **What OSC cannot honestly do is live looping**: 0.4 s of tap
+  window plus the radio is 20× over what punch-in needs. Transport, scene
+  launch, record-arm, mute and talkback are fine; anything on the beat is
+  Stage 3.
+
+- ~~**2. Verify the takeover modes work end to end**~~ — walked all eight
+  templates against real hardware (`--ble --config config.json`): Stopwatch,
+  Pomodoro, Alarm, Reminder, Metronome and Countdown all behave as the suite
+  says they should.
+
+  **Found and fixed on the way:** Pomodoro's paused/waiting-for-a-press
+  indicator was hardcoding the global `LISTENING` state, so it silently
+  overrode whatever look the mode itself had chosen — `LISTENING` is
+  deliberately global-only (see `MODE_LED_STATES` in `config.py`), so a
+  Pomodoro could never own it. It now freezes the *current phase's own*
+  colour into a `waiting_style` (default `solid`) instead, so a paused or
+  finished block still wears Work's/Break's colour, just not animated. See
+  `PomodoroBehavior.waiting_style`.
+
+- ~~**Verified power-cycle recovery**~~ — a real USB replug mid-session
+  reconnected on its own; reconnect logic was previously only exercised
+  against a fake bleak.
 
 - ~~**0a. The app launcher, and a takeover that can start another one**~~ —
   a `launcher` template: short press cycles the installed apps in each app's
@@ -808,7 +876,7 @@ it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
 
   `CAP_RAINBOW_LEVEL` was allocated even though the wire is unchanged: without
   it the failure is silent — a slider that does nothing on an un-reflashed
-  button. Firmware 0.6.0. **Needs a reflash to mean anything.**
+  button. Firmware 0.6.0, flashed 2026-08-18.
 
 - ~~**19a. The subdivision ladder**~~ — [ladder.py](aibutton/ladder.py): at any
   moment the colour is the one on the **largest interval that divides the

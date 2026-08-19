@@ -70,6 +70,124 @@ function textInput(type, spec, obj, onInput) {
 const WIDGETS = {
   text: (spec, obj, onInput) => textInput('text', spec, obj, onInput),
 
+  // A length of time, stored in seconds and shown in whichever unit reads
+  // better. Seconds are canonical because the same field has to express a
+  // 25-minute focus block and a 20-second Tabata interval, and `0.333` is not
+  // a way to write twenty seconds. Making the *unit* a display choice is what
+  // lets one field serve both without either looking absurd.
+  //
+  // The unit is inferred, not stored: a whole number of minutes shows as
+  // minutes, anything else as seconds. So 1500 opens as "25 min" and 40 opens
+  // as "40 sec" with nothing recorded anywhere about which it "is".
+  duration(spec, obj, onInput, ctx) {
+    const stored = () => Number(obj[spec.key] ?? 0);
+    let unit = stored() >= 60 && stored() % 60 === 0 ? 60 : 1;
+
+    const input = el('input', {
+      type: 'number', className: 'inp', step: 'any', value: String(stored() / unit),
+    });
+    const units = el('select', { className: 'inp inp-unit' }, [
+      el('option', { value: '1', textContent: 'sec' }),
+      el('option', { value: '60', textContent: 'min' }),
+    ]);
+    units.value = String(unit);
+
+    const min = bound(spec, 'min', ctx);
+    const applyMin = () => {
+      if (min != null) input.min = String(min / unit);
+    };
+    applyMin();
+
+    const err = errLine();
+    input.addEventListener('input', () => {
+      obj[spec.key] = Number(input.value) * unit;
+      onInput();
+    });
+    units.addEventListener('change', () => {
+      // Convert the display, never the value: switching sec/min is a change
+      // of how long you are looking at, not a change of how long it is.
+      const seconds = stored();
+      unit = Number(units.value);
+      input.value = String(seconds / unit);
+      applyMin();
+    });
+
+    return {
+      el: wrap(spec, el('div', { className: 'row-tight' }, [input, units]), err),
+      validate() {
+        const seconds = stored();
+        if (!Number.isFinite(seconds) || seconds <= 0) {
+          err.textContent = 'Must be more than zero';
+          return `${spec.label} must be more than zero`;
+        }
+        if (min != null && seconds < min) {
+          err.textContent = `At least ${min}s`;
+          return `${spec.label} must be at least ${min} seconds`;
+        }
+        err.textContent = '';
+        return null;
+      },
+    };
+  },
+
+  // A template inserter rather than a field: it writes *sibling* keys on the
+  // object being edited and stores nothing under its own key, so nothing has
+  // to round-trip through the parser to remember which one you picked. That
+  // is deliberate - "I started from Slack" is not a property of the webhook,
+  // it is how the webhook got filled in, and persisting it would be a config
+  // surface that only ever restates what the URL already says.
+  //
+  // It needs `ctx.rebuild` because the fields it overwrites already exist in
+  // the DOM with their old values. Callers that do not supply one get a
+  // picker that still writes the object and simply does not redraw, which is
+  // the honest degradation - no caller silently loses data.
+  preset(spec, obj, onInput, ctx) {
+    const presets = typeof spec.presets === 'function' ? spec.presets() : (spec.presets || []);
+    const select = el('select', { className: 'inp' }, [
+      el('option', { value: '', textContent: '- start from… -' }),
+      ...presets.map((p) => el('option', { value: p.id, textContent: p.label })),
+    ]);
+    const note = el('span', { className: 'fld-hint', 'data-help': true });
+
+    // Restored from the object rather than from a closure variable, because
+    // choosing one rebuilds the whole field set and destroys this widget. The
+    // key is *deliberately* transient: the parser does not know it, so it is
+    // dropped the first time the config is saved and reloaded - which is the
+    // right lifetime for "this is how the URL got filled in".
+    const remembered = presets.find((p) => p.id === obj[spec.key]);
+    if (remembered) {
+      select.value = remembered.id;
+      note.textContent = remembered.hint || '';
+    }
+
+    select.addEventListener('change', () => {
+      const chosen = presets.find((p) => p.id === select.value);
+      if (!chosen) {
+        delete obj[spec.key];
+        note.textContent = '';
+        onInput();
+        return;
+      }
+      Object.assign(obj, {
+        [spec.key]: chosen.id,
+        url: chosen.url,
+        payload: JSON.parse(JSON.stringify(chosen.payload || {})),
+      });
+      note.textContent = chosen.hint || '';
+      onInput();
+      // Without this the URL and payload fields keep showing their old values:
+      // they were rendered before this widget overwrote the object underneath
+      // them. A caller with no rebuild still gets correct data, just a stale
+      // view - which is why this degrades rather than throwing.
+      if (ctx && typeof ctx.rebuild === 'function') ctx.rebuild();
+    });
+
+    return {
+      el: el('div', {}, [wrap(spec, select, errLine()), note]),
+      validate: () => null,
+    };
+  },
+
   textarea(spec, obj, onInput) {
     const input = el('textarea', {
       className: 'inp',

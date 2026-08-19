@@ -8,10 +8,12 @@ RGB LED and feedback sounds show device state.
 Modes come in two kinds. **Ambient** modes answer each gesture and hand the
 button straight back (the everyday one, plus time-windowed overrides).
 **Takeover** modes own the button until you leave: alarm, reminder,
-stopwatch, counter, Pomodoro, metronome, countdown, and an app launcher that
-reaches all of them. **Long press always means "up one level"** — out of an
-app, then out of the menu — so there is one escape gesture to learn and it
-works everywhere.
+stopwatch, counter, intervals (Pomodoro, Tabata or HIIT — one template, three
+presets), metronome, countdown, two games (Hot/Cold and a
+reaction timer), a signal light that doubles as an OSC footswitch, and an app
+launcher that reaches all of them. **Long press always means "up one level"** —
+out of an app, then out of the menu — so there is one escape gesture to learn
+and it works everywhere.
 
 The hardware is an **ESP32** — it detects gestures and shows feedback; this
 Python app is the brain on the PC, connected over BLE. It replaces an

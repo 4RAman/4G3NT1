@@ -23,3 +23,22 @@ export function writeFlag(key, value) {
     localStorage.setItem(key, value ? '1' : '0');
   } catch { /* not remembered this session */ }
 }
+
+// Same guards, for a preference that is a number rather than a flag. Anything
+// unparseable falls back rather than propagating NaN into a volume, where it
+// would silence the page in a way no control could undo.
+export function readNumber(key, fallback, { min = -Infinity, max = Infinity } = {}) {
+  try {
+    const value = Number(localStorage.getItem(key));
+    if (!Number.isFinite(value)) return fallback;
+    return Math.min(max, Math.max(min, value));
+  } catch {
+    return fallback;
+  }
+}
+
+export function writeNumber(key, value) {
+  try {
+    localStorage.setItem(key, String(value));
+  } catch { /* not remembered this session */ }
+}
