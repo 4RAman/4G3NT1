@@ -9,16 +9,6 @@
   "min_flash_period_s": 0.3,
   "modes": [
     {
-      "name": "Launcher Mode",
-      "template": "launcher",
-      "activation": {
-        "type": "manual"
-      },
-      "targets": [],
-      "return_after": true,
-      "log_as": "launcher_"
-    },
-    {
       "name": "Stopwatch",
       "template": "stopwatch",
       "activation": {
@@ -36,11 +26,11 @@
           },
           {
             "every_s": 2,
-            "color": "#002942"
+            "color": "#421e00"
           },
           {
             "every_s": 1,
-            "color": "#4f6392"
+            "color": "#92904f"
           }
         ]
       }
@@ -53,10 +43,10 @@
       },
       "looks": {
         "WORKING": "Ponder",
-        "RESTING": "Cops"
+        "RESTING": "Cooldown"
       },
-      "work_s": 6,
-      "break_s": 6,
+      "work_s": 1500,
+      "break_s": 6006,
       "long_break_s": 900,
       "blocks_before_long_break": 4,
       "extend_s": 600,
@@ -218,40 +208,6 @@
       "timeout_minutes": 1
     },
     {
-      "name": "Hot / Cold",
-      "template": "hotcold",
-      "activation": {
-        "type": "manual"
-      },
-      "sweep_s": 4,
-      "rounds": 5,
-      "tolerance": 0.08,
-      "reveal_s": 1.5,
-      "log_as": "hotcold",
-      "ramp": [
-        {
-          "color": "#0000ff",
-          "at": 0
-        },
-        {
-          "color": "#00ffff",
-          "at": 0.25
-        },
-        {
-          "color": "#00ff00",
-          "at": 0.5
-        },
-        {
-          "color": "#ffff00",
-          "at": 0.75
-        },
-        {
-          "color": "#ff0000",
-          "at": 1
-        }
-      ]
-    },
-    {
       "name": "Reaction",
       "template": "reaction",
       "activation": {
@@ -283,17 +239,6 @@
       ]
     },
     {
-      "name": "Actions",
-      "template": "actions",
-      "activation": {
-        "type": "always"
-      },
-      "short_press": {
-        "action": "enter_mode",
-        "target": "Pomodoro"
-      }
-    },
-    {
       "name": "Work Alarm",
       "template": "alarm",
       "activation": {
@@ -307,21 +252,49 @@
           "fri"
         ]
       },
+      "looks": {
+        "ALERT": "Cops"
+      },
       "message": "Go to work!",
       "label": "",
       "snooze_minutes": 5,
-      "dismiss_event": "",
-      "looks": {
-        "ALERT": "Cops"
+      "dismiss_event": ""
+    },
+    {
+      "name": "Actions",
+      "template": "actions",
+      "activation": {
+        "type": "always"
+      },
+      "short_press": {
+        "action": "midi",
+        "port": "4G3NT",
+        "channel": 1,
+        "kind": "note_on",
+        "number": 94,
+        "value": 127,
+        "daw_command": "play"
+      },
+      "double_tap": {
+        "action": "midi",
+        "port": "4G3NT",
+        "channel": 1,
+        "kind": "note_on",
+        "number": 94,
+        "value": 127
+      },
+      "tap_5": {
+        "action": "log",
+        "event": "five_taps"
       }
     }
   ],
   "led_palette": {
     "IDLE": {
       "style": "rainbow",
-      "color": "#1a1a1a",
-      "color2": "#00fbff",
-      "period_s": 7.66
+      "color": "#616161",
+      "color2": "#001e1f",
+      "period_s": 3.5
     },
     "LISTENING": {
       "style": "breathe",
@@ -387,15 +360,21 @@
   "looks": {
     "Ponder": {
       "style": "fade",
-      "color": "#454545",
-      "color2": "#55aa9c",
-      "period_s": 1
+      "color": "#9b86d5",
+      "color2": "#8be5d6",
+      "period_s": 4.05
     },
     "Cops": {
       "style": "alternate",
       "color": "#ff0000",
       "color2": "#0033ff",
       "period_s": 0.91
+    },
+    "Cooldown": {
+      "style": "breathe",
+      "color": "#00a8ff",
+      "color2": "#000000",
+      "period_s": 10
     }
   }
 }

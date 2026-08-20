@@ -137,16 +137,39 @@ const WIDGETS = {
   // it is how the webhook got filled in, and persisting it would be a config
   // surface that only ever restates what the URL already says.
   //
+  // Which keys it writes is the preset's own business (`set`), not this
+  // widget's. It used to assign `url` and `payload` by name, which made a
+  // generic-looking widget silently webhook-only; the DAW command picker on
+  // the midi action is the second user and writes three entirely different
+  // keys. Adding a third should need a table entry and no code here.
+  //
   // It needs `ctx.rebuild` because the fields it overwrites already exist in
   // the DOM with their old values. Callers that do not supply one get a
   // picker that still writes the object and simply does not redraw, which is
   // the honest degradation - no caller silently loses data.
   preset(spec, obj, onInput, ctx) {
     const presets = typeof spec.presets === 'function' ? spec.presets() : (spec.presets || []);
-    const select = el('select', { className: 'inp' }, [
-      el('option', { value: '', textContent: '- start from… -' }),
-      ...presets.map((p) => el('option', { value: p.id, textContent: p.label })),
-    ]);
+    // Grouped into <optgroup> when the entries say so, flat when they do not.
+    // The eight webhook services are a list you read; the Mackie map is fifty
+    // entries you *navigate*, and an ungrouped select of that length is a
+    // scroll bar with no landmarks in it.
+    const option = (p) => el('option', { value: p.id, textContent: p.label });
+    const groups = [];
+    for (const preset of presets) {
+      const name = preset.group || '';
+      const last = groups[groups.length - 1];
+      if (last && last.name === name) last.items.push(preset);
+      else groups.push({ name, items: [preset] });
+    }
+    // Flattened rather than mapped: an <option> may only be a child of the
+    // <select> or of an <optgroup>, so an ungrouped run has to be spread in
+    // rather than wrapped in anything.
+    const nodes = [el('option', { value: '', textContent: '- start from… -' })];
+    for (const group of groups) {
+      if (group.name) nodes.push(el('optgroup', { label: group.name }, group.items.map(option)));
+      else nodes.push(...group.items.map(option));
+    }
+    const select = el('select', { className: 'inp' }, nodes);
     const note = el('span', { className: 'fld-hint', 'data-help': true });
 
     // Restored from the object rather than from a closure variable, because
@@ -168,10 +191,11 @@ const WIDGETS = {
         onInput();
         return;
       }
+      // Deep-copied so two modes started from the same preset do not end up
+      // sharing one payload object between them.
       Object.assign(obj, {
         [spec.key]: chosen.id,
-        url: chosen.url,
-        payload: JSON.parse(JSON.stringify(chosen.payload || {})),
+        ...JSON.parse(JSON.stringify(chosen.set || {})),
       });
       note.textContent = chosen.hint || '';
       onInput();

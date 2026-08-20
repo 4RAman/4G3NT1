@@ -10,8 +10,9 @@ button straight back (the everyday one, plus time-windowed overrides).
 **Takeover** modes own the button until you leave: alarm, reminder,
 stopwatch, counter, intervals (Pomodoro, Tabata or HIIT — one template, three
 presets), metronome, countdown, two games (Hot/Cold and a
-reaction timer), a signal light that doubles as an OSC footswitch, and an app
-launcher that reaches all of them. **Long press always means "up one level"** —
+reaction timer), a signal light that doubles as an OSC or MIDI footswitch, a
+control surface that fires a different command per gesture (the DAW remote),
+and an app launcher that reaches all of them. **Long press always means "up one level"** —
 out of an app, then out of the menu — so there is one escape gesture to learn
 and it works everywhere.
 
@@ -25,21 +26,24 @@ transition and its rationale are in [DESIGN-ESP32.md](DESIGN-ESP32.md).
 > and buzzer back. With no ESP32 attached the app runs on a `MockDevice`
 > instead, fully drivable from the web UI — no hardware needed to develop.
 
-Ambient modes resolve first-match-wins against four action primitives:
+Ambient modes resolve first-match-wins against six action primitives:
 
 | Action | What it does |
 |---|---|
 | `log` | record a timestamped event in SQLite (meds, habits) |
 | `timer_toggle` | start/stop a named stopwatch, durations logged |
 | `webhook` | POST to any URL — the IFTTT / Make / n8n / Home Assistant hook |
+| `osc` | fire an OSC message over UDP — Reaper, QLab, Resolume, TouchOSC |
+| `midi` | send a MIDI note or CC to a port — for a DAW that has no OSC |
 | `enter_mode` | open a takeover mode — an app, or the launcher that lists them |
 
 Example: between 05:00 and 07:00, a double tap logs `meds_taken`;
 any other time it falls through to the Default mode. See the `modes`
 section of [config.json](config.json).
 
-Modes are built from six **behaviour templates** — actions, alarm, stopwatch,
-counter, pomodoro and metronome — plus an *activation* saying when each turns
+Modes are built from **behaviour templates** — actions, alarm, reminders,
+stopwatch, counter, pomodoro, metronome, countdown, hot/cold, reaction,
+signal, control and launcher — plus an *activation* saying when each turns
 on (always / time window / at a clock time / entered from another mode).
 
 A built-in **web UI** (http://localhost:8080) shows live device state and the
@@ -147,6 +151,112 @@ control.pyw                                                    # tray control pa
 Flashing the ESP32 is in [firmware/README.md](firmware/README.md). Only one
 instance can run at a time — BLE allows a single central — and a second one
 refuses at startup rather than fighting the first for the connection.
+
+## Driving a DAW — OSC and MIDI
+
+Two actions reach music software, and which one you want is decided by the
+software, not by preference.
+
+**`osc` needs nothing installed.** Reaper, QLab, Resolume, VCV Rack,
+TouchDesigner and TouchOSC all listen for OSC over UDP; point the action at
+the host and port they are listening on and that is the whole setup.
+
+**`midi` is for the DAWs that do not speak OSC**, Studio One being the one
+this was built for — PreSonus document control surfaces over MIDI and Mackie
+Control, and Studio One Remote uses their own protocol.
+
+**On Windows it needs no Python package.** MIDI output goes through
+`winmm.dll`, which has shipped with the OS since the 90s, reached from
+`ctypes`. What it does need is a **virtual MIDI cable**, because Windows has
+no built-in way to hand MIDI from one application to another:
+[loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) is the usual
+choice. Install it, add one port, and put part of its name in the action's
+**MIDI port** field. Windows appends a number that changes between sessions,
+so a port you called `Button` may enumerate as `Button 2` — matching on part
+of the name is why that keeps working. Leave the field blank and it takes the
+first port there is.
+
+**On Linux and macOS** it needs `pip install python-rtmidi` instead, which is
+not in `requirements.txt` on purpose — it is a C extension with no wheel for
+Python 3.14, and requiring it would let the whole install fail over a feature
+most people never touch. With no backend at all you lose the `midi` action and
+nothing else; the service starts and every other action works.
+
+### The quick way: add the DAW transport app
+
+In the web UI, **+ Add mode → DAW transport (MIDI)**. It drops in a **control
+surface** — an app you open from the launcher, with one command per gesture:
+
+| Gesture | Command |
+|---|---|
+| short press | Play |
+| double tap | Record |
+| triple tap | Stop |
+| five taps | Drop a marker |
+| **long press** | **leave the app** |
+
+Set the MIDI port and you are done. The note numbers are **Mackie Control**,
+so adding a Mackie Control device in your DAW pointed at the same port makes
+them work with nothing to learn — no Control Link, no note numbers to look up.
+Every MIDI action also has a **Start from a DAW command** picker covering the
+whole Mackie map — transport, navigation, banking, channel strip, automation
+modes and F1–F8 — grouped, with each entry's note number in its name.
+
+> **The one mistake that costs an hour: adding it as a keyboard.** The DAW has
+> to be told the port is a **Mackie Control**. Point a "New Keyboard" at it
+> instead and every command arrives as an ordinary MIDI note, which the DAW
+> will happily *record into a track* — you will see notes appear, switch the
+> action to CC to investigate, and watch it record "controller effect depth"
+> instead. That is not the button misbehaving; it is the DAW being told it has
+> an instrument. A Mackie Control device never shows up as a track input.
+
+Two more things about **Record** specifically, because it is the one that
+looks broken: on real Mackie hardware the transport is a tape deck, so Record
+*arms* and Play *rolls* — if one press does nothing, try Record then Play. And
+nothing records unless a track is record-enabled.
+
+Record is on the double tap deliberately: it is the one command whose
+accidental firing costs you a take. The marker is on five taps rather than the
+long press because **long press always means "up one level"** — an app that ate
+it would strand you inside itself.
+
+### Following the project tempo
+
+The **metronome** can take its tempo from the DAW instead of from your taps.
+Set the mode's **Follow a DAW (MIDI clock in)** field to part of a MIDI input
+port name, then turn on **MIDI Clock Out** in the DAW pointed at that port —
+in Studio One that is a checkbox on the External Device, next to the port.
+
+MIDI Clock carries no tempo number: it is one byte sent **24 times per quarter
+note**, and the tempo is inferred from how fast the pulses arrive. Two things
+follow from that. The button reads the *median* interval over about a beat, so
+one late pulse cannot lurch the tempo but a deliberate tempo change takes
+around half a beat to be believed. And if the DAW goes quiet without saying so
+— quit, unplugged, paused mid-stream — the **last tempo is held**, because a
+metronome that blanks when a cable twitches is less useful than one that keeps
+time and says it is on its own.
+
+While it is following a clock, **tapping marks a beat but no longer sets the
+tempo**; two things steering one number is how you get a metronome that argues
+with the session. Leave the field blank and nothing changes — it is the tap
+metronome it has always been.
+
+> Do **not** use MIDI Time Code for this. MTC carries SMPTE position, not
+> tempo. A DAW will happily offer both.
+
+### The flexible way: Control Link
+
+If you want something the MCU table does not cover, use **New Keyboard**
+instead of Mackie Control, then in Studio One **right-click the control you
+want → Assign → Control Link**, and press the button. Almost anything in the
+DAW can learn a message this way. Any note number works; the picker's numbers
+are as good a starting point as any.
+
+> **What this cannot honestly do: live looping.** A press is held for the
+> multi-tap window (0.4 s) before it can be told apart from a double tap, and
+> the radio adds tens of milliseconds on top. That is roughly twenty times the
+> accuracy punch-in needs. Transport, markers, mutes and scene launches are
+> fine; anything you have to land *on* a beat is not.
 
 ## Control panel
 

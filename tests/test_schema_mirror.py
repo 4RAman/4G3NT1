@@ -130,6 +130,101 @@ def test_which_styles_use_each_field_matches(reading, expected):
     assert {name for name, s in js.items() if reading in s["uses"]} == set(expected)
 
 
+# --- the action list -------------------------------------------------------
+# The oldest mirror in the file and the last to get a test. Every action exists
+# as a `type:` in schema.js's ACTIONS and as a branch in `_parse_action`, and
+# the failure mode is asymmetric in an instructive way: an action the editor
+# offers and the parser drops silently loses a person's binding on Save, while
+# one the parser takes and the editor cannot show is merely unreachable.
+
+
+def _js_actions_block() -> str:
+    block = SCHEMA_JS[SCHEMA_JS.index("export const ACTIONS = ["):]
+    return block[:block.index("\nexport const ACTION_BY_TYPE")]
+
+
+def _js_action_types() -> list[str]:
+    return re.findall(r"^    type: '([^']*)',$", _js_actions_block(), re.M)
+
+
+def _py_action_kinds() -> set[str]:
+    """The `kind == "..."` branches `_parse_action` actually accepts.
+
+    Read off the source rather than off the union type, because the union says
+    what can be *represented* and this test is about what can be *parsed* -
+    the removed 'alarm' and 'prompt' branches exist to reject, and an editor
+    offering either would be a bug the union could not see.
+    """
+    source = Path(cfg.__file__).read_text(encoding="utf-8")
+    body = source[source.index("def _parse_action("):]
+    body = body[:body.index("\ndef ", 1)]
+    rejected = {"alarm", "prompt"}
+    return set(re.findall(r'kind == "([^"]*)"', body)) - rejected
+
+
+def test_every_action_the_editor_offers_is_one_the_parser_accepts():
+    assert set(_js_action_types()) <= _py_action_kinds()
+
+
+def test_every_action_the_parser_accepts_can_be_built_in_the_editor():
+    assert _py_action_kinds() <= set(_js_action_types())
+
+
+# A "descriptor defaults must parse" test was tried here and deleted: they
+# deliberately do not. `defaults()` is what "Add an action" drops into an empty
+# form, so a required field starts blank and the editor's own `required: true`
+# is what stops it being saved. Where a default carries real values - MIDI's
+# three numeric ranges - the check belongs beside that action, in test_midi.py.
+
+
+# --- the built-in modes ----------------------------------------------------
+# "Add a ready-made mode" is the one editor path that writes a whole mode
+# rather than a field, so a preset whose template and activation disagree does
+# not fail visibly - it saves, the parser skips it with a warning, and the mode
+# you just added is simply not there. This was a real bug: the DAW transport
+# preset shipped as `actions` + `manual`, which is not an allowed pair.
+
+
+def _builtin_modes() -> list[tuple[str, str, str]]:
+    block = SCHEMA_JS[SCHEMA_JS.index("export const BUILTIN_MODES = ["):]
+    block = block[:block.index("\n];")]
+    found = []
+    for part in re.split(r"\n  \{\n", block)[1:]:
+        entry = re.search(r"id: '([^']+)'", part)
+        template = re.search(r"template: '([^']+)'", part)
+        # The activation object is one line for most and several for a
+        # schedule, so take the first `type:` after the word `activation`.
+        activation = re.search(r"activation: \{[^}]*?type: '([^']+)'", part, re.S)
+        assert entry and template and activation, part[:200]
+        found.append((entry.group(1), template.group(1), activation.group(1)))
+    return found
+
+
+_ACTIVATION_JS_TO_PY = {
+    "always": cfg.AlwaysActivation,
+    "window": cfg.WindowActivation,
+    "schedule": cfg.ScheduleActivation,
+    "manual": cfg.ManualActivation,
+}
+
+
+def test_every_built_in_mode_uses_an_activation_its_template_allows():
+    builtins = _builtin_modes()
+    assert len(builtins) >= 14, "entries stopped being extractable"
+    for entry, template, activation in builtins:
+        allowed = cfg._ALLOWED_ACTIVATIONS.get(template)
+        assert allowed, f"{entry}: unknown template {template!r}"
+        assert _ACTIVATION_JS_TO_PY[activation] in allowed, (
+            f"{entry}: {template} modes may not be {activation} - "
+            f"the parser would skip this preset on save"
+        )
+
+
+def test_built_in_mode_ids_are_unique():
+    ids = [entry for entry, _, _ in _builtin_modes()]
+    assert len(set(ids)) == len(ids)
+
+
 # --- the Signal template's default positions -------------------------------
 
 

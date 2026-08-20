@@ -40,7 +40,7 @@ export const DAYS = [
 // for an `enter_mode` action. Mirrors each template's `nature: 'takeover'`.
 const TAKEOVER_TEMPLATES = new Set([
   'alarm', 'reminders', 'stopwatch', 'counter', 'pomodoro', 'metronome', 'countdown',
-  'hotcold', 'reaction', 'signal',
+  'hotcold', 'reaction', 'signal', 'control',
   // A launcher is a takeover, so a gesture can reach it - but it is never a
   // valid `enter_mode` *target* offered by another launcher (see
   // launcher_targets in main.py). That exclusion lives host-side because it
@@ -105,13 +105,141 @@ const POMODORO_COMMANDS = [
 // server over its own event log and config, not making a request. That is the
 // parked "second control surface" item in TODO.md's parking lot, and putting a
 // broken entry in this list would be worse than leaving it out.
+// The Mackie Control transport and utility buttons, as note numbers.
+//
+// **Why a fixed table beats "type a number".** MCU is a de-facto standard that
+// Studio One, Cubase, Live, Reaper, Logic and Pro Tools all implement, so a
+// DAW told it has a Mackie Control already knows what note 94 means. Picking
+// "Play" here and adding that device is the whole setup - no Control Link, no
+// learning, nothing to look up. A DAW being taught by hand does not care what
+// the numbers are, so these are a fine starting point either way.
+//
+// **This table is deliberately JS-only and creates no mirror.** The action
+// stores a note number and nothing else; the name is editor sugar that
+// `describe` reads back off the number. Putting a copy in config.py would be a
+// second place to drift for no gain - Python never needs to know that 94 is
+// called Play. Contrast MODE_LED_STATES, which is mirrored precisely because
+// the parser enforces it.
+//
+// Velocity is 127 on every one: an MCU button is a switch, and 127 is what a
+// pressed switch sends.
+const _mcu = (number) => ({ kind: 'note_on', channel: 1, number, value: 127 });
+
+// **A DAW has to be told it has a Mackie Control for any of this to work.**
+// Point a "New Keyboard" at the port instead and every one of these arrives as
+// a *note*, which the DAW will happily record into a track - the exact symptom
+// that sent someone looking here. Nothing in this table can fix that; it is a
+// device-type setting at the far end.
+export const DAW_COMMANDS = [
+  { id: 'play', label: 'Play (94)', group: 'Transport', set: _mcu(94),
+    hint: 'In most DAWs this toggles - press again to stop. The one to put on '
+      + 'a short press.' },
+  { id: 'stop', label: 'Stop (93)', group: 'Transport', set: _mcu(93),
+    hint: 'A real stop, as distinct from pausing by pressing Play again.' },
+  { id: 'record', label: 'Record (95)', group: 'Transport', set: _mcu(95),
+    hint: 'On real Mackie hardware this is a tape deck: Record ARMS and Play '
+      + 'rolls. If one press does nothing, try Record then Play - and check a '
+      + 'track is record-enabled.' },
+  { id: 'rewind', label: 'Rewind (91)', group: 'Transport', set: _mcu(91),
+    hint: 'One press jumps back; DAWs differ on whether holding scrubs.' },
+  { id: 'forward', label: 'Fast-forward (92)', group: 'Transport', set: _mcu(92) },
+  { id: 'loop', label: 'Loop / cycle (86)', group: 'Transport', set: _mcu(86),
+    hint: 'Toggles looping over the selected range.' },
+  { id: 'punch', label: 'Punch in/out (87)', group: 'Transport', set: _mcu(87) },
+  { id: 'replace', label: 'Replace (88)', group: 'Transport', set: _mcu(88) },
+  { id: 'click', label: 'Metronome / click (89)', group: 'Transport', set: _mcu(89),
+    hint: 'Toggles the click. A good one to reach without looking.' },
+  { id: 'marker', label: 'Drop a marker (84)', group: 'Transport', set: _mcu(84),
+    hint: 'The one worth having on a button you can hit blind - mark the take '
+      + 'you liked while it is still playing.' },
+  { id: 'nudge', label: 'Nudge (85)', group: 'Transport', set: _mcu(85) },
+  { id: 'clear_solo', label: 'Clear all solos (90)', group: 'Transport', set: _mcu(90) },
+
+  { id: 'cursor_up', label: 'Cursor up (96)', group: 'Navigation', set: _mcu(96) },
+  { id: 'cursor_down', label: 'Cursor down (97)', group: 'Navigation', set: _mcu(97) },
+  { id: 'cursor_left', label: 'Cursor left (98)', group: 'Navigation', set: _mcu(98) },
+  { id: 'cursor_right', label: 'Cursor right (99)', group: 'Navigation', set: _mcu(99) },
+  { id: 'zoom', label: 'Zoom (100)', group: 'Navigation', set: _mcu(100),
+    hint: 'On real hardware this makes the cursor keys zoom instead of move.' },
+  { id: 'scrub', label: 'Scrub (101)', group: 'Navigation', set: _mcu(101) },
+
+  { id: 'bank_left', label: 'Bank left - 8 tracks (46)', group: 'Tracks', set: _mcu(46) },
+  { id: 'bank_right', label: 'Bank right - 8 tracks (47)', group: 'Tracks', set: _mcu(47) },
+  { id: 'track_left', label: 'Previous track (48)', group: 'Tracks', set: _mcu(48) },
+  { id: 'track_right', label: 'Next track (49)', group: 'Tracks', set: _mcu(49) },
+  { id: 'flip', label: 'Flip faders/pots (50)', group: 'Tracks', set: _mcu(50) },
+  { id: 'global_view', label: 'Global view (51)', group: 'Tracks', set: _mcu(51) },
+
+  // Channel-strip buttons are one note per channel, eight of each in a block.
+  // Only the first of each is listed: the pattern is worth knowing once rather
+  // than reading thirty-two near-identical menu entries.
+  { id: 'arm_1', label: 'Arm track 1 (0)', group: 'Channel strip', set: _mcu(0),
+    hint: 'Add 1 for each track across the bank - track 2 is 1, track 8 is 7. '
+      + 'Same pattern for solo, mute and select below.' },
+  { id: 'solo_1', label: 'Solo track 1 (8)', group: 'Channel strip', set: _mcu(8) },
+  { id: 'mute_1', label: 'Mute track 1 (16)', group: 'Channel strip', set: _mcu(16) },
+  { id: 'select_1', label: 'Select track 1 (24)', group: 'Channel strip', set: _mcu(24) },
+
+  { id: 'save', label: 'Save (80)', group: 'Utility', set: _mcu(80) },
+  { id: 'undo', label: 'Undo (81)', group: 'Utility', set: _mcu(81) },
+  { id: 'cancel', label: 'Cancel (82)', group: 'Utility', set: _mcu(82) },
+  { id: 'enter', label: 'Enter (83)', group: 'Utility', set: _mcu(83) },
+
+  { id: 'auto_read', label: 'Read / off (74)', group: 'Automation', set: _mcu(74) },
+  { id: 'auto_write', label: 'Write (75)', group: 'Automation', set: _mcu(75) },
+  { id: 'auto_trim', label: 'Trim (76)', group: 'Automation', set: _mcu(76) },
+  { id: 'auto_touch', label: 'Touch (77)', group: 'Automation', set: _mcu(77) },
+  { id: 'auto_latch', label: 'Latch (78)', group: 'Automation', set: _mcu(78) },
+  { id: 'auto_group', label: 'Group (79)', group: 'Automation', set: _mcu(79) },
+
+  { id: 'assign_track', label: 'Pots: track (40)', group: 'Pot assignment', set: _mcu(40) },
+  { id: 'assign_send', label: 'Pots: send (41)', group: 'Pot assignment', set: _mcu(41) },
+  { id: 'assign_pan', label: 'Pots: pan (42)', group: 'Pot assignment', set: _mcu(42) },
+  { id: 'assign_plugin', label: 'Pots: plug-in (43)', group: 'Pot assignment', set: _mcu(43) },
+  { id: 'assign_eq', label: 'Pots: EQ (44)', group: 'Pot assignment', set: _mcu(44) },
+  { id: 'assign_instrument', label: 'Pots: instrument (45)', group: 'Pot assignment', set: _mcu(45) },
+
+  // F1-F8 are the useful ones for anything the rest of this table misses:
+  // Studio One lets a Mackie function key be reassigned to a command, so these
+  // are the escape hatch that does not need Control Link.
+  { id: 'f1', label: 'F1 (54)', group: 'Function keys', set: _mcu(54),
+    hint: 'Function keys are the escape hatch - assignable to a command in the '
+      + 'DAW, so they cover anything not listed here.' },
+  { id: 'f2', label: 'F2 (55)', group: 'Function keys', set: _mcu(55) },
+  { id: 'f3', label: 'F3 (56)', group: 'Function keys', set: _mcu(56) },
+  { id: 'f4', label: 'F4 (57)', group: 'Function keys', set: _mcu(57) },
+  { id: 'f5', label: 'F5 (58)', group: 'Function keys', set: _mcu(58) },
+  { id: 'f6', label: 'F6 (59)', group: 'Function keys', set: _mcu(59) },
+  { id: 'f7', label: 'F7 (60)', group: 'Function keys', set: _mcu(60) },
+  { id: 'f8', label: 'F8 (61)', group: 'Function keys', set: _mcu(61) },
+
+  // Modifiers are momentary on real hardware - held down while another button
+  // is pressed. One button cannot hold one, so they are here for completeness
+  // and are the least useful entries in the table.
+  { id: 'shift', label: 'Shift (70)', group: 'Modifiers', set: _mcu(70),
+    hint: 'Momentary on real hardware - held while pressing something else. '
+      + 'A single button cannot hold it, so this is rarely what you want.' },
+  { id: 'option', label: 'Option (71)', group: 'Modifiers', set: _mcu(71) },
+  { id: 'control', label: 'Control (72)', group: 'Modifiers', set: _mcu(72) },
+  { id: 'alt', label: 'Alt / Cmd (73)', group: 'Modifiers', set: _mcu(73) },
+];
+
+/** The DAW command a message matches, or null. Reverse lookup, so nothing
+ *  has to be stored to show "Play" beside note 94. */
+export function dawCommandFor(action) {
+  if (!action || action.kind !== 'note_on' || action.channel !== 1) return null;
+  return DAW_COMMANDS.find((c) => c.set.number === action.number) || null;
+}
+
 export const INTEGRATIONS = [
   {
     id: 'ifttt',
     label: 'IFTTT',
     blurb: 'Webhooks applet - one event name per applet.',
-    url: 'https://maker.ifttt.com/trigger/EVENT_NAME/with/key/YOUR_KEY',
-    payload: { value1: '', value2: '', value3: '' },
+    set: {
+      url: 'https://maker.ifttt.com/trigger/EVENT_NAME/with/key/YOUR_KEY',
+      payload: { value1: '', value2: '', value3: '' },
+    },
     hint: 'From IFTTT: Create -> Webhooks -> "Receive a web request". The '
       + 'three value1/2/3 fields are the only ones applets can read.',
   },
@@ -119,8 +247,10 @@ export const INTEGRATIONS = [
     id: 'make',
     label: 'Make',
     blurb: 'Custom webhook trigger (was Integromat).',
-    url: 'https://hook.REGION.make.com/YOUR_WEBHOOK_ID',
-    payload: {},
+    set: {
+      url: 'https://hook.REGION.make.com/YOUR_WEBHOOK_ID',
+      payload: {},
+    },
     hint: 'Copy the whole URL from the Custom Webhook module - the region '
       + 'part differs per account, so do not hand-type it.',
   },
@@ -128,8 +258,10 @@ export const INTEGRATIONS = [
     id: 'zapier',
     label: 'Zapier',
     blurb: 'Catch Hook trigger.',
-    url: 'https://hooks.zapier.com/hooks/catch/YOUR_ID/YOUR_HOOK/',
-    payload: {},
+    set: {
+      url: 'https://hooks.zapier.com/hooks/catch/YOUR_ID/YOUR_HOOK/',
+      payload: {},
+    },
     hint: 'Zapier reads whatever JSON arrives, so the trigger/mode/ts fields '
       + 'the button adds are usable as Zap fields with no extra payload.',
   },
@@ -137,8 +269,10 @@ export const INTEGRATIONS = [
     id: 'home_assistant',
     label: 'Home Assistant',
     blurb: 'Webhook trigger on a local automation.',
-    url: 'http://homeassistant.local:8123/api/webhook/YOUR_WEBHOOK_ID',
-    payload: {},
+    set: {
+      url: 'http://homeassistant.local:8123/api/webhook/YOUR_WEBHOOK_ID',
+      payload: {},
+    },
     hint: 'Local and needs no token - a webhook trigger is deliberately '
       + 'unauthenticated, so treat the ID as the secret.',
   },
@@ -146,8 +280,10 @@ export const INTEGRATIONS = [
     id: 'n8n',
     label: 'n8n',
     blurb: 'Webhook node, self-hosted or cloud.',
-    url: 'https://YOUR_HOST/webhook/YOUR_PATH',
-    payload: {},
+    set: {
+      url: 'https://YOUR_HOST/webhook/YOUR_PATH',
+      payload: {},
+    },
     hint: 'Use the Production URL, not the Test URL - the test one only '
       + 'listens while you have the editor open.',
   },
@@ -155,8 +291,10 @@ export const INTEGRATIONS = [
     id: 'slack',
     label: 'Slack',
     blurb: 'Incoming webhook, posts a message.',
-    url: 'https://hooks.slack.com/services/YOUR_TEAM/YOUR_CHANNEL/YOUR_TOKEN',
-    payload: { text: 'Button pressed' },
+    set: {
+      url: 'https://hooks.slack.com/services/YOUR_TEAM/YOUR_CHANNEL/YOUR_TOKEN',
+      payload: { text: 'Button pressed' },
+    },
     hint: 'Slack only reads "text" here; the other fields ride along and are '
       + 'ignored.',
   },
@@ -164,8 +302,10 @@ export const INTEGRATIONS = [
     id: 'discord',
     label: 'Discord',
     blurb: 'Channel webhook, posts a message.',
-    url: 'https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN',
-    payload: { content: 'Button pressed' },
+    set: {
+      url: 'https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN',
+      payload: { content: 'Button pressed' },
+    },
     hint: 'Discord only reads "content" here. Server Settings -> Integrations '
       + '-> Webhooks.',
   },
@@ -173,8 +313,10 @@ export const INTEGRATIONS = [
     id: 'node_red',
     label: 'Node-RED',
     blurb: 'http in node on your own flow.',
-    url: 'http://YOUR_HOST:1880/YOUR_ENDPOINT',
-    payload: {},
+    set: {
+      url: 'http://YOUR_HOST:1880/YOUR_ENDPOINT',
+      payload: {},
+    },
     hint: 'Pair the http in node with an http response node or the request '
       + 'hangs until it times out.',
   },
@@ -253,6 +395,55 @@ export const ACTIONS = [
     }),
     // No delivery to report: OSC is UDP, so the arrow means "sent at".
     describe: (a) => `OSC ${a.address || '…'} → ${a.host || '…'}:${a.port ?? '…'}`,
+  },
+  {
+    type: 'midi',
+    label: 'Send a MIDI message',
+    fields: [
+      { key: 'daw_command', label: 'Start from a DAW command', kind: 'preset',
+        presets: () => DAW_COMMANDS,
+        hint: 'Fills in the message below. These are Mackie Control numbers, '
+          + 'which most DAWs already understand - add a "Mackie Control" '
+          + 'device in your DAW pointed at this MIDI port and they work with '
+          + 'nothing to learn. If you are teaching controls by hand instead, '
+          + 'any of these is as good a starting number as any other.' },
+      { key: 'port', label: 'MIDI port', kind: 'text',
+        placeholder: 'Button',
+        hint: 'Part of the port name is enough - Windows adds a number that '
+          + 'changes between sessions, so "Button" matches "Button 2". On '
+          + 'Windows you need loopMIDI to create the port; leave this blank to '
+          + 'use the first port there is.' },
+      { key: 'kind', label: 'Message', kind: 'select',
+        hint: 'Note on is what a DAW learns most readily. Send note off too '
+          + 'if it is driving an instrument rather than a control, or the note '
+          + 'hangs.',
+        options: [
+          { value: 'note_on', label: 'Note on' },
+          { value: 'note_off', label: 'Note off' },
+          { value: 'cc', label: 'Control change (CC)' },
+        ] },
+      { key: 'channel', label: 'Channel', kind: 'number', min: 1, max: 16, step: 1,
+        hint: '1-16, the same numbering your DAW shows.' },
+      { key: 'number', label: 'Note / CC number', kind: 'number', min: 0, max: 127, step: 1,
+        hint: 'Which note or which controller. Any value works as long as '
+          + 'each gesture uses a different one.' },
+      { key: 'value', label: 'Velocity / value', kind: 'number', min: 0, max: 127, step: 1,
+        hint: '127 is "full". For a button this rarely matters; for a CC it is '
+          + 'the value being sent.' },
+    ],
+    defaults: () => ({
+      action: 'midi', port: '', kind: 'note_on', channel: 1, number: 60, value: 127,
+    }),
+    // Named where the numbers say so. Derived rather than stored, which is why
+    // the picker can stay an inserter: "Play" is a fact about note 94, not a
+    // fact about how this action got filled in.
+    describe: (a) => {
+      const command = dawCommandFor(a);
+      if (command) return `MIDI ${command.label} (note ${a.number})`;
+      if (a.kind === 'cc') return `MIDI CC ${a.number ?? '…'}=${a.value ?? '…'} ch${a.channel ?? '…'}`;
+      const what = a.kind === 'note_off' ? 'note off' : 'note on';
+      return `MIDI ${what} ${a.number ?? '…'} ch${a.channel ?? '…'}`;
+    },
   },
   {
     type: 'enter_mode',
@@ -611,10 +802,16 @@ export const TEMPLATES = [
       { key: 'log_as', label: 'Log each session as', kind: 'text', required: true,
         placeholder: 'metronome',
         hint: 'One event per session, carrying the tempo you settled on.' },
+      { key: 'clock_port', label: 'Follow a DAW (MIDI clock in)', kind: 'text',
+        placeholder: 'leave blank to tap the tempo',
+        hint: 'Part of a MIDI input port name. Turn on MIDI Clock Out in your '
+          + 'DAW pointed at that port and the tempo follows the project. '
+          + 'While it is following, tapping marks a beat but no longer sets '
+          + 'the tempo. If the DAW goes quiet the last tempo is held.' },
     ],
     defaults: () => ({
       start_bpm: 120, max_bpm: 300, tap_history: 8, reset_gap_s: 2,
-      sound_on_tap: true, log_as: 'metronome',
+      sound_on_tap: true, log_as: 'metronome', clock_port: '',
       // Beats, not seconds: bar-ish accents rather than a clock.
       ladder: { ...defaultLadder(), tick_s: 1, rungs: [
         { every_s: 4, color: '#ffffff' },
@@ -903,6 +1100,58 @@ TEMPLATES.push({
   },
 });
 
+// ledStates is none: a control surface speaks the button's existing
+// vocabulary - LISTENING while it waits, SUCCESS or ERROR per action - because
+// what you want to know is whether the thing on the other end took the
+// message, not what app you are in.
+// (Comment above `type` so the drift test reads the two keys as adjacent.)
+TEMPLATES.push({
+  type: 'control',
+  ledStates: [],
+  label: 'Control surface',
+  nature: 'takeover',
+  allowedActivations: ['manual'],
+  body: 'actions',
+  // Four, not five. Long press is how you leave every app, so a control
+  // surface cannot have it - the parser drops a binding on it too, which is
+  // what makes this a real constraint rather than a UI suggestion.
+  gestures: ['short_press', 'double_tap', 'triple_tap', 'tap_5'],
+  // No daily stand-down: `unless_logged_today` answers "has this already
+  // happened today", which is a question about an ambient mode that fires
+  // whether or not you were thinking about it. An app you opened on purpose
+  // has already answered it.
+  unlessLogged: false,
+  fields: [
+    { key: 'log_as', label: 'Log each command as', kind: 'text',
+      placeholder: 'daw',
+      hint: 'Optional. One row per command that actually got sent - a failed '
+        + 'send logs nothing, so the count stays honest.' },
+    { key: 'return_after', label: 'Come back here after a branch',
+      kind: 'checkbox',
+      hint: 'Bind a gesture to "Enter a mode" and this becomes a menu page. '
+        + 'On, leaving the page it opened brings you back here, so a long '
+        + 'press always travels exactly one level. Off drops you straight out '
+        + 'to the everyday layer instead.' },
+  ],
+  defaults: () => ({
+    short_press: { action: 'log', event: 'control_press' },
+    log_as: '', return_after: true,
+  }),
+  startedBy: 'gesture',
+  exits: () => 'long press',
+  describe: (mode) => {
+    const parts = [];
+    for (const g of GESTURES) {
+      if (g.key === 'long_press') continue;
+      const action = mode[g.key];
+      if (action && action.action) parts.push(`${g.label} → ${describeAction(action)}`);
+    }
+    return parts.length
+      ? `Control surface - ${parts.join(' · ')}`
+      : 'Control surface - nothing bound yet';
+  },
+});
+
 export const TEMPLATE_BY_TYPE = Object.fromEntries(TEMPLATES.map((t) => [t.type, t]));
 
 // Ready-made modes, offered next to "+ Add mode". Each is a complete mode
@@ -1044,6 +1293,58 @@ export const BUILTIN_MODES = [
         { name: 'Record', color: '#ff00ff', style: 'breathe',
           action: { action: 'osc', host: '127.0.0.1', port: 8000,
                     address: '/record', args: [1] } },
+      ],
+      start_at: 0, log_as: '',
+    }),
+  },
+  {
+    id: 'daw_transport',
+    label: 'DAW transport (MIDI)',
+    blurb: 'An app you open from the launcher: play, record, stop and marker on '
+      + 'four gestures. Set the MIDI port, add a Mackie Control device in your '
+      + 'DAW, and nothing needs learning.',
+    mode: () => ({
+      // A control surface rather than a signal light, because transport wants
+      // one gesture per command: a cycle would pass through Play to reach
+      // Record. Record is on the double tap for the same reason - it is the one
+      // command whose accidental firing costs you a take.
+      //
+      // Marker is on five taps rather than long press: the long press is how
+      // you leave, everywhere, and this is exactly the app where you are least
+      // likely to be looking at the button.
+      name: 'DAW', template: 'control', activation: { type: 'manual' },
+      short_press: { action: 'midi', port: '', kind: 'note_on',
+                     channel: 1, number: 94, value: 127 },   // Play
+      double_tap: { action: 'midi', port: '', kind: 'note_on',
+                    channel: 1, number: 95, value: 127 },    // Record
+      triple_tap: { action: 'midi', port: '', kind: 'note_on',
+                    channel: 1, number: 93, value: 127 },    // Stop
+      tap_5: { action: 'midi', port: '', kind: 'note_on',
+               channel: 1, number: 84, value: 127 },         // Marker
+      log_as: '',
+    }),
+  },
+  {
+    id: 'footswitch_midi',
+    label: 'Footswitch (MIDI)',
+    blurb: 'Cycles loop → metronome → marker in a DAW over MIDI. Set the port, '
+      + 'add a Mackie Control device in the DAW, and it works unlearned.',
+    mode: () => ({
+      // Toggles and one-shots, deliberately - *not* transport. A signal light
+      // advances on each press, so a Stop/Play/Record cycle would pass through
+      // Play on its way to Record and start playback you did not ask for.
+      // Transport wants one gesture per command, which is an actions mode.
+      name: 'Footswitch', template: 'signal', activation: { type: 'manual' },
+      states: [
+        { name: 'Loop', color: '#00b0ff', style: 'solid',
+          action: { action: 'midi', port: '', kind: 'note_on',
+                    channel: 1, number: 86, value: 127 } },
+        { name: 'Metronome', color: '#ffb000', style: 'solid',
+          action: { action: 'midi', port: '', kind: 'note_on',
+                    channel: 1, number: 89, value: 127 } },
+        { name: 'Marker', color: '#ff00ff', style: 'flash',
+          action: { action: 'midi', port: '', kind: 'note_on',
+                    channel: 1, number: 84, value: 127 } },
       ],
       start_at: 0, log_as: '',
     }),

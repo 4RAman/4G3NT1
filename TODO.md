@@ -95,23 +95,29 @@ confirm with the user first if it might be running against the real button.
 |---|---|
 | Protocol v1 frozen | ✔ done — item **0b** |
 | Single-instance guard | ✔ done |
-| **10 apps** verified on hardware | **built — item 7 ✔.** Eight verified on hardware (item **2** ✔); **Hot/Cold, Reaction and Signal are code-complete and unverified** |
+| **10 apps** verified on hardware | **built — item 7 ✔.** Eight verified on hardware (item **2** ✔); **Hot/Cold and Reaction walked on hardware 2026-08-19** and both play correctly; **Signal is code-complete and unverified** |
 | **A launcher** | ✔ done — item **0a** |
 | Naive-user run | not started; wants item **14** first |
 | 24-hour soak | not started |
 | Verified power-cycle recovery | ✔ done — reconnected cleanly on a real replug |
 
-**Four gates are done, one is a hardware session away, and two are not
-started. Nothing left is blocked on design.** Ten apps now exist; what the
-gate still wants is the three new ones walked against a real button, the way
-item **2** walked the first eight. Then hardware time (**0c**, the soak) and a
-naive-user run (**14**).
+**Four gates are done, one is nearly there, and two are not started. Nothing
+left is blocked on design.** Ten apps now exist; what the gate still wants is
+**Signal** walked against a real button, the way item **2** walked the first
+eight. Then hardware time (**0c**, the soak) and a naive-user run (**14**).
 
-**The three new apps have never met the hardware.** Two of them are the first
-things here whose *correctness depends on timing*, so they are the ones most
-likely to behave differently on a radio than on a MockDevice — that is
-precisely why `press_latency_s` exists (CLAUDE.md's invariants). Walk them
-with `--ble` before believing the gate.
+**The two timing-dependent apps are verified.** Hot/Cold and Reaction were the
+ones most likely to behave differently on a radio than on a MockDevice, being
+the first things here whose *correctness depends on timing* — that is precisely
+why `press_latency_s` exists (CLAUDE.md's invariants). Both were walked with
+`--ble` on 2026-08-19, after firmware 0.6.1 dated the press at the edge, and
+both play the way they do under simulation. **That is the timing correction
+confirmed end to end**, and it is the part that was theory until somebody
+pressed the button.
+
+Signal is the remaining one and is the least likely to surprise anyone: it
+holds a state and pushes a colour, with no clock in it. Walk it anyway — the
+same was said about the offline editor.
 
 ## Six bodies of work, not twenty items
 
@@ -128,7 +134,7 @@ view.
 | **The light as a language** — ladder ✔, where colour is edited ✔, stop list | **19** (a ✔, c, d ✔, e ✔) | Only **19b/c** left |
 | **Saying a number** — ambient counting, count readout, progress | **15**, **17** | Wants the stop list (**19b**) first — a readout *is* a stop list |
 | **Play** — timing/rhythm and guessing games | **16** ✔ | Done for forgiving games; tight rhythm still needs Stage 3's on-device runtime |
-| **Reaching other software** — OSC ✔, MIDI if ever | ✔ shipped with **7** | Ungated. MIDI costs a dependency and a virtual port; nothing needs it yet |
+| **Reaching other software** — OSC ✔, MIDI out ✔, clock in ✔ | ✔ shipped with **7**, **22** ✔, **24** ✔ | Done both ways. Wants a bench session against a real DAW rather than a loopback |
 | **One machine, many timers** — Pomodoro/HIIT/Tabata as presets | **20** ✔ | Done |
 
 Two things sit outside the table. **0c** is hardware (re-solder + the 5 V
@@ -458,52 +464,6 @@ so a backgrounded timer is *asked* rather than watched.
 data; the Counter reading its number from the store; and the concurrency
 paragraph in ARCHITECTURE.md.
 
-### 22. A `midi` action, because Studio One does not speak OSC
-
-**Decided 2026-08-19: build it.** The `osc` action shipped first on the
-assumption that the DAW would be OSC-native. The actual DAW is **Studio One**,
-and it is not.
-
-**What the research found, so nobody repeats it.** PreSonus documents control
-surfaces over **MIDI / Mackie Control**, and Studio One Remote uses their own
-UCNet protocol — neither is OSC. TouchOSC's own documented route into a DAW is
-*TouchOSC Bridge converting OSC to MIDI*, which is what you would expect if the
-DAW could not take OSC directly. **Confidence: high but not certain** — the
-PreSonus forum thread that would have settled it outright was closed in
-November 2024, so this is inference from current docs rather than a definitive
-"no". If someone finds a native OSC listener in Studio One, this item is void.
-
-**Why MIDI is the better fit anyway, not just the necessary one.** Studio One's
-**Control Link** assigns almost any control by right-click → Assign → move the
-controller. That is exactly the assignability the request asked for, and it
-covers transport record/stop/play. OSC into Studio One ends up as MIDI at the
-far end regardless, just with a bridge in the middle to misconfigure.
-
-**The shape.** A **sibling action** to `osc`, not a mode of it — a MIDI note
-does not travel over OSC and vice versa, and
-[CLAUDE.md](CLAUDE.md)'s action union is where siblings go. Follow `osc.py`
-exactly: a pure encoding/message half that is testable without hardware, and
-the I/O in `actions.py` beside the httpx and socket calls.
-
-- `MidiAction(port, channel, kind, number, value)` — `kind` being note-on /
-  note-off / CC covers everything Control Link can learn.
-- **This is the first real runtime dependency added since bleak** — the
-  service is httpx/fastapi/uvicorn/bleak and that restraint is deliberate
-  ([CLAUDE.md](CLAUDE.md)'s conventions). `python-rtmidi` is the cost, and it
-  should degrade the way the control panel's imports do: absent library means
-  a logged error and a failed action, never a service that will not start.
-- **On Windows the user also installs loopMIDI**, because there is no built-in
-  way to create the virtual port a DAW can see. That is a setup step outside
-  this repo and belongs in the README next to the OSC notes.
-- Ship a preset the way the Footswitch preset works today: record / stop /
-  play, every field editable.
-
-**Definition of done.** A gesture sends a note Studio One can learn through
-Control Link; the encoder is unit-tested without a MIDI port attached; a
-missing `python-rtmidi` costs the action and not the service; and README says
-what to install. What OSC cannot honestly do it still cannot do — **live
-looping is out**, 0.4 s of tap window plus radio is 20× what punch-in needs.
-
 ### 23. Composition — apps that fire actions at their edges, carrying their data
 
 **Decided 2026-08-19: design it in full before building any of it.** The
@@ -715,6 +675,18 @@ descriptor change per template, not new code.
 - **The service is not always under the tray.** Started from a terminal it
   works identically (the panel polls `/api/status`, not the process table), but
   the panel's Start/Stop won't own it. Worth knowing when debugging.
+- **The apps count is eleven now, not ten.** The control surface is a new
+  takeover template (see Done), so ROADMAP's "10 apps" gate is met with one to
+  spare — but the new one has the same status the other three had: **it has
+  never met the button.** It is host-side dispatch with no clock in it, so the
+  risk is low, but the offline editor looked built too.
+- **The MIDI port field could be a dropdown.** `midi_io.ports()` already
+  answers "what can this machine reach", and typing a port name is the one
+  place the `midi` action asks a person to know something the service knows.
+  It would follow the colour engine's rule exactly — **optional by
+  construction**, since the offline editor has no service to ask, so the
+  control degrades to the free-text box it is today rather than requiring one.
+  Small, and it is the last rough edge on item 22.
 
 ## Parking lot (deliberately later)
 
@@ -751,6 +723,127 @@ descriptor change per template, not new code.
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**24. Follow the DAW's tempo — MIDI clock in**~~ — shipped 2026-08-19. The
+  metronome takes a `clock_port`; set it and the tempo follows the project.
+
+  **What arrives.** MIDI Clock is `0xF8` sent **24 times per quarter note**,
+  plus `0xFA`/`0xFB`/`0xFC` for start/continue/stop. The tempo is never
+  transmitted — it is inferred from the intervals. **Not MIDI Time Code**,
+  which carries SMPTE position and says nothing about tempo; a DAW offers both.
+
+  **A median, not a mean** ([midi_clock.py](aibutton/midi_clock.py)). One late
+  delivery is normal on a driver thread, and a mean lets a single 15 ms
+  straggler drag the answer. The price is that a deliberate tempo change takes
+  half a window to be believed, which is half a beat — the right trade against
+  lurching on every scheduling hiccup. Measured on a loopback: within 1–2% of
+  the target, and that residual was the *test sender's* per-pulse overhead, not
+  the receiver.
+
+  **`midi_out.py` became `midi_io.py`.** Sending and receiving are not
+  symmetrical — output is a call, input is a callback on someone else's thread
+  — but they share the backend question, and answering it twice in two modules
+  would have been the drift this codebase keeps testing for.
+
+  **The bug worth remembering, because it kills the process rather than raising.**
+  A ctypes callback the driver still holds must be kept alive by something
+  Python can see. The first version closed over the `WINFUNCTYPE` object and
+  then `del`-ed it inside the closer — which makes the name *local to that
+  function*, so the closure never captured it, the object was freed the moment
+  `listen()` returned, and the next pulse called freed memory: **illegal
+  instruction, no traceback**. It reads like careful cleanup. Now parked on the
+  closer as an attribute, and written up in CLAUDE.md's conventions.
+
+  **Three decisions.** The clock owns the tempo while it is running and **taps
+  no longer set it** (they still mark a beat and still click) — two things
+  steering one number is a metronome that argues with the session. Silence
+  longer than two beats **holds the last tempo** rather than blanking, because
+  a DAW that is quit sends no `0xFC` and the pulses simply stop. And the light
+  is only re-pushed when the estimate moves by ≥0.5 BPM, or a rock-steady
+  project would cost a radio write five times a second.
+
+  **This is permanently host-side**, not one of the "assumes the host is awake"
+  compromises to find and remove later — the DAW is on the host by definition.
+
+- ~~**A control-surface template, and a DAW command picker**~~ — the two
+  things bench-testing MIDI against Studio One turned up, shipped 2026-08-19.
+
+  **The picker.** A MIDI action now opens with "Start from a DAW command" —
+  Play, Record, Stop, Marker, Loop, Metronome and the rest, as **Mackie
+  Control** note numbers. That choice is the whole value: MCU is a de-facto
+  standard every major DAW implements, so a DAW told it has a Mackie Control
+  already knows what note 94 means and there is nothing to learn. The table is
+  **JS-only and creates no mirror** — the action stores a number, and `describe`
+  reads the name back off it, so Python never needs to know 94 is Play.
+  Reusing the webhook's preset widget meant generalising it first: it assigned
+  `url` and `payload` *by name*, so a generic-looking widget was quietly
+  webhook-only. It writes whatever its table says now.
+
+  **The template.** `control` — a takeover whose gestures each fire their own
+  action. It exists because neither existing shape worked as a remote: an
+  ambient `actions` mode maps gestures to actions but **cannot be an
+  `enter_mode` target**, and a `signal` light is a takeover but **cycles**, so
+  reaching Record would pass through Play and start playback. Behaviour was
+  free (`ActionsBehavior` already had the map); the cost was the usual template
+  tax — dataclass, parser, allow-lists, serialiser, run loop, descriptor.
+
+  **Three decisions in it.** Long press is **not bindable and the parser drops
+  it** — this is the template where breaking the escape rule is most tempting,
+  so it is enforced rather than documented (now an invariant in CLAUDE.md).
+  The confirmation flash is `_CONTROL_CONFIRM_S = 0.3` rather than the ambient
+  layer's 2 s, because a surface you stay inside is meant to be played and two
+  seconds between Play and Record would feel broken; presses during it queue
+  rather than drop, and a test presses ten times to prove it. And the editor's
+  gesture list became **descriptor data** (`gestures`, `unlessLogged`) rather
+  than a branch, so a third gesture-mapped template costs nothing there.
+
+  **Also caught: `BUILTIN_MODES` had no test at all.** The DAW preset first
+  shipped as `actions` + `manual`, which is not an allowed pair — it would have
+  saved, been skipped by the parser, and vanished with only a warning in a log
+  nobody reads. Every preset's template/activation pair is checked now.
+
+- ~~**22. A `midi` action, because Studio One does not speak OSC**~~ — a
+  sibling of `osc`, shipped 2026-08-19. [midi.py](aibutton/midi.py) encodes the
+  three bytes and knows nothing about ports;
+  [midi_io.py](aibutton/midi_io.py) gets them to one; `actions.py` maps the
+  result onto ok/not-ok and nothing else.
+
+  **The research, kept because it is the expensive part.** PreSonus document
+  control surfaces over **MIDI / Mackie Control** and Studio One Remote uses
+  their own UCNet protocol — neither is OSC. TouchOSC's own documented route
+  into a DAW is a bridge converting OSC *to* MIDI, which is the same admission
+  from the other side. **High confidence, not certainty**: the PreSonus thread
+  that would have settled it was closed in November 2024. If a native OSC
+  listener turns up in Studio One, `osc` was always there.
+
+  **The dependency the item accepted turned out not to be installable, and
+  is no longer the route.** `python-rtmidi` publishes **no wheel for Python
+  3.14** — `pip download --only-binary=:all:` finds nothing — so it builds from
+  source, and the build fails on this machine inside meson's own temp-directory
+  cleanup (`PermissionError: WinError 32`) after compiling successfully. Rather
+  than pin an older Python or chase the build, MIDI now goes out through
+  **`winmm.dll` via `ctypes`** ([midi_io.py](aibutton/midi_io.py)):
+  `midiOutShortMsg` exists to send exactly this three-byte message, it has
+  shipped with Windows since the 90s, and **it is what python-rtmidi calls one
+  layer down** — its own error strings name `MidiOutWinMM`. So the action costs
+  **no dependency at all on Windows**, which is strictly better than what the
+  item planned. rtmidi is kept as the Linux/macOS backend and stays unlisted.
+
+  **Three decisions worth not relitigating.** The backend is chosen **once at
+  import, Windows first**, because both answers are about the machine rather
+  than the moment. The port is matched on **part of its name**, because Windows
+  renames what loopMIDI creates (`Button` → `Button 2`) with a suffix that
+  changes between sessions. And the port is **opened per send rather than
+  cached**: a held handle goes stale exactly when loopMIDI or the DAW restarts,
+  and it fails as silence, which is the worst failure available here.
+
+  **What is proven, and what is not.** The encoder is tested against the spec's
+  status bytes, and the send path is tested **against the real OS** — the suite
+  enumerates this machine's MIDI devices and sends a note-off to one, which is
+  what catches a truncated ctypes handle or a mis-packed DWORD. What has *not*
+  happened is loopMIDI and Studio One: nothing has confirmed Control Link
+  learning a message. That is a bench test, and it is the only thing between
+  this and the item's original definition of done.
 
 - ~~**A drift audit, and the mirrors it found unwatched**~~ — a deliberate
   sweep for dead code, unfinished edges and untested duplication.

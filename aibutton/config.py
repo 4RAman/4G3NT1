@@ -76,7 +76,7 @@ import os
 from dataclasses import dataclass, field, fields, replace
 from datetime import time
 
-from . import ladder, ramp, scenes
+from . import ladder, midi, ramp, scenes
 from .device import LED_STYLES, SAFE_MIN_PERIOD_S, STYLE_STROBES, LEDState, TriggerType
 from .scenes import SceneSettings
 
@@ -135,6 +135,34 @@ class OscAction:
 
 
 @dataclass(frozen=True)
+class MidiAction:
+    """Send one MIDI message to a port another application is listening on -
+    a DAW, chiefly.
+
+    A sibling of OscAction rather than a mode of it, for the reason osc.py
+    already gives: a MIDI note does not travel over OSC and vice versa. It
+    exists because the DAW in question is Studio One, which speaks MIDI and
+    Mackie Control and not OSC (see [midi.py](midi.py)).
+
+    `port` is matched as a case-insensitive substring of the open MIDI output
+    ports, not as an exact name: Windows decorates a loopMIDI port with a
+    numeric suffix that changes between sessions, so "Button" is the name a
+    config can hold and "Button 2" is what the system will actually call it.
+    An empty port means the first one available, which is right on a machine
+    with exactly one virtual cable and wrong to rely on anywhere else.
+
+    `channel` is 1-16 the way a DAW's own UI says it; midi.py owns the
+    conversion to the wire's 0-15.
+    """
+
+    port: str
+    channel: int
+    kind: str  # one of midi.KINDS
+    number: int  # note number, or CC number
+    value: int  # velocity, or CC value
+
+
+@dataclass(frozen=True)
 class EnterModeAction:
     """Switch into the named takeover mode (alarm/stopwatch/counter). This is
     how a gesture in an ambient mode starts a takeover, so "entered by a
@@ -147,7 +175,10 @@ class EnterModeAction:
     target: str
 
 
-Action = LogAction | TimerToggleAction | WebhookAction | OscAction | EnterModeAction
+Action = (
+    LogAction | TimerToggleAction | WebhookAction | OscAction | MidiAction
+    | EnterModeAction
+)
 
 
 # --- activations -------------------------------------------------------
@@ -202,6 +233,49 @@ class ActionsBehavior:
     @property
     def template(self) -> str:
         return "actions"
+
+
+@dataclass(frozen=True)
+class ControlBehavior:
+    """A control surface: an app whose gestures fire actions, like the ambient
+    layer, but only while it is open.
+
+    **The same map as `ActionsBehavior`, at the other level.** That is the
+    whole idea and the reason this is cheap: an ambient actions mode answers
+    gestures *whenever nothing has taken over*, and this answers them *because
+    you opened it*. Nothing about what a gesture means changes; only when it
+    applies. It exists because the two shapes that could already fire arbitrary
+    actions both got it wrong for a remote - the ambient layer cannot be
+    reached from a launcher, and a Signal light *cycles* rather than binding
+    one gesture per command.
+
+    **Long press is not bindable, and the parser enforces it.** CLAUDE.md's
+    rule is that a long press means "up one level" everywhere, and a control
+    surface is the case where breaking it would be most tempting - four
+    gestures feels tight and there is a fifth right there. Taking it would buy
+    one more command and cost the one gesture people are supposed to trust
+    without thinking, in the app most likely to be used without looking. A
+    binding on `long_press` is dropped with a warning rather than honoured.
+
+    So the budget is four: short press, double tap, triple tap, five taps. If
+    that is not enough, **bind one of them to `enter_mode` and branch** - a
+    control surface can open another one, so four gestures per page buys as
+    many pages as you care to build. That is why `return_after` is here and
+    defaults to on: without it, long press out of a sub-page would drop you all
+    the way to the ambient layer, and the gesture would mean "up one level" or
+    "up two" depending on how deep you had gone.
+    """
+
+    actions: dict[str, Action]  # trigger value -> action, never long_press
+    log_as: str = ""  # optional event name written on each fire
+    # On: a surface this one opens returns here when it is left, so long press
+    # always travels exactly one level. Same default and same reasoning as
+    # LauncherBehavior.return_after - see the comment there.
+    return_after: bool = True
+
+    @property
+    def template(self) -> str:
+        return "control"
 
 
 @dataclass(frozen=True)
@@ -401,6 +475,13 @@ class MetronomeBehavior:
     max_bpm: float = 300.0
     sound_on_tap: bool = True
     log_as: str = "metronome"  # a finished session logs its BPM under this
+    # Follow a DAW's MIDI clock instead of taps. Empty means tap-only, which is
+    # what this mode has always been. When set, **the clock owns the tempo and
+    # tapping no longer changes it** - two things steering one number is how
+    # you get a metronome that argues with the session. A tap still marks a
+    # beat and still makes its sound, because that is the other thing taps are
+    # for. See [midi_clock.py](midi_clock.py) for what arrives on the wire.
+    clock_port: str = ""
     # A subdivision ladder counted in **beats**, not seconds - which is the
     # only reading that is useful here. The tempo already decides the timing;
     # what a metronome wants from a colour is an *accent* ("every 4th beat"),
@@ -714,7 +795,7 @@ Behavior = (
     ActionsBehavior | AlarmBehavior | StopwatchBehavior | CounterBehavior
     | PomodoroBehavior | MetronomeBehavior | CountdownBehavior
     | ReminderBehavior | LauncherBehavior | HotColdBehavior | ReactionBehavior
-    | SignalBehavior
+    | SignalBehavior | ControlBehavior
 )
 
 # Which activation types each template accepts (per-template allow-list,
@@ -740,6 +821,9 @@ _ALLOWED_ACTIVATIONS = {
     "reaction": (ManualActivation,),
     # Manual: a signal is something you set, so something has to reach it.
     "signal": (ManualActivation,),
+    # Manual: a control surface is an app you open. An always-on one is just
+    # an actions mode, which already exists and is the right thing to use.
+    "control": (ManualActivation,),
 }
 
 # Which LED states belong to a *mode* rather than to the button.
@@ -778,6 +862,11 @@ MODE_LED_STATES: dict[str, tuple[str, ...]] = {
     # None: a Signal wears the colour of whichever position it is on, and
     # those are the app's own, not the button's vocabulary.
     "signal": (),
+    # LISTENING while it waits, then the usual SUCCESS/ERROR per action - the
+    # same vocabulary the ambient layer already speaks, which is the point of
+    # the template. Giving a remote its own colour would be a new LEDState
+    # earning nothing: the interesting feedback is whether the *action* worked.
+    "control": (),
 }
 
 # The rest: the button's own vocabulary, which no mode owns.
@@ -1108,6 +1197,17 @@ def _take(raw: dict, key: str, expected: type, default):
     return default
 
 
+def _is_int_in(value, low: int, high: int) -> bool:
+    """A whole number inside an inclusive range - and not a bool.
+
+    The bool exclusion is the point: `True` is an `int` in Python, so a
+    config that says `"channel": true` would otherwise validate as channel 1
+    and play. Written once here because MIDI checks three such fields in one
+    expression; the older single-field checks still spell it out inline.
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
+
 def _parse_action(raw, where: str) -> Action | None:
     if not isinstance(raw, dict):
         log.error("config: %s must be an object - ignored", where)
@@ -1152,6 +1252,27 @@ def _parse_action(raw, where: str) -> Action | None:
         # address is the one field where a typo silently reaches the wrong
         # handler on the receiving end, so a malformed one is dropped loudly
         # rather than repaired quietly.
+    elif kind == "midi":
+        port = raw.get("port", "")
+        channel = raw.get("channel", 1)
+        midi_kind = raw.get("kind", midi.NOTE_ON)
+        number = raw.get("number")
+        value = raw.get("value", 127)
+        # Ranges are checked here even though midi.message clamps, for the
+        # reason the osc branch drops a bad address: a config asking for
+        # channel 17 is a mistake the editor should be told about, and
+        # silently sending it on channel 16 would be a lie that plays.
+        if (
+            isinstance(port, str)
+            and midi_kind in midi.KINDS
+            and _is_int_in(channel, midi.CHANNEL_MIN, midi.CHANNEL_MAX)
+            and _is_int_in(number, midi.DATA_MIN, midi.DATA_MAX)
+            and _is_int_in(value, midi.DATA_MIN, midi.DATA_MAX)
+        ):
+            return MidiAction(
+                port=port, channel=channel, kind=midi_kind,
+                number=number, value=value,
+            )
     elif kind == "enter_mode":
         # The target is validated as a non-empty string only; whether a
         # takeover mode by that name actually exists is left to the runtime
@@ -1287,6 +1408,46 @@ def _parse_actions_body(raw: dict, where: str, name: str) -> ActionsBehavior | N
         log.error("config: %s (%r) has no valid gesture actions - skipped", where, name)
         return None
     return ActionsBehavior(actions=actions, unless_logged_today=unless_logged_today)
+
+
+def _parse_control_body(raw: dict, where: str, name: str) -> ControlBehavior | None:
+    """Parse a control surface: the same gesture map as an actions mode, minus
+    the long press.
+
+    A bound `long_press` is dropped with a warning rather than honoured. That
+    is the one place this parser is opinionated, and it is deliberate: long
+    press is how you leave every takeover, and an app that ate it would strand
+    you inside itself with no gesture left to say so. The Pomodoro parser
+    warning about unbinding its own exit is the precedent.
+    """
+    actions: dict[str, Action] = {}
+    for trigger in TRIGGER_TYPES:
+        if trigger not in raw:
+            continue
+        if trigger == "long_press":
+            log.error(
+                "config: %s.long_press is how you leave a control surface and "
+                "cannot be bound - ignored", where,
+            )
+            continue
+        action = _parse_action(raw[trigger], f"{where}.{trigger}")
+        if action is not None:
+            actions[trigger] = action
+    if not actions:
+        log.error("config: %s (%r) has no valid gesture actions - skipped", where, name)
+        return None
+    log_as = raw.get("log_as", "")
+    if not isinstance(log_as, str):
+        log.error("config: %s.log_as must be a string - using ''", where)
+        log_as = ""
+    defaults = ControlBehavior(actions={})
+    return_after = raw.get("return_after", defaults.return_after)
+    if not isinstance(return_after, bool):
+        log.error("config: %s.return_after must be true or false - using default", where)
+        return_after = defaults.return_after
+    return ControlBehavior(
+        actions=actions, log_as=log_as, return_after=return_after
+    )
 
 
 def _parse_alarm_body(raw: dict, where: str) -> AlarmBehavior | None:
@@ -1650,6 +1811,12 @@ def _parse_metronome_body(raw: dict, where: str) -> MetronomeBehavior:
                   where, defaults.log_as)
         log_as = defaults.log_as
 
+    clock_port = raw.get("clock_port", defaults.clock_port)
+    if not isinstance(clock_port, str):
+        log.error("config: %s.clock_port must be a string - using tap tempo",
+                  where)
+        clock_port = defaults.clock_port
+
     return MetronomeBehavior(
         start_bpm=start_bpm,
         tap_history=tap_history,
@@ -1657,6 +1824,7 @@ def _parse_metronome_body(raw: dict, where: str) -> MetronomeBehavior:
         max_bpm=max_bpm,
         sound_on_tap=sound_on_tap,
         log_as=log_as,
+        clock_port=clock_port,
         ladder=_parse_ladder(raw.get("ladder"), f"{where}.ladder"),
     )
 
@@ -1960,6 +2128,8 @@ def _parse_mode(raw, idx: int, looks: set[str] | None = None) -> Mode | None:
         behavior = _parse_reaction_body(raw, where)
     elif template == "signal":
         behavior = _parse_signal_body(raw, where)
+    elif template == "control":
+        behavior = _parse_control_body(raw, where, name)
     else:  # pragma: no cover - allow-list keys and this dispatch stay in sync
         log.error("config: %s (%r) has unknown template %r - skipped", where, name, template)
         return None
@@ -2321,6 +2491,11 @@ def _action_to_dict(action: Action) -> dict:
             "action": "osc", "host": action.host, "port": action.port,
             "address": action.address, "args": list(action.args),
         }
+    if isinstance(action, MidiAction):
+        return {
+            "action": "midi", "port": action.port, "channel": action.channel,
+            "kind": action.kind, "number": action.number, "value": action.value,
+        }
     if isinstance(action, EnterModeAction):
         return {"action": "enter_mode", "target": action.target}
     raise TypeError(f"unknown action type {type(action).__name__}")
@@ -2441,6 +2616,7 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["max_bpm"] = mode.behavior.max_bpm
         entry["sound_on_tap"] = mode.behavior.sound_on_tap
         entry["log_as"] = mode.behavior.log_as
+        entry["clock_port"] = mode.behavior.clock_port
     elif isinstance(mode.behavior, HotColdBehavior):
         entry["sweep_s"] = mode.behavior.sweep_s
         entry["rounds"] = mode.behavior.rounds
@@ -2451,6 +2627,14 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["ramp"] = [
             {"color": stop.color, "at": stop.at} for stop in mode.behavior.ramp
         ]
+    elif isinstance(mode.behavior, ControlBehavior):
+        # Flat, exactly like an actions mode - one key per gesture. The two
+        # templates round-trip through the same shape on purpose: changing a
+        # mode from always-on to an app should be a one-word edit.
+        for trigger, action in mode.behavior.actions.items():
+            entry[trigger] = _action_to_dict(action)
+        entry["log_as"] = mode.behavior.log_as
+        entry["return_after"] = mode.behavior.return_after
     elif isinstance(mode.behavior, SignalBehavior):
         entry["states"] = [
             {

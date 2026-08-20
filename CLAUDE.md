@@ -242,9 +242,14 @@ Three consequences for code written today:
   drift. Only `device.STYLE_STROBES` styles are floored, mirrored as
   `strobes: true` in `schema.js`.
 - **Long press means "up one level", everywhere.** Alarm, stopwatch, counter,
-  pomodoro, metronome, countdown, both games, the signal light and the
-  launcher all leave on a long press;
-  the Pomodoro parser warns if you unbind its only exit. The launcher is the
+  pomodoro, metronome, countdown, both games, the signal light, the control
+  surface and the launcher all leave on a long press;
+  the Pomodoro parser warns if you unbind its only exit. **The control surface
+  is the case where the parser takes the choice away entirely** — it is a
+  gesture→action map like an ambient mode, so binding `long_press` is a thing
+  a config can obviously *say*, and `_parse_control_body` drops it with a
+  warning. Four gestures feels tight and the fifth is right there; that is
+  precisely why it is enforced rather than documented. The launcher is the
   case that proves it - it launches on a *double tap*, because a menu where the
   universal escape gesture instead committed you to something would be the one
   exception to a rule people are supposed to trust without thinking. Modes
@@ -339,6 +344,14 @@ is the one surface that will exist in someone else's pocket.
 - Comments explain **why**, not what. The tricky ones here are hardware
   reality (WS2812 byte order, sticky download mode) and deliberate
   trade-offs (dropping presses while busy) — those are worth a sentence.
+- **A ctypes callback must be kept alive by something Python can see.**
+  [midi_io.py](aibutton/midi_io.py)'s clock listener parks its `WINFUNCTYPE`
+  object on the closer it returns, because a driver calling a collected
+  callback kills the process outright — illegal instruction, no traceback, no
+  exception to catch. Closing over the object and then `del`-ing it inside the
+  nested function is the trap: `del` makes the name *local to that function*,
+  so the closure never captures it at all. It reads like tidy cleanup and it
+  is the bug.
 - Tests assert behaviour and name the scenario, not the method. Prefer one
   event-script table over many near-identical cases (see
   [test_trigger_port.py](tests/test_trigger_port.py)).
@@ -347,6 +360,13 @@ is the one surface that will exist in someone else's pocket.
   **Pillow** — a tray icon has no stdlib equivalent on Windows, and its
   window is plain Tk. Those two are the control panel's alone: nothing in
   the service imports them, so a headless host still installs four.
+  **The `midi` action is the worked example of not adding a fifth.** TODO 22
+  decided to accept `python-rtmidi`; it turned out to publish no wheel for
+  Python 3.14 and to fail its source build here, and the OS API underneath it
+  (`winmm.dll`, via `ctypes`) did the whole job. Before taking a dependency for
+  one action, check what the platform already has — and if you take one anyway,
+  make it **optional at import** and leave it out of `requirements.txt`, so a
+  machine that cannot install it loses that action and not the service.
 - **`aibutton` is a provisional name.** It is descriptive and inaccurate —
   there is deliberately no AI on the device. A rename is coming
   (ROADMAP **D7**), so don't spread the string further than it already is:

@@ -67,6 +67,27 @@ log = logging.getLogger("aibutton")
 _ERROR_DISPLAY_S = 1.5
 # SUCCESS hold time; the device's green window matches it.
 _SUCCESS_DISPLAY_S = 2.0
+
+# How long a control surface holds its per-command confirmation. Much shorter
+# than _SUCCESS_DISPLAY_S on purpose: that one ends with a drop back to IDLE,
+# so two seconds is a pause between separate interactions. A control surface
+# stays open and is meant to be played - Play then Record is one gesture after
+# another, and two seconds of "yes, that went" between them would make the app
+# feel broken. Presses during it are queued rather than lost, so this is a
+# latency choice and not a dropped-input one.
+_CONTROL_CONFIRM_S = 0.3
+
+# How often a clocked metronome re-reads the DAW's tempo. The pulses are being
+# timestamped continuously on a driver thread whatever this is set to; this
+# only decides how often the loop *asks*. Five times a second is well inside
+# what anyone notices in a tempo change and costs nothing.
+_CLOCK_POLL_S = 0.2
+
+# How far the clock's estimate must move before the light is re-pushed. The
+# estimate wanders by a fraction of a BPM even on a rock-steady project, and
+# without a threshold that would be a radio write several times a second for a
+# change nobody can see.
+_CLOCK_BPM_EPSILON = 0.5
 # The press wait wakes at least this often so a scheduled alarm is noticed
 # within a second of its minute - crucial for the test clock (set 06:59 -> a
 # 07:00 alarm rings ~1s later) and so an alarm added live via the web UI or
@@ -265,12 +286,14 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     """Drive the button until `stop` fires. `device` is the hardware seam:
     --ble picks the real ESP32, otherwise the in-memory MockDevice, and
     tests inject their own. Nothing past this point knows the difference."""
+    from . import midi_io
     from .actions import ActionResult, _fmt_elapsed, execute
     from .audio import ToneLibrary
     from .config import (
         MODE_LED_STATES,
         AlarmBehavior,
         ConfigManager,
+        ControlBehavior,
         CountdownBehavior,
         CounterBehavior,
         EnterModeAction,
@@ -1005,6 +1028,26 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         per_flash = push_tempo(behavior.start_bpm)
         status.last_message = f"tap to set the tempo (from {round(behavior.start_bpm)} BPM)"
 
+        # Following a DAW's clock, if this mode is configured to. A port that
+        # is not there costs the sync and nothing else: the mode opens as the
+        # tap metronome it has always been, because a practice tool that
+        # refuses to run because a DAW is shut is the wrong trade.
+        #
+        # **This is host-side forever**, not one of the "assumes the host is
+        # awake" compromises to find and remove later - the DAW is on the host
+        # by definition (ARCHITECTURE.md's split).
+        clock = None
+        if behavior.clock_port:
+            try:
+                clock = midi_io.ClockListener(behavior.clock_port)
+                where = clock.start()
+                status.last_message = f"waiting for MIDI clock on {where}"
+                log.info("metronome %r following MIDI clock on %s", mode_name, where)
+            except Exception as exc:  # noqa: BLE001 - any failure means tap-only
+                log.warning("metronome %r: no MIDI clock (%s)", mode_name, exc)
+                status.last_message = f"no MIDI clock ({exc}) - tap to set the tempo"
+                clock = None
+
         # The beat clock, which only exists when a ladder does. It runs from
         # `start_bpm` immediately, for the same reason push_tempo does: the
         # light should already be keeping time before the first tap lands.
@@ -1014,60 +1057,115 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         if laddered:
             paint_beat(0)
 
+        def take_tempo(tempo: float, now: float) -> None:
+            """Adopt `tempo` - from a tap or from the clock - and re-phase."""
+            nonlocal bpm, per_flash, beat_step, next_beat
+            bpm = min(behavior.max_bpm, tempo)
+            per_flash = push_tempo(bpm)
+            if next_beat is not None:
+                # Re-phase the beat clock onto now rather than letting it keep
+                # the old tempo's grid. A metronome you retap - or a project
+                # whose tempo you change - should follow you immediately.
+                beat_step = 60.0 / bpm * per_flash
+                next_beat = now + beat_step
+
+        def poll_clock(now: float) -> None:
+            """Read the DAW's tempo, if it is still talking."""
+            fresh = clock.bpm()
+            if fresh is None:
+                return
+            if clock.stale(bpm):
+                # The pulses stopped without a `0xFC` - the DAW was quit,
+                # unplugged or paused mid-stream. Freeze at the last tempo and
+                # say so: a metronome that blanks the moment a cable twitches
+                # is less useful than one that keeps time and tells you it is
+                # on its own now.
+                if bpm is not None:
+                    status.last_message = f"{describe(bpm, per_flash)} (clock stopped)"
+                return
+            # A threshold, not equality: the estimate wanders by a fraction of
+            # a BPM and re-pushing on every wobble would be a radio write
+            # several times a second for a light nobody can see change.
+            if bpm is None or abs(fresh - bpm) >= _CLOCK_BPM_EPSILON:
+                take_tempo(fresh, now)
+            status.last_message = (
+                f"{describe(bpm, per_flash)} from {clock.port_name}"
+                + ("" if clock.rolling else " (stopped)")
+            )
+
         if args.demo:
             # --demo is unattended: no tap will ever arrive, so show it
             # briefly and exit instead of hanging the smoke test.
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
+            if clock is not None:
+                clock.stop()
             return ActionResult(True, "metronome (demo: no taps)")
-        while True:
-            timeout = None
-            if next_beat is not None:
-                timeout = max(0.0, next_beat - loop.time())
-            trigger = await _wait_for_trigger(device.events, stop, timeout)
-            if trigger is None and next_beat is not None and not stop.is_set():
-                # A beat, not a press. Advancing by `per_flash` keeps the beat
-                # *number* honest at tempos where the light may only mark every
-                # Nth one - the ladder is read in beats, not in flashes.
-                beat_no += per_flash
-                paint_beat(beat_no)
-                next_beat += beat_step
-                continue
-            if trigger is None:  # shutting down mid-session
-                return ActionResult(True, "metronome stopped (shutdown)")
-            if trigger is TriggerType.LONG_PRESS:
-                if bpm is None:
-                    return ActionResult(True, "metronome (no tempo set)")
-                # One row per session: the tempo you settled on. The
-                # duration comes free from the mode_enter/mode_exit pair,
-                # so "when did I practise, how long, how fast" is a query
-                # rather than a guess.
-                store.log_event(behavior.log_as, mode=mode_name, value=round(bpm, 1))
-                _, per_flash = metronome_flash(bpm, cm.config.min_flash_period_s)
-                return ActionResult(
-                    True, f"{describe(bpm, per_flash)} over {beats} beats"
+        next_poll = loop.time() + _CLOCK_POLL_S if clock is not None else None
+        try:
+            while True:
+                # Two clocks want waking: the ladder's beat and the tempo poll.
+                # Whichever is sooner sets the timeout, and both are checked on
+                # arrival, so neither can starve the other.
+                deadlines = [d for d in (next_beat, next_poll) if d is not None]
+                timeout = (
+                    max(0.0, min(deadlines) - loop.time()) if deadlines else None
                 )
-            # any tap -> a beat
-            now = loop.time()
-            if taps and (now - taps[-1]) > behavior.reset_gap_s:
-                taps.clear()
-            taps.append(now)
-            del taps[:-behavior.tap_history]
-            beats += 1
-            if behavior.sound_on_tap:
-                play_sound(Sound.ACK)
-            if len(taps) >= 2:
-                intervals = [b - a for a, b in zip(taps, taps[1:])]
-                bpm = min(behavior.max_bpm, 60.0 / (sum(intervals) / len(intervals)))
-                per_flash = push_tempo(bpm)
-                status.last_message = describe(bpm, per_flash)
-                if next_beat is not None:
-                    # Re-phase the beat clock onto the tap that just landed,
-                    # rather than letting it keep the old tempo's grid. A
-                    # metronome you retap should follow you immediately.
-                    beat_step = 60.0 / bpm * per_flash
-                    next_beat = now + beat_step
-            else:
-                status.last_message = "tap again to set the tempo"
+                trigger = await _wait_for_trigger(device.events, stop, timeout)
+                if trigger is None and deadlines and not stop.is_set():
+                    now = loop.time()
+                    if next_poll is not None and now >= next_poll:
+                        next_poll = now + _CLOCK_POLL_S
+                        poll_clock(now)
+                    if next_beat is not None and now >= next_beat:
+                        # A beat, not a press. Advancing by `per_flash` keeps
+                        # the beat *number* honest at tempos where the light may
+                        # only mark every Nth one - the ladder is read in beats,
+                        # not in flashes.
+                        beat_no += per_flash
+                        paint_beat(beat_no)
+                        next_beat += beat_step
+                    continue
+                if trigger is None:  # shutting down mid-session
+                    return ActionResult(True, "metronome stopped (shutdown)")
+                if trigger is TriggerType.LONG_PRESS:
+                    if bpm is None:
+                        return ActionResult(True, "metronome (no tempo set)")
+                    # One row per session: the tempo you settled on. The
+                    # duration comes free from the mode_enter/mode_exit pair,
+                    # so "when did I practise, how long, how fast" is a query
+                    # rather than a guess.
+                    store.log_event(
+                        behavior.log_as, mode=mode_name, value=round(bpm, 1)
+                    )
+                    _, per_flash = metronome_flash(
+                        bpm, cm.config.min_flash_period_s
+                    )
+                    return ActionResult(
+                        True, f"{describe(bpm, per_flash)} over {beats} beats"
+                    )
+                # any tap -> a beat
+                now = loop.time()
+                beats += 1
+                if behavior.sound_on_tap:
+                    play_sound(Sound.ACK)
+                if clock is not None:
+                    # Clocked: the DAW owns the tempo, so a tap marks a beat
+                    # and nothing more. Two things steering one number is how
+                    # you get a metronome that argues with the session.
+                    continue
+                if taps and (now - taps[-1]) > behavior.reset_gap_s:
+                    taps.clear()
+                taps.append(now)
+                del taps[:-behavior.tap_history]
+                if len(taps) >= 2:
+                    intervals = [b - a for a, b in zip(taps, taps[1:])]
+                    take_tempo(60.0 / (sum(intervals) / len(intervals)), now)
+                    status.last_message = describe(bpm, per_flash)
+                else:
+                    status.last_message = "tap again to set the tempo"
+        finally:
+            if clock is not None:
+                clock.stop()
 
     async def run_countdown(behavior: CountdownBehavior, mode_name: str) -> ActionResult:
         """Takeover countdown: a fixed run to zero with the LED's *colour*
@@ -1515,6 +1613,113 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             status.last_ok = True
             log.info("signal %r -> %s", mode_name, name)
 
+    async def run_control(behavior: ControlBehavior, mode_name: str):
+        """A control surface: gestures fire actions until a long press leaves.
+
+        The same dispatch `handle()` does for the ambient layer, held open. It
+        stays a loop rather than becoming one-shot because that is the whole
+        difference between this and an actions mode: you opened it to send
+        several things, and returning to IDLE after each would make every
+        command past the first cost a trip through the launcher.
+
+        **Feedback is per action, not per app.** SUCCESS or ERROR flashes and
+        then the surface's resting light comes back, so the button says whether
+        the DAW took the message and then goes back to waiting - which is why
+        this template needs no LED state of its own.
+
+        Long press is not checked against the bindings because it cannot be
+        bound; `_parse_control_body` drops it. That keeps the escape gesture a
+        property of the parser rather than a thing this loop remembers to
+        honour.
+
+        **Returns `(result, chosen)` like `run_launcher`**, and for the same
+        reason: an `enter_mode` binding makes this a menu page, so it has to be
+        able to name what runs next. `execute()` deliberately cannot do that -
+        it has no idea what a mode is, which is why `handle()` intercepts the
+        same action at the ambient layer instead of passing it on. Four
+        gestures per page and a branch on any of them is what makes a tree of
+        menus cost no new template.
+        """
+        set_status("CONTROL")
+        status.last_mode = mode_name
+        fired = 0
+
+        def resting() -> None:
+            set_led(LEDState.LISTENING)
+            status.last_message = (
+                f"{mode_name}: {len(behavior.actions)} controls, long press to leave"
+            )
+
+        resting()
+        if args.demo:
+            await asyncio.sleep(_SUCCESS_DISPLAY_S)
+            return ActionResult(True, f"control (demo: {mode_name})"), None
+
+        while True:
+            trigger = await _wait_for_trigger(device.events, stop)
+            if trigger is None:
+                return ActionResult(
+                    True, f"{mode_name} left ({fired} sent, shutdown)"
+                ), None
+            if trigger is TriggerType.LONG_PRESS:
+                return ActionResult(True, f"{mode_name} left ({fired} sent)"), None
+            action = behavior.actions.get(trigger.value)
+            if action is None:
+                # Nothing bound. Say so and stay open - dropping out of the app
+                # because you mistimed a tap would be the opposite of useful.
+                status.last_message = f"{mode_name}: nothing on {trigger.value}"
+                play_sound(Sound.ERROR)
+                continue
+            if isinstance(action, EnterModeAction):
+                # A branch to another page. Resolved here rather than in
+                # execute() for the reason handle() does the same: a mode is
+                # not a thing an action primitive knows about. Handing the
+                # target back lets enter_takeover close this page before
+                # opening the next, so a menu tree is a sequence of pages and
+                # never a stack that can grow.
+                target = next(
+                    (m for m in cm.config.modes if m.name == action.target), None
+                )
+                if target is not None and isinstance(
+                    target.behavior, TAKEOVER_BEHAVIORS
+                ):
+                    return ActionResult(
+                        True, f"{mode_name} -> {target.name}"
+                    ), target
+                status.last_ok = False
+                status.last_message = (
+                    f"enter_mode: no takeover mode named {action.target!r}"
+                )
+                set_led(LEDState.ERROR)
+                play_sound(Sound.ERROR)
+                await asyncio.sleep(_CONTROL_CONFIRM_S)
+                resting()
+                continue
+            set_led(LEDState.THINKING)
+            try:
+                result = await execute(
+                    action, trigger=trigger.value, mode_name=mode_name, store=store
+                )
+            except Exception as exc:  # a primitive bug must never close the app
+                log.exception("control action crashed")
+                result = ActionResult(False, f"internal error: {exc}")
+            if result.ok:
+                fired += 1
+                if behavior.log_as:
+                    store.log_event(behavior.log_as, mode=mode_name)
+                status.last_ok = True
+                status.last_message = result.message
+                set_led(LEDState.SUCCESS)
+                play_sound(Sound.SUCCESS)
+            else:
+                status.last_ok = False
+                status.last_message = result.message
+                set_led(LEDState.ERROR)
+                play_sound(Sound.ERROR)
+            log.info("control %r %s -> %s", mode_name, trigger.value, result.message)
+            await asyncio.sleep(_CONTROL_CONFIRM_S)
+            resting()
+
     # Every takeover behaviour, for the two places that ask "is this a mode a
     # gesture can start". One tuple rather than two isinstance chains that
     # drift apart - the launcher made that a real risk, since it is the first
@@ -1522,7 +1727,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     TAKEOVER_BEHAVIORS = (
         AlarmBehavior, StopwatchBehavior, CounterBehavior, PomodoroBehavior,
         MetronomeBehavior, CountdownBehavior, LauncherBehavior, HotColdBehavior,
-        ReactionBehavior, SignalBehavior,
+        ReactionBehavior, SignalBehavior, ControlBehavior,
     )
 
     def app_look(target):
@@ -1682,6 +1887,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                     result = await run_hotcold(mode.behavior, mode.name)
                 elif isinstance(mode.behavior, ReactionBehavior):
                     result = await run_reaction(mode.behavior, mode.name)
+                elif isinstance(mode.behavior, ControlBehavior):
+                    result, chosen = await run_control(mode.behavior, mode.name)
                 elif isinstance(mode.behavior, SignalBehavior):
                     result = await run_signal(mode.behavior, mode.name)
                 else:

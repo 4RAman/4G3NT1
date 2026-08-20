@@ -11,3 +11,11 @@ bleak>=0.22          # the BLE central (--ble); was dev-only before Phase 3
 # stdlib equivalent on Windows.
 pystray>=0.19
 Pillow>=10.0
+
+# The `midi` action needs nothing here on Windows: it goes through winmm.dll,
+# which ships with the OS, via ctypes. On Linux and macOS it needs
+# python-rtmidi, which is deliberately NOT listed - it is a C extension with no
+# wheel for Python 3.14, so requiring it would let a machine fail to install
+# this whole file over a feature most people never touch. The action degrades
+# instead: no backend costs that one action and nothing else.
+#     pip install python-rtmidi          # Linux/macOS only, and only for MIDI

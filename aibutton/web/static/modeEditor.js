@@ -373,8 +373,15 @@ export class ModeEditor {
     clear(this.templateBody);
     const descriptor = TEMPLATE_BY_TYPE[this.mode.template] || TEMPLATES[0];
     if (descriptor.body === 'actions') {
-      this.templateBody.append(this._gestures(), this._unlessLogged());
-    } else {
+      // Which gestures, and whether there is an unless-logged rule, are the
+      // descriptor's business - a control surface offers four gestures because
+      // its long press is the way out, and has no daily stand-down because it
+      // is not on unless you opened it. Both are data rather than a branch on
+      // template name, so a third gesture-mapped template costs nothing here.
+      this.templateBody.append(this._gestures(descriptor));
+      if (descriptor.unlessLogged !== false) this.templateBody.append(this._unlessLogged());
+    }
+    if (descriptor.fields) {
       const grid = el('div', { className: 'tpl-fields' });
       for (const spec of descriptor.fields) {
         const field = createField(spec, this.mode, () => this._changed(), this._fieldCtx());
@@ -513,9 +520,11 @@ export class ModeEditor {
     ]);
   }
 
-  _gestures() {
+  _gestures(descriptor) {
+    const only = descriptor && descriptor.gestures;
+    const offered = only ? GESTURES.filter((g) => only.includes(g.key)) : GESTURES;
     const wrap = el('div', { className: 'gestures' });
-    for (const gesture of GESTURES) wrap.append(this._gesture(gesture));
+    for (const gesture of offered) wrap.append(this._gesture(gesture));
     return wrap;
   }
 

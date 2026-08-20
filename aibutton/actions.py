@@ -14,6 +14,13 @@ rather than a webhook setting because the two differ in kind: one is a
 request with an answer, the other is a datagram that either leaves or
 does not. See [osc.py](osc.py).
 
+The midi primitive is its sibling for the software that does not speak OSC -
+Studio One being the case that forced it. Its two halves are elsewhere for the
+same reason osc's encoder is: [midi.py](midi.py) says what to send and
+[midi_io.py](midi_io.py) gets it to a port, the latter because there turned
+out to be two ways to do that and neither works everywhere. What is left here
+is the mapping onto ok/not-ok, which is all this module ever does.
+
 Alarm modes are *not* handled here: ringing until dismissed/snoozed needs
 the LED/sound/button-event loop that only main.py's run() owns (its
 ring_alarm), so alarms fire via the scheduler, never through execute().
@@ -29,10 +36,11 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import osc
+from . import midi, midi_io, osc
 from .config import (
     Action,
     LogAction,
+    MidiAction,
     OscAction,
     TimerToggleAction,
     WebhookAction,
@@ -62,6 +70,33 @@ _ORDINAL_SUFFIXES = {1: "st", 2: "nd", 3: "rd"}
 def _ordinal(n: int) -> str:
     suffix = "th" if 11 <= n % 100 <= 13 else _ORDINAL_SUFFIXES.get(n % 10, "th")
     return f"{n}{suffix}"
+
+
+def _send_midi(action: MidiAction) -> ActionResult:
+    """Map a MIDI send onto ok/not-ok. The port work is in midi_io.py.
+
+    Three failures, three different messages, because they have three different
+    fixes: no backend at all is a thing you install, a port that is not there is
+    a thing you name or create in loopMIDI, and anything else is the driver
+    talking and is worth quoting verbatim.
+    """
+    what = midi.describe(action.kind, action.channel, action.number, action.value)
+    payload = midi.message(
+        action.kind, action.channel, action.number, action.value
+    )
+    try:
+        port = midi_io.send(action.port, payload)
+        return ActionResult(True, f"MIDI {what} -> {port}")
+    except midi_io.PortNotFound as exc:
+        return ActionResult(False, str(exc))
+    except midi_io.MidiUnavailable as exc:
+        return ActionResult(False, f"MIDI unavailable: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        # Broad on purpose. Both backends reach a C layer - ctypes and rtmidi
+        # alike - and neither documents its exception set reliably. A press
+        # must never take the service down over a MIDI cable.
+        log.exception("midi send failed")
+        return ActionResult(False, f"MIDI failed: {type(exc).__name__}: {exc}")
 
 
 async def execute(
@@ -118,6 +153,9 @@ async def execute(
             )
         except (OSError, ValueError) as exc:
             return ActionResult(False, f"OSC failed: {type(exc).__name__}: {exc}")
+
+    if isinstance(action, MidiAction):
+        return _send_midi(action)
 
     if isinstance(action, WebhookAction):
         payload = {
