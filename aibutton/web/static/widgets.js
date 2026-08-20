@@ -260,18 +260,20 @@ const WIDGETS = {
     };
   },
 
-  // A slider with the number beside it. Same contract as `number`, and the
-  // reason to have both: for a flash period the *shape* of the value matters
-  // more than the digits - you are choosing a rate you can picture, and the
-  // useful thing is that dragging left stops at a floor rather than that you
-  // can type 0.02.
+  // A slider with a typed number beside it, both bound to the same key
+  // (TODO 27) - not a second field, because a template descriptor could
+  // forget to keep two copies in step. For a flash period the *shape* of the
+  // value still matters more than the digits - you are choosing a rate you
+  // can picture - so the slider stays the primary control and the box is
+  // clamped on commit exactly where dragging already stops: typing 0.02
+  // cannot leave the field holding a value dragging could never reach.
   //
   // The floor is a live bound (`bound` above), not a constant: it comes from
   // the config's min_flash_period_s, so raising the setting immediately widens
-  // the slider instead of leaving it lying about what will be accepted. That
-  // is also why the readout names the rate in Hz - the safety limit is written
-  // in flashes per second, and a period in seconds is the reciprocal of the
-  // number anyone reasons in.
+  // both controls instead of leaving one of them lying about what will be
+  // accepted. That is also why the readout names the rate in Hz - the safety
+  // limit is written in flashes per second, and a period in seconds is the
+  // reciprocal of the number anyone reasons in.
   range(spec, obj, onInput, ctx) {
     const min = bound(spec, 'min', ctx) ?? 0;
     const step = spec.step ?? 1;
@@ -282,10 +284,16 @@ const WIDGETS = {
     // top would silently rewrite it the moment the form rendered.
     const max = Math.max(bound(spec, 'max', ctx) ?? 100,
       Number.isFinite(start) ? start : 0);
-    const input = el('input', {
+    const clamp = (value) => Math.min(max, Math.max(min, value));
+    const slider = el('input', {
       type: 'range', className: 'inp inp-range',
       min, max, step,
-      value: Number.isFinite(start) ? Math.min(max, Math.max(min, start)) : min,
+      value: Number.isFinite(start) ? clamp(start) : min,
+    });
+    const number = el('input', {
+      type: 'number', className: 'inp inp-range-num',
+      min, max, step,
+      value: slider.value,
     });
     const readout = el('span', { className: 'fld-readout' });
     const err = errLine();
@@ -299,15 +307,31 @@ const WIDGETS = {
       readout.textContent = spec.describe ? spec.describe(value) : String(value);
     };
 
-    input.addEventListener('input', () => {
-      obj[spec.key] = Number(input.value);
+    const set = (value) => {
+      obj[spec.key] = value;
+      slider.value = value;
       show();
       onInput();
+    };
+
+    slider.addEventListener('input', () => {
+      set(Number(slider.value));
+      number.value = slider.value;
     });
+    number.addEventListener('input', () => {
+      // A mid-typing box ("", "-", "0.") is not a value yet - leave it alone
+      // rather than fighting the keystroke that is about to make it one.
+      if (number.value === '') return;
+      const parsed = Number(number.value);
+      if (Number.isFinite(parsed)) set(clamp(parsed));
+    });
+    // Once typing stops, show what actually got stored - so a floored value
+    // does not sit in the box looking like it was accepted verbatim.
+    number.addEventListener('change', () => { number.value = slider.value; });
     show();
 
     return {
-      el: wrap(spec, el('span', { className: 'range-row' }, [input, readout]), err),
+      el: wrap(spec, el('span', { className: 'range-row' }, [slider, number, readout]), err),
       validate() {
         const value = Number(obj[spec.key]);
         let msg = null;
@@ -381,23 +405,45 @@ const WIDGETS = {
   //
   // The floor is 1%, not 0: zero is what an unset colour looks like in a config
   // written before this meant anything, and the firmware reads that as full.
-  // Offering 0 would let someone pick a value that silently means its opposite.
+  // Offering 0 would let someone pick a value that silently means its opposite
+  // - the typed box (TODO 27) is clamped to the same [1, 100] the slider
+  // already refuses to leave, so typing 0 cannot get there either.
   level(spec, obj, onInput) {
     const start = levelPercent(obj[spec.key]);
-    const input = el('input', {
+    const clamp = (value) => Math.min(100, Math.max(1, value));
+    const slider = el('input', {
       type: 'range', className: 'inp inp-range', min: 1, max: 100, step: 1,
+      value: start,
+    });
+    const number = el('input', {
+      type: 'number', className: 'inp inp-range-num', min: 1, max: 100, step: 1,
       value: start,
     });
     const readout = el('span', { className: 'fld-readout', textContent: `${start}%` });
     const err = errLine();
-    input.addEventListener('input', () => {
-      const percent = Number(input.value);
+
+    const set = (percent) => {
       obj[spec.key] = levelHex(percent);
+      slider.value = percent;
       readout.textContent = `${percent}%`;
       onInput();
+    };
+
+    slider.addEventListener('input', () => {
+      set(Number(slider.value));
+      number.value = slider.value;
     });
+    number.addEventListener('input', () => {
+      if (number.value === '') return;
+      const parsed = Number(number.value);
+      // A whole percent, same as the slider's step - not the general `range`
+      // clamp, because a level has no descriptor bounds to read.
+      if (Number.isFinite(parsed)) set(clamp(Math.round(parsed)));
+    });
+    number.addEventListener('change', () => { number.value = slider.value; });
+
     return {
-      el: wrap(spec, el('span', { className: 'range-row' }, [input, readout]), err),
+      el: wrap(spec, el('span', { className: 'range-row' }, [slider, number, readout]), err),
       validate: () => null,
     };
   },

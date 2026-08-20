@@ -649,27 +649,6 @@ missing. Look before rebuilding - `app_look` in main.py.
 and a branch visibly changes it; the launcher's fate is decided in writing; and
 whichever is the default front door is what a fresh config ships with.
 
-### 27. Every slider should also accept a typed number
-
-**Asked for 2026-08-19.** Sliders are good for picking a value you can picture
-and bad for entering one you already know. Both, everywhere.
-
-`range` and `level` in [widgets.js](aibutton/web/static/widgets.js) render a
-slider; `number` renders a box. The fix is that the slider widgets grow a
-number input beside them, bound to the same key, each updating the other -
-**not** a second field in the schema, because that would put one value in two
-places and let a template descriptor forget one.
-
-Watch the bounds: a typed number must be clamped or refused the same way the
-slider's ends are, or typing 0.02 into the flash-period box walks straight
-through the photosensitivity floor that the slider exists to stop at. The floor
-is `config.flash_safe` and stays the enforcement; this is about the widget not
-*offering* a way around it silently.
-
-**Definition of done.** Every sliding field can be typed into, the two stay in
-sync, and out-of-range typing is handled the way the slider's limits already
-are.
-
 ### 28. Four taps — the gesture that is missing for no reason
 
 **Asked for 2026-08-19.** `GESTURES` has short press, long press, double tap,
@@ -956,6 +935,14 @@ descriptor change per template, not new code.
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**27. Every slider also accepts a typed number**~~ — shipped 2026-08-19.
+  `range` and `level` grew a number box bound to the same key, one shared
+  `set()` path for drag and type. Out-of-range typing **clamps per
+  keystroke**, matching the slider's ends — chosen so an unsafe flash period
+  can never sit in config even momentarily; blur reconciles the box's text
+  with the committed value. No schema change, by design: one field, richer
+  widget.
 
 - ~~**23. Composition — apps that fire actions at their edges**~~ — designed
   2026-08-19, which was the whole deliverable. ARCHITECTURE.md "Composition:
