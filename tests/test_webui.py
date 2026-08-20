@@ -53,7 +53,7 @@ async def test_status_shape(client, ctx):
     data = res.json()
     assert data["state"] == "THINKING"
     assert data["device_name"] == "TestBtn"
-    assert data["mode_count"] == 1  # defaults
+    assert data["mode_count"] == 4  # defaults: Home + Launcher + Pomodoro + Stopwatch (TODO 5)
     assert data["last_trigger"] == "short_press"
     assert data["uptime_s"] >= 0
 
@@ -231,6 +231,19 @@ def test_every_template_claims_the_same_led_states_on_both_sides():
         name: tuple(re.findall(r"'([^']+)'", states)) for name, states in pairs
     }
     assert from_js == {name: tuple(v) for name, v in MODE_LED_STATES.items()}
+
+
+def test_field_tiers_are_only_basic_or_tinker():
+    """TODO 14: Tinker mode hides a field by checking `spec.tier === 'tinker'`
+    in widgets.js - basic is the default, left unwritten, and never appears
+    as a literal 'tier' value on purpose. A typo'd third tier would silently
+    render as basic (always shown) rather than error, which is exactly the
+    kind of drift the mirrored-table tests elsewhere in this file exist to
+    catch before it does."""
+    source = _SCHEMA_JS.read_text(encoding="utf-8")
+    tiers = set(re.findall(r"\btier: '([^']+)'", source))
+    assert tiers, "expected at least one tier: 'tinker' field descriptor"
+    assert tiers <= {"basic", "tinker"}
 
 
 async def test_config_reload_endpoint(client, ctx):

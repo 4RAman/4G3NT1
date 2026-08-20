@@ -109,9 +109,9 @@ export class ConfigMenu {
     return el('div', { className: 'primer', 'data-help': true }, [
       el('p', { className: 'primer-lead', textContent: 'How this button decides what a press does' }),
       el('ol', { className: 'primer-list' }, [
-        line('A mode is a set of instructions: what a short press, a long press and a double tap should each do.'),
-        line('You never pick a mode by hand. The button looks down your everyday modes from the top and uses the first one that is switched on right now and has something set for the press you made.'),
-        line('Some modes take over instead: once started, they own every press until you leave them. Those are listed separately below, each with how to start it and how to get out.'),
+        line('A mode: instructions for what each press (short, long, double) does.'),
+        line("No manual picking - the button scans your everyday modes top-down and uses the first one that's on now and has this press set."),
+        line('Some modes take over instead: once started, they own every press until you leave. Listed separately below, with how to start and exit each.'),
       ]),
     ]);
   }

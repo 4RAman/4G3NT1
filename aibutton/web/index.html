@@ -315,6 +315,9 @@
   .ladder-body[hidden] { display: none; }
   .ladder-rows { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
   .ladder-row { display: flex; align-items: center; gap: 6px; }
+  /* Same author-`display`-beats-`[hidden]` trap as .ladder-body above - the
+     tick/off-beat row Tinker mode hides (widgets.js) is a flex row too. */
+  .ladder-row[hidden] { display: none; }
   .ladder-lbl { color: var(--dim); font-size: 12px; }
   .ladder-every { width: 74px; }
   .ladder-preview { display: flex; gap: 2px; flex-wrap: wrap; margin-top: 4px; }
@@ -351,6 +354,11 @@
                     color: var(--dim); margin: 0 0 8px; }
   .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
   .fld { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+  /* Every field a Tinker toggle hides (widgets.js sets [data-tier="tinker"]
+     then `node.hidden = true`, see help.js) is a .fld, and .fld is a flex
+     container - same override .ladder-body needed above, for the same
+     reason: an author `display` beats the UA's [hidden] { display: none }. */
+  .fld[hidden] { display: none; }
   .fld-check { flex-direction: row; align-items: center; gap: 8px; }
   .fld-label { color: var(--dim); font-size: 12px; }
   .fld-hint { color: var(--dim); font-size: 11px; }

@@ -97,7 +97,7 @@ confirm with the user first if it might be running against the real button.
 | Single-instance guard | ✔ done |
 | **10 apps** verified on hardware | **built — item 7 ✔.** Eight verified on hardware (item **2** ✔); **Hot/Cold and Reaction walked on hardware 2026-08-19** and both play correctly; **Signal is code-complete and unverified** |
 | **A launcher** | ✔ done — item **0a** |
-| Naive-user run | not started; wants item **14** first |
+| Naive-user run | not started; unblocked — item **14** shipped 2026-08-19 |
 | 24-hour soak | not started |
 | Verified power-cycle recovery | ✔ done — reconnected cleanly on a real replug |
 
@@ -129,7 +129,7 @@ view.
 |---|---|---|
 | **The colour engine** — named looks, ramps, the safety floor | **3** ✔, **4** ✔, 0b·3 ✔ | Done. What is left of it is the stop list, in **19b** |
 | **The gesture engine** — N taps, hold levels | 0b·2 ✔, 5-tap gesture ✔, **28** ✔ | Taps are done. Hold levels still need firmware and are the cheap half of **29** |
-| **Depth without the wire** — metronome config ✔, event values ✔, filtering/export ✔ | **1** ✔, **9**, **12**, **14** | None — ship freely |
+| **Depth without the wire** — metronome config ✔, event values ✔, filtering/export ✔ | **1** ✔, **9** ✔, **12**, **14** ✔ | None — ship freely |
 | **Reach and hosting** — launcher ✔, ten apps ✔, remote UI | **0a** ✔, **7** ✔, **8** | Only the hardware walk left on 7 |
 | **The light as a language** — ladder ✔, where colour is edited ✔, stop list | **19** (a ✔, c, d ✔, e ✔) | Only **19b/c** left |
 | **Saying a number** — ambient counting, count readout, progress | **15**, **17** | Wants the stop list (**19b**) first — a readout *is* a stop list |
@@ -318,23 +318,6 @@ anything is genuinely public.
 `requirements.txt`), confirm whether the target server already runs nginx +
 certbot, add a docker-compose service and a reverse-proxy vhost.
 
-### 9. Make Tips content more concise — ASCII/shorthand, no emoji
-
-Scope: the `[data-help]` content gated by the Tips toggle
-([help.js](aibutton/web/static/help.js)) — the primer (`_renderPrimer()` in
-`menu.js`), the group blurbs (`MODE_GROUPS`), and every field's `hint`
-(`schema.js`, rendered by `widgets.js`). Tighten toward fragments over
-sentences, `->`/`:`/`-` instead of prose connectors.
-
-None of the current Tips copy uses emoji (the `⚠`/`ⓘ`/`●` are text symbols),
-so this is really "shorter", not "de-emoji'd". The actual emoji in the app
-(🔵/⚪ in the header indicator, `⚠️` in some `main.py` status strings) are
-outside Tips scope — **flag to the user whether those should go too, don't
-remove them unasked.**
-
-Note this item got bigger while nobody was looking: the ladder, the flash
-floor and the reminder template all added hint text.
-
 ### 10. Checkpoint — review and re-triage
 
 **Last run: 2026-08-16** (this cleanup). Shipped items compressed into
@@ -365,34 +348,6 @@ performance": (a) *habit* analytics for the user (mode usage, streaks,
 time-of-day patterns — a dashboard over `EventStore`), (b) *device* telemetry
 (BLE reconnect frequency, gesture-to-feedback latency, dropped presses), or
 (c) *hosting* metrics once item 8 exists. **Ask which.**
-
-### 14. Tinker mode — one flag that decides how much surface you see
-
-The base experience should be obvious to someone who has never seen it; the
-fringe options should still exist. That is [ROADMAP.md](ROADMAP.md)'s first
-principle, and today nothing implements it — every field a template has is
-rendered to everybody. **It is also what the naive-user exit gate needs.**
-
-**Build it exactly like Tips.** Add `tier: 'basic' | 'tinker'` to field
-descriptors in [schema.js](aibutton/web/static/schema.js), default `basic` when
-absent, and have `widgets.js` mark the node so one toggle hides the lot. Data
-on descriptors, one renderer change, no branches. The toggle joins
-`.header-tools` next to Tips and reads its state through
-[prefs.js](aibutton/web/static/prefs.js) like the side pane does.
-
-**They are two axes, not one:** Tips is *explain / don't explain*; Tinker is
-*show / hide surface*. A basic user with Tips on should get a short, fully
-explained form. Do not collapse them into one "beginner mode".
-
-**The judgement is which fields are which**, and it is the whole value of the
-item — a Tinker flag on everything is the same as no flag. First pass worth
-arguing with: metronome's `tap_history`/`reset_gap_s`/`max_bpm` are tinker and
-`start_bpm` is basic; Pomodoro's `extend_minutes` and per-gesture command
-bindings are tinker; every `log_as`/event name is basic (it is what you came
-for); the whole Device settings group is tinker except `sounds_enabled`; the
-ladder's rungs are basic but its off-beat colour and tick are tinker.
-
-**Unblocked** — it was waiting on item 3's look work, which shipped.
 
 ### 15. Counting without entering an app
 
@@ -882,6 +837,23 @@ descriptor change per template, not new code.
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**14. Tinker mode**~~ — shipped 2026-08-19, built exactly like Tips:
+  `tier: 'tinker'` on ~36 field descriptors (default basic when absent),
+  `widgets.js` marks `data-tier`, `help.js` owns the toggle and its
+  localStorage flag beside Tips's. Two axes kept separate — Tips explains,
+  Tinker reveals. The toggle is built at runtime beside whatever Tips button
+  the shell has, because the served page and the offline editor have
+  different headers and Tips is the one anchor both share. The naive-user
+  gate is now unblocked. Tier judgement calls live in schema.js; argue with
+  them there.
+
+- ~~**9. Tips content, tightened**~~ — shipped 2026-08-19. Fragments, `->`
+  for consequence, every fact and safety number kept — which is why the cut
+  is an honest ~21%, not the 50% hoped for: the hints were already dense
+  with load-bearing costs and gotchas, and shorter-than-the-facts was not on
+  offer. The app's actual emoji (header indicator, `main.py` status strings)
+  were out of scope and stay put pending a user decision.
 
 - ~~**5. The floor mode is permanent, named "Home", and routes into
   takeovers**~~ — shipped 2026-08-19. Protection is **structural, not a

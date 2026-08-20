@@ -21,8 +21,17 @@ function errLine() {
 // The hint carries `data-help`: it's tutorial copy, hidden unless the page's
 // Tips toggle (see help.js) is on, so a form full of fields reads as short
 // labels by default rather than a paragraph per field.
+//
+// `data-tier`: the other, independent axis (TODO 14). A field defaults to
+// 'basic' by simply not carrying the attribute - only 'tinker' fields are
+// marked, and help.js hides `[data-tier="tinker"]` the same way it hides
+// `[data-help]`. Two separate attributes on the same node is the whole
+// mechanism: Tips decides whether the hint below is readable, Tinker decides
+// whether the field exists on screen at all, and neither toggle can imply
+// the other.
 function wrap(spec, control, errEl) {
-  return el('label', { className: 'fld' }, [
+  const tier = spec.tier === 'tinker' ? { 'data-tier': 'tinker' } : {};
+  return el('label', { className: 'fld', ...tier }, [
     el('span', { className: 'fld-label', textContent: spec.label }),
     control,
     spec.hint ? el('span', { className: 'fld-hint', 'data-help': true, textContent: spec.hint }) : null,
@@ -726,13 +735,20 @@ const WIDGETS = {
     // No tick row where the cadence is not the mode's to set - the metronome's
     // tempo is tapped in, so offering a tick there would be a control that
     // does nothing.
+    //
+    // Tinker-tier by construction, not by descriptor (TODO 14): the rungs are
+    // the point of a ladder and stay basic, but the tick rate and the
+    // off-beat colour are fine-tuning on top of a sane default (0.5s, black).
+    // This split is inherent to the widget's own layout rather than a fact
+    // about any one mode's ladder field, so it is marked here directly
+    // instead of threading a second tier through `spec`.
     body.append(
       spec.showTick === false
-        ? el('div', { className: 'ladder-row' }, [
+        ? el('div', { className: 'ladder-row', 'data-tier': 'tinker' }, [
             el('span', { className: 'ladder-lbl', textContent: 'off-beat' }),
             base,
           ])
-        : el('div', { className: 'ladder-row' }, [
+        : el('div', { className: 'ladder-row', 'data-tier': 'tinker' }, [
             el('span', { className: 'ladder-lbl', textContent: 'tick' }),
             tick,
             el('span', { className: 'ladder-lbl', textContent: 's, off-beat' }),
@@ -771,7 +787,11 @@ const WIDGETS = {
       obj[spec.key] = input.checked;
       onInput();
     });
-    const node = el('label', { className: 'fld fld-check' }, [
+    // Own label rather than wrap() (a checkbox reads left of its text, not
+    // above it), so the same data-tier marking wrap() does has to be repeated
+    // here rather than shared.
+    const tier = spec.tier === 'tinker' ? { 'data-tier': 'tinker' } : {};
+    const node = el('label', { className: 'fld fld-check', ...tier }, [
       input,
       el('span', { className: 'fld-label', textContent: spec.label }),
       spec.hint ? el('span', { className: 'fld-hint', 'data-help': true, textContent: spec.hint }) : null,

@@ -22,14 +22,14 @@ export const GESTURES = [
   // and triple tap their instant response (see max_taps_for) - the same cost
   // tap_5's hint explains below, paid one gesture earlier.
   { key: 'tap_4', label: 'Four taps',
-    hint: 'Binding it slows every shorter tap slightly, because the button '
-      + "has to wait to be sure a fourth tap isn't coming." },
+    hint: 'Slows every shorter tap slightly - the button must wait to rule '
+      + 'out a 4th.' },
   // Binding this makes the button count to five, which costs the double tap
   // its instant response (see max_taps_for). Worth saying in the UI, because
   // it is the one gesture whose cost is paid by the *other* gestures.
   { key: 'tap_5', label: 'Five taps',
-    hint: 'Deliberately awkward - good for an on/off. Binding it slows every '
-      + 'shorter tap slightly, because the button has to wait to be sure.' },
+    hint: 'Deliberately awkward - good for an on/off. Slows shorter taps '
+      + 'too, same wait.' },
 ];
 
 export const DAYS = [
@@ -138,26 +138,24 @@ const _mcu = (number) => ({ kind: 'note_on', channel: 1, number, value: 127 });
 // device-type setting at the far end.
 export const DAW_COMMANDS = [
   { id: 'play', label: 'Play (94)', group: 'Transport', set: _mcu(94),
-    hint: 'In most DAWs this toggles - press again to stop. The one to put on '
-      + 'a short press.' },
+    hint: 'Toggles in most DAWs - press again to stop. Best on a short press.' },
   { id: 'stop', label: 'Stop (93)', group: 'Transport', set: _mcu(93),
-    hint: 'A real stop, as distinct from pausing by pressing Play again.' },
+    hint: 'A real stop - not the same as pausing via Play again.' },
   { id: 'record', label: 'Record (95)', group: 'Transport', set: _mcu(95),
-    hint: 'On real Mackie hardware this is a tape deck: Record ARMS and Play '
-      + 'rolls. If one press does nothing, try Record then Play - and check a '
-      + 'track is record-enabled.' },
+    hint: 'Tape-deck logic: Record arms, Play rolls. Nothing happening? Try '
+      + 'Record then Play, and check a track is armed.' },
   { id: 'rewind', label: 'Rewind (91)', group: 'Transport', set: _mcu(91),
-    hint: 'One press jumps back; DAWs differ on whether holding scrubs.' },
+    hint: 'One press jumps back. Holding may or may not scrub - depends on '
+      + 'the DAW.' },
   { id: 'forward', label: 'Fast-forward (92)', group: 'Transport', set: _mcu(92) },
   { id: 'loop', label: 'Loop / cycle (86)', group: 'Transport', set: _mcu(86),
-    hint: 'Toggles looping over the selected range.' },
+    hint: 'Toggles loop over the selected range.' },
   { id: 'punch', label: 'Punch in/out (87)', group: 'Transport', set: _mcu(87) },
   { id: 'replace', label: 'Replace (88)', group: 'Transport', set: _mcu(88) },
   { id: 'click', label: 'Metronome / click (89)', group: 'Transport', set: _mcu(89),
-    hint: 'Toggles the click. A good one to reach without looking.' },
+    hint: 'Toggles the click - good one to hit blind.' },
   { id: 'marker', label: 'Drop a marker (84)', group: 'Transport', set: _mcu(84),
-    hint: 'The one worth having on a button you can hit blind - mark the take '
-      + 'you liked while it is still playing.' },
+    hint: 'Worth a blind-reach button: mark a good take mid-playback.' },
   { id: 'nudge', label: 'Nudge (85)', group: 'Transport', set: _mcu(85) },
   { id: 'clear_solo', label: 'Clear all solos (90)', group: 'Transport', set: _mcu(90) },
 
@@ -166,7 +164,7 @@ export const DAW_COMMANDS = [
   { id: 'cursor_left', label: 'Cursor left (98)', group: 'Navigation', set: _mcu(98) },
   { id: 'cursor_right', label: 'Cursor right (99)', group: 'Navigation', set: _mcu(99) },
   { id: 'zoom', label: 'Zoom (100)', group: 'Navigation', set: _mcu(100),
-    hint: 'On real hardware this makes the cursor keys zoom instead of move.' },
+    hint: 'On real hardware, cursor keys zoom instead of move.' },
   { id: 'scrub', label: 'Scrub (101)', group: 'Navigation', set: _mcu(101) },
 
   { id: 'bank_left', label: 'Bank left - 8 tracks (46)', group: 'Tracks', set: _mcu(46) },
@@ -180,8 +178,8 @@ export const DAW_COMMANDS = [
   // Only the first of each is listed: the pattern is worth knowing once rather
   // than reading thirty-two near-identical menu entries.
   { id: 'arm_1', label: 'Arm track 1 (0)', group: 'Channel strip', set: _mcu(0),
-    hint: 'Add 1 for each track across the bank - track 2 is 1, track 8 is 7. '
-      + 'Same pattern for solo, mute and select below.' },
+    hint: 'Add 1 per track across the bank: track 2 = 1, track 8 = 7. Same '
+      + 'pattern for solo/mute/select below.' },
   { id: 'solo_1', label: 'Solo track 1 (8)', group: 'Channel strip', set: _mcu(8) },
   { id: 'mute_1', label: 'Mute track 1 (16)', group: 'Channel strip', set: _mcu(16) },
   { id: 'select_1', label: 'Select track 1 (24)', group: 'Channel strip', set: _mcu(24) },
@@ -209,8 +207,8 @@ export const DAW_COMMANDS = [
   // Studio One lets a Mackie function key be reassigned to a command, so these
   // are the escape hatch that does not need Control Link.
   { id: 'f1', label: 'F1 (54)', group: 'Function keys', set: _mcu(54),
-    hint: 'Function keys are the escape hatch - assignable to a command in the '
-      + 'DAW, so they cover anything not listed here.' },
+    hint: 'Escape hatch: assignable to any DAW command - covers what is not '
+      + 'listed here.' },
   { id: 'f2', label: 'F2 (55)', group: 'Function keys', set: _mcu(55) },
   { id: 'f3', label: 'F3 (56)', group: 'Function keys', set: _mcu(56) },
   { id: 'f4', label: 'F4 (57)', group: 'Function keys', set: _mcu(57) },
@@ -223,8 +221,8 @@ export const DAW_COMMANDS = [
   // is pressed. One button cannot hold one, so they are here for completeness
   // and are the least useful entries in the table.
   { id: 'shift', label: 'Shift (70)', group: 'Modifiers', set: _mcu(70),
-    hint: 'Momentary on real hardware - held while pressing something else. '
-      + 'A single button cannot hold it, so this is rarely what you want.' },
+    hint: 'Momentary on real hardware - held while pressing another button. '
+      + "One button can't hold it, so rarely useful here." },
   { id: 'option', label: 'Option (71)', group: 'Modifiers', set: _mcu(71) },
   { id: 'control', label: 'Control (72)', group: 'Modifiers', set: _mcu(72) },
   { id: 'alt', label: 'Alt / Cmd (73)', group: 'Modifiers', set: _mcu(73) },
@@ -246,8 +244,8 @@ export const INTEGRATIONS = [
       url: 'https://maker.ifttt.com/trigger/EVENT_NAME/with/key/YOUR_KEY',
       payload: { value1: '', value2: '', value3: '' },
     },
-    hint: 'From IFTTT: Create -> Webhooks -> "Receive a web request". The '
-      + 'three value1/2/3 fields are the only ones applets can read.',
+    hint: 'IFTTT: Create -> Webhooks -> "Receive a web request". Applets '
+      + 'read only value1/2/3.',
   },
   {
     id: 'make',
@@ -257,8 +255,8 @@ export const INTEGRATIONS = [
       url: 'https://hook.REGION.make.com/YOUR_WEBHOOK_ID',
       payload: {},
     },
-    hint: 'Copy the whole URL from the Custom Webhook module - the region '
-      + 'part differs per account, so do not hand-type it.',
+    hint: 'Copy the full URL from the Custom Webhook module - region varies '
+      + "per account, don't hand-type it.",
   },
   {
     id: 'zapier',
@@ -268,8 +266,8 @@ export const INTEGRATIONS = [
       url: 'https://hooks.zapier.com/hooks/catch/YOUR_ID/YOUR_HOOK/',
       payload: {},
     },
-    hint: 'Zapier reads whatever JSON arrives, so the trigger/mode/ts fields '
-      + 'the button adds are usable as Zap fields with no extra payload.',
+    hint: 'Zapier reads any JSON that arrives - trigger/mode/ts are usable '
+      + 'as Zap fields with no extra payload.',
   },
   {
     id: 'home_assistant',
@@ -279,8 +277,8 @@ export const INTEGRATIONS = [
       url: 'http://homeassistant.local:8123/api/webhook/YOUR_WEBHOOK_ID',
       payload: {},
     },
-    hint: 'Local and needs no token - a webhook trigger is deliberately '
-      + 'unauthenticated, so treat the ID as the secret.',
+    hint: 'Local, no token needed - the webhook is unauthenticated by '
+      + 'design, so treat the ID as the secret.',
   },
   {
     id: 'n8n',
@@ -290,8 +288,8 @@ export const INTEGRATIONS = [
       url: 'https://YOUR_HOST/webhook/YOUR_PATH',
       payload: {},
     },
-    hint: 'Use the Production URL, not the Test URL - the test one only '
-      + 'listens while you have the editor open.',
+    hint: 'Use the Production URL, not Test - Test only listens while the '
+      + 'editor is open.',
   },
   {
     id: 'slack',
@@ -301,8 +299,7 @@ export const INTEGRATIONS = [
       url: 'https://hooks.slack.com/services/YOUR_TEAM/YOUR_CHANNEL/YOUR_TOKEN',
       payload: { text: 'Button pressed' },
     },
-    hint: 'Slack only reads "text" here; the other fields ride along and are '
-      + 'ignored.',
+    hint: 'Slack reads only "text" - other fields ride along, ignored.',
   },
   {
     id: 'discord',
@@ -312,8 +309,8 @@ export const INTEGRATIONS = [
       url: 'https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN',
       payload: { content: 'Button pressed' },
     },
-    hint: 'Discord only reads "content" here. Server Settings -> Integrations '
-      + '-> Webhooks.',
+    hint: 'Discord reads only "content". Server Settings -> Integrations -> '
+      + 'Webhooks.',
   },
   {
     id: 'node_red',
@@ -323,8 +320,8 @@ export const INTEGRATIONS = [
       url: 'http://YOUR_HOST:1880/YOUR_ENDPOINT',
       payload: {},
     },
-    hint: 'Pair the http in node with an http response node or the request '
-      + 'hangs until it times out.',
+    hint: 'Pair http in with an http response node, or the request hangs '
+      + 'till it times out.',
   },
 ];
 
@@ -339,7 +336,7 @@ export const ACTIONS = [
     fields: [
       { key: 'event', label: 'Event name', kind: 'text', required: true,
         placeholder: 'meds_taken',
-        hint: 'Counted and streak-tracked; shows up in Recent events.' },
+        hint: 'Counted, streak-tracked, shows in Recent events.' },
     ],
     defaults: () => ({ action: 'log', event: '' }),
     describe: (a) => `Log event “${a.event || '…'}”`,
@@ -350,7 +347,7 @@ export const ACTIONS = [
     fields: [
       { key: 'log_as', label: 'Timer name', kind: 'text', required: true,
         placeholder: 'focus',
-        hint: 'First press starts; the next stops and records the elapsed time.' },
+        hint: 'First press starts, next stops - records elapsed time.' },
     ],
     defaults: () => ({ action: 'timer_toggle', log_as: '' }),
     describe: (a) => `Toggle timer “${a.log_as || '…'}”`,
@@ -365,13 +362,16 @@ export const ACTIONS = [
       // afterwards is the normal case.
       { key: 'integration', label: 'Start from a service', kind: 'preset',
         presets: () => INTEGRATIONS,
-        hint: 'Fills in the URL shape and payload below. Every template has '
-          + 'YOUR_ placeholders to replace - none is a working URL as-is.' },
+        hint: 'Fills in URL + payload below. Every template has YOUR_ '
+          + 'placeholders - none works as-is.' },
       { key: 'url', label: 'URL', kind: 'text', required: true,
         placeholder: 'https://…',
-        hint: 'POSTed to on press - the IFTTT / Make / n8n / Home Assistant hook.' },
-      { key: 'payload', label: 'Extra JSON payload', kind: 'json',
-        hint: 'Optional object merged into the POST body (trigger, mode, ts are added for you).' },
+        hint: 'POSTed on press - your IFTTT/Make/n8n/Home Assistant hook.' },
+      // Optional and JSON-shaped: exactly the kind of fringe surface Tinker
+      // exists for, and the webhook already works with none of it.
+      { key: 'payload', label: 'Extra JSON payload', kind: 'json', tier: 'tinker',
+        hint: 'Optional - merged into the POST body (trigger/mode/ts added '
+          + 'for you).' },
     ],
     defaults: () => ({ action: 'webhook', url: '', payload: {} }),
     describe: (a) => `Webhook → ${a.url || '…'}`,
@@ -382,19 +382,21 @@ export const ACTIONS = [
     fields: [
       { key: 'address', label: 'OSC address', kind: 'text', required: true,
         placeholder: '/transport/play',
-        hint: 'The path your software listens on. Must start with a slash - '
-          + 'a typo here reaches the wrong handler rather than failing.' },
+        hint: 'Path your software listens on. Must start with / - a typo '
+          + 'hits the wrong handler, not a failure.' },
       { key: 'host', label: 'Host', kind: 'text', required: true,
         placeholder: '127.0.0.1',
-        hint: 'An IP is best. A hostname works and costs a lookup on the '
-          + 'first press.' },
+        hint: 'IP is best - a hostname works too, costs one lookup on first '
+          + 'press.' },
       { key: 'port', label: 'Port', kind: 'number', min: 1, max: 65535, step: 1,
-        hint: 'Whatever the receiving end is listening on - Reaper, TouchOSC, '
-          + 'QLab, Resolume, VCV Rack.' },
-      { key: 'args', label: 'Arguments', kind: 'json',
-        hint: 'A JSON list. Types are inferred: true/false go as OSC T/F, '
-          + 'whole numbers as int, decimals as float, anything else as text. '
-          + 'Most receivers want [1] to mean "pressed".' },
+        hint: 'Whatever the receiver listens on - Reaper, TouchOSC, QLab, '
+          + 'Resolume, VCV Rack.' },
+      // The default ([1], "pressed") already works for most receivers -
+      // fine-tuning the argument list is a fringe edit, not a first-use one.
+      { key: 'args', label: 'Arguments', kind: 'json', tier: 'tinker',
+        hint: 'JSON list. Types inferred: true/false -> T/F, whole numbers '
+          + '-> int, decimals -> float, else text. [1] usually means '
+          + '"pressed".' },
     ],
     defaults: () => ({
       action: 'osc', host: '127.0.0.1', port: 8000, address: '', args: [1],
@@ -408,34 +410,34 @@ export const ACTIONS = [
     fields: [
       { key: 'daw_command', label: 'Start from a DAW command', kind: 'preset',
         presets: () => DAW_COMMANDS,
-        hint: 'Fills in the message below. These are Mackie Control numbers, '
-          + 'which most DAWs already understand - add a "Mackie Control" '
-          + 'device in your DAW pointed at this MIDI port and they work with '
-          + 'nothing to learn. If you are teaching controls by hand instead, '
-          + 'any of these is as good a starting number as any other.' },
-      { key: 'port', label: 'MIDI port', kind: 'text',
+        hint: 'Fills in the message below - Mackie Control numbers most '
+          + 'DAWs already know. Add a "Mackie Control" device pointed at '
+          + 'this port and it works unlearned. Teaching by hand instead? '
+          + 'Any number here is as good a start as any.' },
+      // The DAW-command preset above is the guided path; hand-tuning the raw
+      // note/channel/port numbers is exactly the fringe surface Tinker is
+      // for - a preset already fills all four correctly.
+      { key: 'port', label: 'MIDI port', kind: 'text', tier: 'tinker',
         placeholder: 'Button',
-        hint: 'Part of the port name is enough - Windows adds a number that '
-          + 'changes between sessions, so "Button" matches "Button 2". On '
-          + 'Windows you need loopMIDI to create the port; leave this blank to '
-          + 'use the first port there is.' },
-      { key: 'kind', label: 'Message', kind: 'select',
-        hint: 'Note on is what a DAW learns most readily. Send note off too '
-          + 'if it is driving an instrument rather than a control, or the note '
-          + 'hangs.',
+        hint: 'Partial name is enough - Windows appends a number that '
+          + 'changes per session, so "Button" matches "Button 2". Windows '
+          + 'needs loopMIDI to create the port. Blank = first port found.' },
+      { key: 'kind', label: 'Message', kind: 'select', tier: 'tinker',
+        hint: 'Note on is what a DAW learns fastest. Driving an instrument, '
+          + 'not a control? Send note off too, or the note hangs.',
         options: [
           { value: 'note_on', label: 'Note on' },
           { value: 'note_off', label: 'Note off' },
           { value: 'cc', label: 'Control change (CC)' },
         ] },
-      { key: 'channel', label: 'Channel', kind: 'number', min: 1, max: 16, step: 1,
-        hint: '1-16, the same numbering your DAW shows.' },
-      { key: 'number', label: 'Note / CC number', kind: 'number', min: 0, max: 127, step: 1,
-        hint: 'Which note or which controller. Any value works as long as '
-          + 'each gesture uses a different one.' },
-      { key: 'value', label: 'Velocity / value', kind: 'number', min: 0, max: 127, step: 1,
-        hint: '127 is "full". For a button this rarely matters; for a CC it is '
-          + 'the value being sent.' },
+      { key: 'channel', label: 'Channel', kind: 'number', min: 1, max: 16, step: 1, tier: 'tinker',
+        hint: '1-16, same numbering as your DAW.' },
+      { key: 'number', label: 'Note / CC number', kind: 'number', min: 0, max: 127, step: 1, tier: 'tinker',
+        hint: 'Which note/controller. Any value works if each gesture uses '
+          + 'a different one.' },
+      { key: 'value', label: 'Velocity / value', kind: 'number', min: 0, max: 127, step: 1, tier: 'tinker',
+        hint: '127 = "full". Rarely matters for a button; for a CC it is '
+          + 'the value sent.' },
     ],
     defaults: () => ({
       action: 'midi', port: '', kind: 'note_on', channel: 1, number: 60, value: 127,
@@ -464,8 +466,8 @@ export const ACTIONS = [
       // the picker stays in sync as modes are added/renamed without this
       // module knowing where the list lives (Dependency Inversion).
       { key: 'target', label: 'Mode to enter', kind: 'select', required: true,
-        hint: 'Which app this gesture opens. Schedule-started modes '
-          + '(alarm, reminder) are not listed - a clock starts those.',
+        hint: 'Which app this opens. Alarm/reminder are not listed - a '
+          + 'clock starts those, not a gesture.',
         options: (ctx) => {
           const modes = (ctx && typeof ctx.getModes === 'function') ? ctx.getModes() : [];
           return (Array.isArray(modes) ? modes : [])
@@ -617,16 +619,16 @@ export function defaultLadder() {
 const LADDER_FIELD = {
   key: 'ladder', label: 'Tell the time with the light', kind: 'ladder',
   unit: 's', showTick: true,
-  hint: 'Each tick takes the colour of the longest interval that divides it: '
-    + '10s white, 5s yellow, even seconds light blue, odd dark. Off-beat ticks '
-    + 'get the off-beat colour.',
+  hint: 'Each tick shows its longest dividing interval: 10s white, 5s '
+    + 'yellow, even sec light blue, odd dark. Off-beat gets the off-beat '
+    + 'colour.',
 };
 
 const LADDER_BEATS_FIELD = {
   key: 'ladder', label: 'Colour the beats', kind: 'ladder',
   unit: ' beats', showTick: false,
-  hint: 'Accents by beat number: every 4th beat one colour, every 2nd another. '
-    + 'The tempo you tap supplies the timing, so there is no tick to set.',
+  hint: 'Accents by beat: every 4th one colour, every 2nd another. Your '
+    + 'tapped tempo supplies timing - no tick to set.',
 };
 
 export const TEMPLATES = [
@@ -662,13 +664,13 @@ export const TEMPLATES = [
     body: 'fields',
     fields: [
       { key: 'message', label: 'Message', kind: 'text',
-        hint: 'Shown while the alarm is ringing.' },
-      { key: 'label', label: 'Short label', kind: 'text',
-        hint: 'Optional name for the status line / Bluetooth.' },
+        hint: "Shown while it's ringing." },
+      { key: 'label', label: 'Short label', kind: 'text', tier: 'tinker',
+        hint: 'Optional - name for status line / Bluetooth.' },
       { key: 'snooze_minutes', label: 'Snooze minutes', kind: 'number', min: 0, step: 1,
-        hint: 'Long-press snoozes for this long. 0 = long-press just dismisses.' },
+        hint: 'Long press snoozes this long. 0 = long press just dismisses.' },
       { key: 'dismiss_event', label: 'Log on dismiss', kind: 'text',
-        hint: 'Optional event name logged when the alarm is dismissed.' },
+        hint: 'Optional - logged when dismissed.' },
     ],
     defaults: () => ({ message: '', label: '', snooze_minutes: 0, dismiss_event: '' }),
     startedBy: 'schedule',
@@ -689,16 +691,16 @@ export const TEMPLATES = [
     body: 'fields',
     fields: [
       { key: 'message', label: 'Message', kind: 'text',
-        hint: 'Shown while the reminder is up.' },
-      { key: 'label', label: 'Short label', kind: 'text',
-        hint: 'Optional name for the status line.' },
+        hint: "Shown while it's up." },
+      { key: 'label', label: 'Short label', kind: 'text', tier: 'tinker',
+        hint: 'Optional - name for the status line.' },
       { key: 'chime', label: 'Chime once', kind: 'checkbox',
-        hint: 'One tone when it fires. Off = the light only.' },
+        hint: 'One tone when it fires. Off = light only.' },
       { key: 'timeout_minutes', label: 'Give up after (minutes)', kind: 'number',
         min: 0, step: 1,
-        hint: 'Stops flashing on its own after this long. 0 = waits forever.' },
+        hint: 'Stops flashing after this long. 0 = waits forever.' },
       { key: 'cleared_event', label: 'Log on clear', kind: 'text',
-        hint: 'Optional event name logged when you clear it. A timeout logs nothing.' },
+        hint: 'Optional - logged when cleared. A timeout logs nothing.' },
     ],
     defaults: () => ({
       message: '', label: '', chime: true, timeout_minutes: 5, cleared_event: '',
@@ -723,7 +725,7 @@ export const TEMPLATES = [
       LADDER_FIELD,
       { key: 'log_as', label: 'Timer name', kind: 'text', required: true,
         placeholder: 'focus',
-        hint: 'What the elapsed time is logged as; short press laps, long press stops.' },
+        hint: 'Logs elapsed time under this name. Short press laps, long press stops.' },
     ],
     defaults: () => ({ log_as: '', ladder: defaultLadder() }),
     startedBy: 'gesture',
@@ -740,7 +742,7 @@ export const TEMPLATES = [
     fields: [
       { key: 'event', label: 'Event name', kind: 'text', required: true,
         placeholder: 'water',
-        hint: 'Logged once per increment (short press / double tap); long press exits.' },
+        hint: 'Logged per increment (short press / double tap). Long press exits.' },
     ],
     defaults: () => ({ event: '' }),
     startedBy: 'gesture',
@@ -759,17 +761,19 @@ export const TEMPLATES = [
     allowedActivations: ['manual'], // started by an enter_mode gesture only
     body: 'fields',
     fields: [
-      { key: 'targets', label: 'Apps to offer', kind: 'textarea',
+      // Blank already offers everything, which is the right default - editing
+      // this list is a narrowing/reordering job for later, not a first-use one.
+      { key: 'targets', label: 'Apps to offer', kind: 'textarea', tier: 'tinker',
         placeholder: 'One mode name per line - blank = every app',
-        hint: 'Blank offers every takeover mode, so a new app appears here on '
-          + 'its own. List names to shorten or reorder the menu.' },
+        hint: 'Blank = every takeover mode, new apps appear automatically. '
+          + 'List names to shorten/reorder the menu.' },
       { key: 'return_after', label: 'Return here when an app exits',
-        kind: 'checkbox',
-        hint: 'On = long press means "up one level" everywhere: out of an app '
+        kind: 'checkbox', tier: 'tinker',
+        hint: 'On: long press = up one level everywhere - out of an app '
           + 'lands here, out of here goes home. Off skips this menu.' },
       { key: 'log_as', label: 'Log each launch as', kind: 'text',
         placeholder: 'launched',
-        hint: 'Optional. One event per launch, so you can see which apps you '
+        hint: 'Optional - one event per launch, so you can see what you '
           + 'actually use.' },
     ],
     defaults: () => ({ targets: '', return_after: true, log_as: '' }),
@@ -793,27 +797,27 @@ export const TEMPLATES = [
     fields: [
       LADDER_BEATS_FIELD,
       { key: 'start_bpm', label: 'Starting tempo (BPM)', kind: 'number', min: 1, step: 1,
-        hint: 'What the light keeps time at before your first tap lands.' },
-      { key: 'max_bpm', label: 'Fastest tempo (BPM)', kind: 'number', min: 1, step: 1,
-        hint: 'Ceiling for what taps can register - stops one bounced press '
-          + 'reading as a huge tempo. Raise it to go faster; the light stays '
-          + 'safe by marking every Nth beat above ~180.' },
-      { key: 'tap_history', label: 'Taps to average over', kind: 'number', min: 2, step: 1,
-        hint: 'More = steadier but slower to follow you; fewer = twitchier.' },
+        hint: 'Tempo the light keeps before your first tap.' },
+      { key: 'max_bpm', label: 'Fastest tempo (BPM)', kind: 'number', min: 1, step: 1, tier: 'tinker',
+        hint: 'Ceiling for tap tempo - stops a bounced press reading as '
+          + 'huge. Raise to go faster; above ~180 the light marks every Nth '
+          + 'beat to stay safe.' },
+      { key: 'tap_history', label: 'Taps to average over', kind: 'number', min: 2, step: 1, tier: 'tinker',
+        hint: 'More = steadier, slower to follow. Fewer = twitchier.' },
       { key: 'reset_gap_s', label: 'Silence that restarts it (seconds)', kind: 'number',
-        min: 0.1, step: 0.1,
-        hint: 'A pause this long starts the average over instead of averaging in the gap.' },
+        min: 0.1, step: 0.1, tier: 'tinker',
+        hint: 'A pause this long restarts the average instead of averaging '
+          + 'through the gap.' },
       { key: 'sound_on_tap', label: 'Click on each tap', kind: 'checkbox',
         hint: 'Turn off to practise by light alone.' },
       { key: 'log_as', label: 'Log each session as', kind: 'text', required: true,
         placeholder: 'metronome',
-        hint: 'One event per session, carrying the tempo you settled on.' },
-      { key: 'clock_port', label: 'Follow a DAW (MIDI clock in)', kind: 'text',
+        hint: 'One event per session, carries the tempo you settled on.' },
+      { key: 'clock_port', label: 'Follow a DAW (MIDI clock in)', kind: 'text', tier: 'tinker',
         placeholder: 'leave blank to tap the tempo',
-        hint: 'Part of a MIDI input port name. Turn on MIDI Clock Out in your '
-          + 'DAW pointed at that port and the tempo follows the project. '
-          + 'While it is following, tapping marks a beat but no longer sets '
-          + 'the tempo. If the DAW goes quiet the last tempo is held.' },
+        hint: 'Partial MIDI input port name. Enable Clock Out in your DAW, '
+          + 'point it here - tempo follows the project. Tapping then marks '
+          + 'a beat, no longer sets it. DAW goes quiet -> last tempo holds.' },
     ],
     defaults: () => ({
       start_bpm: 120, max_bpm: 300, tap_history: 8, reset_gap_s: 2,
@@ -842,34 +846,34 @@ TEMPLATES.push({
   // from across the room, so the ramp sits above the mechanics.
   fields: [
     { key: 'ramp', label: 'Colour as the time runs out', kind: 'ramp',
-      hint: 'Left is a full timer, right is zero. Drag a colour to a different '
-        + 'percent to hold it for longer.' },
+      hint: 'Left = full timer, right = zero. Drag a stop to hold its '
+        + 'colour longer.' },
     // A function, not an array: LED_STYLES is declared further down this
     // module, so reading it while TEMPLATES is still being built would hit the
     // temporal dead zone. Deferring to render time also keeps the two lists
     // from drifting. Styles that ignore `color` are filtered out - a rainbow
     // countdown would throw the ramp away.
-    { key: 'style', label: 'How the light moves', kind: 'select',
+    { key: 'style', label: 'How the light moves', kind: 'select', tier: 'tinker',
       options: () => LED_STYLES
         .filter((s) => s.uses.includes('color'))
         .map((s) => ({ value: s.type, label: s.label })),
-      hint: 'The colour comes from the ramp above; this is only the movement.' },
+      hint: 'Colour comes from the ramp above - this is only the movement.' },
     { key: 'period_s', label: 'Seconds per flash', kind: 'number',
-      min: 0.1, max: 600, step: 0.1,
-      hint: 'Held steady the whole way through - the ramp moves, the rate does not.' },
+      min: 0.1, max: 600, step: 0.1, tier: 'tinker',
+      hint: "Steady throughout - the ramp moves, the rate doesn't." },
     { key: 'minutes', label: 'Minutes', kind: 'number', min: 0.1, step: 1,
       hint: 'How long the countdown runs for.' },
-    { key: 'label', label: 'Short label', kind: 'text',
-      hint: 'Optional name for the status line. Defaults to the mode name.' },
+    { key: 'label', label: 'Short label', kind: 'text', tier: 'tinker',
+      hint: 'Optional - defaults to the mode name.' },
     { key: 'ring_on_finish', label: 'Ring at zero', kind: 'checkbox',
-      hint: 'Off = it finishes quietly, with just the light.' },
+      hint: 'Off = finishes quietly, light only.' },
     // The ladder and the ramp both decide *which* colour, so only one runs -
     // the ladder wins when it is on. It sits after the ramp for that reason:
     // turning it on is what makes the fields above it stop mattering.
     LADDER_FIELD,
     { key: 'log_as', label: 'Log each finished run as', kind: 'text', required: true,
       placeholder: 'countdown',
-      hint: 'Logged with the length it ran for. A cancelled run logs nothing.' },
+      hint: 'Logs the length run. A cancelled run logs nothing.' },
   ],
   defaults: () => ({
     minutes: 10, label: '', style: 'flash', period_s: 1,
@@ -899,22 +903,24 @@ TEMPLATES.push({
   body: 'fields',
   fields: [
     { key: 'work_s', label: 'Work block', kind: 'duration', min: 1,
-      hint: 'How long one work interval lasts. 25 min for a Pomodoro, '
-        + '20 sec for Tabata.' },
+      hint: "One work interval's length. 25 min for Pomodoro, 20 sec for "
+        + 'Tabata.' },
     { key: 'break_s', label: 'Rest', kind: 'duration', min: 1,
-      hint: 'The short rest after each work interval.' },
+      hint: 'Short rest after each work interval.' },
     { key: 'long_break_s', label: 'Long rest', kind: 'duration', min: 1,
-      hint: 'The longer rest you get after the number of blocks set below.' },
+      hint: 'Longer rest after the block count set below.' },
     { key: 'blocks_before_long_break', label: 'Blocks before a long rest', kind: 'number', min: 1, step: 1,
-      hint: 'How many work blocks to finish before the long rest.' },
-    { key: 'rounds', label: 'Rounds (0 = no end)', kind: 'number', min: 0, step: 1,
-      hint: 'Stops itself after this many work blocks. 0 keeps alternating '
-        + 'until you leave, which is what a Pomodoro does.' },
-    { key: 'lead_in_s', label: 'Get-ready countdown', kind: 'duration', min: 0,
-      hint: 'A pause before the first block, for anything you have to put the '
-        + 'phone down for. 0 starts immediately.' },
+      hint: 'Work blocks before the long rest.' },
+    // Session length is a stop condition, not the technique itself - 0 (the
+    // default) already reproduces classic Pomodoro; picking a number is the
+    // fringe edit the built-in Tabata/HIIT presets make for you.
+    { key: 'rounds', label: 'Rounds (0 = no end)', kind: 'number', min: 0, step: 1, tier: 'tinker',
+      hint: 'Stops after this many work blocks. 0 = alternates until you '
+        + 'leave (classic Pomodoro).' },
+    { key: 'lead_in_s', label: 'Get-ready countdown', kind: 'duration', min: 0, tier: 'tinker',
+      hint: 'Pause before block 1, for setup time. 0 = starts immediately.' },
     { key: 'advance', label: 'Between blocks', kind: 'select',
-      hint: 'How much the button asks of you when a block ends.',
+      hint: 'What happens when a block ends.',
       options: [
         { value: 'auto', label: 'Start the next block automatically' },
         { value: 'manual', label: 'Wait for a press every time' },
@@ -923,23 +929,25 @@ TEMPLATES.push({
     // A function, not an array: LED_STYLES is declared further down this
     // module - see the countdown template's identical comment above its own
     // style field.
-    { key: 'waiting_style', label: 'While paused or waiting for a press', kind: 'select',
+    { key: 'waiting_style', label: 'While paused or waiting for a press', kind: 'select', tier: 'tinker',
       options: () => LED_STYLES.map((s) => ({ value: s.type, label: s.label })),
-      hint: 'Shown instead of the usual animation whenever the timer is not '
-        + 'actually running. Colour still comes from Work/Break above - '
-        + '"Solid" is a good default because breathing or flashing already '
-        + 'means "still counting".' },
-    { key: 'extend_s', label: 'Added by "Add more time"', kind: 'duration', min: 1,
-      hint: 'How much time the "Add more time" gesture puts back on the clock.' },
+      hint: "Shown when the timer isn't running. Colour still comes from "
+        + 'Work/Break above - "Solid" is a good default, since '
+        + 'breathe/flash already mean "still counting".' },
+    { key: 'extend_s', label: 'Added by "Add more time"', kind: 'duration', min: 1, tier: 'tinker',
+      hint: 'Time added by the "Add more time" gesture.' },
     { key: 'log_as', label: 'Log each finished block as', kind: 'text', required: true,
       placeholder: 'pomodoro',
       hint: 'Counted and streak-tracked like any other event.' },
-    { key: 'short_press', label: 'Short press does', kind: 'select', options: POMODORO_COMMANDS,
-      hint: 'What this press does while the Pomodoro is running.' },
-    { key: 'long_press', label: 'Long press does', kind: 'select', options: POMODORO_COMMANDS,
-      hint: 'Leave at least one gesture on "Leave the Pomodoro" or you cannot get out.' },
-    { key: 'double_tap', label: 'Double tap does', kind: 'select', options: POMODORO_COMMANDS,
-      hint: 'What this press does while the Pomodoro is running.' },
+    // The command bindings, tinker-tier by design: the defaults (pause,
+    // leave, add time) already cover the mode, and hiding the remap surface
+    // is what stops a first-time user from reassigning their own way out.
+    { key: 'short_press', label: 'Short press does', kind: 'select', options: POMODORO_COMMANDS, tier: 'tinker',
+      hint: 'What this does while running.' },
+    { key: 'long_press', label: 'Long press does', kind: 'select', options: POMODORO_COMMANDS, tier: 'tinker',
+      hint: 'Leave one gesture on "Leave the Pomodoro" - or you cannot get out.' },
+    { key: 'double_tap', label: 'Double tap does', kind: 'select', options: POMODORO_COMMANDS, tier: 'tinker',
+      hint: 'What this does while running.' },
   ],
   defaults: () => ({
     work_s: 25 * 60, break_s: 5 * 60, long_break_s: 15 * 60,
@@ -976,29 +984,27 @@ TEMPLATES.push({
   body: 'fields',
   fields: [
     { key: 'ramp', label: 'Colour for how close you got', kind: 'ramp',
-      hint: 'Left is as wrong as the wheel allows, right is dead on.' },
+      hint: 'Left = as wrong as it gets, right = dead on.' },
     { key: 'sweep_s', label: 'Seconds per turn of the wheel', kind: 'number',
       min: 0.5, max: 60, step: 0.5,
-      hint: 'Slower is easier. Under about 2s the press delay starts to '
-        + 'matter more than your aim does.' },
+      hint: 'Slower = easier. Under ~2s, press delay matters more than aim.' },
     { key: 'segments', label: 'Places on the wheel', kind: 'number',
       min: 0, max: 60, step: 1,
-      hint: 'Snaps the target and your guess to the same grid, so landing '
-        + 'anywhere in the right place counts. 0 = a smooth wheel, which is '
-        + 'far harder than it sounds.' },
+      hint: 'Snaps target + guess to the same grid - land anywhere in the '
+        + 'right slot. 0 = smooth wheel, harder than it sounds.' },
     { key: 'tolerance', label: 'How close counts as a hit', kind: 'number',
       min: 0.01, max: 1, step: 0.01,
-      hint: '0.08 = within 8% of the wheel. Below about 0.03 the radio, not '
-        + 'you, decides whether you win.' },
-    { key: 'rounds', label: 'Rounds per game', kind: 'number', min: 0, step: 1,
+      hint: '0.08 = within 8% of the wheel. Below ~0.03, the radio decides, '
+        + 'not you.' },
+    { key: 'rounds', label: 'Rounds per game', kind: 'number', min: 0, step: 1, tier: 'tinker',
       hint: '0 = keep dealing until you long-press out.' },
     { key: 'reveal_s', label: 'Seconds the answer stays up', kind: 'number',
-      min: 0.1, max: 30, step: 0.1,
-      hint: 'Presses during this are ignored - the wheel has already stopped.' },
+      min: 0.1, max: 30, step: 0.1, tier: 'tinker',
+      hint: "Presses ignored here - the wheel's already stopped." },
     { key: 'log_as', label: 'Log each guess as', kind: 'text', required: true,
       placeholder: 'hotcold',
-      hint: 'Logged with how close you got (0-100) as its value, so a run of '
-        + 'games is something the events table can plot.' },
+      hint: 'Logs how close you got (0-100), so a run of games plots in '
+        + 'the events table.' },
   ],
   defaults: () => ({
     sweep_s: 4, rounds: 5, segments: 12, tolerance: 0.08, reveal_s: 1.5,
@@ -1026,27 +1032,27 @@ TEMPLATES.push({
   body: 'fields',
   fields: [
     { key: 'ramp', label: 'Colour for how sharp you were', kind: 'ramp',
-      hint: 'Left is the slow end, right is instant.' },
+      hint: 'Left = slow end, right = instant.' },
     { key: 'min_delay_s', label: 'Shortest wait (seconds)', kind: 'number',
       min: 0.2, max: 60, step: 0.5,
-      hint: 'The light goes out for somewhere between this and the longest '
-        + 'wait, so the go signal cannot be anticipated.' },
+      hint: 'Light goes out somewhere between this and the longest wait - '
+        + 'keeps the go signal unpredictable.' },
     { key: 'max_delay_s', label: 'Longest wait (seconds)', kind: 'number',
       min: 0.2, max: 60, step: 0.5,
-      hint: 'Set below the shortest wait and the two are swapped for you.' },
+      hint: 'Set below the shortest wait and the two swap automatically.' },
     { key: 'slowest_ms', label: 'Slow end of the colour (ms)', kind: 'number',
-      min: 50, max: 5000, step: 50,
-      hint: 'Only where the ramp bottoms out. A slower press is still logged '
-        + 'honestly, it just cannot look any worse.' },
-    { key: 'rounds', label: 'Attempts per game', kind: 'number', min: 0, step: 1,
+      min: 50, max: 5000, step: 50, tier: 'tinker',
+      hint: "Only the ramp's floor - a slower press still logs honestly, "
+        + "just can't look worse." },
+    { key: 'rounds', label: 'Attempts per game', kind: 'number', min: 0, step: 1, tier: 'tinker',
       hint: '0 = keep going until you long-press out.' },
     { key: 'reveal_s', label: 'Seconds the time stays up', kind: 'number',
-      min: 0.1, max: 30, step: 0.1,
-      hint: 'Presses during this are ignored.' },
+      min: 0.1, max: 30, step: 0.1, tier: 'tinker',
+      hint: 'Presses ignored here.' },
     { key: 'log_as', label: 'Log each attempt as', kind: 'text', required: true,
       placeholder: 'reaction',
-      hint: 'Logged with the milliseconds as its value. A false start logs '
-        + 'nothing - there is no time to record.' },
+      hint: 'Logs the milliseconds. A false start logs nothing - no time '
+        + 'to record.' },
   ],
   defaults: () => ({
     min_delay_s: 2, max_delay_s: 6, rounds: 5, slowest_ms: 600, reveal_s: 1.2,
@@ -1079,15 +1085,15 @@ TEMPLATES.push({
     // same call. What makes it acceptable is that the two presets below are
     // complete, so nobody has to write one of these to use the app; editing
     // the list is a tinker-tier job (TODO 14). A proper widget is the follow-up.
-    { key: 'states', label: 'Positions', kind: 'json',
-      hint: 'A list of {name, color} - add "action" to send something when you '
-        + 'land on it. Short press moves to the next and stays there.' },
-    { key: 'start_at', label: 'Opens on position', kind: 'number', min: 0, step: 1,
-      hint: 'Counting from 0. Opening on a position does not send its message '
-        + '- only pressing does.' },
+    { key: 'states', label: 'Positions', kind: 'json', tier: 'tinker',
+      hint: 'List of {name, color} - add "action" to send something on '
+        + 'landing. Short press moves to next, stays there.' },
+    { key: 'start_at', label: 'Opens on position', kind: 'number', min: 0, step: 1, tier: 'tinker',
+      hint: "From 0. Opening here doesn't send the message - only pressing "
+        + 'does.' },
     { key: 'log_as', label: 'Log each change as', kind: 'text',
       placeholder: 'status',
-      hint: 'Optional. One row per change, with the position number as its value.' },
+      hint: 'Optional - one row per change, position number as its value.' },
   ],
   defaults: () => ({
     states: [
@@ -1130,14 +1136,13 @@ TEMPLATES.push({
   fields: [
     { key: 'log_as', label: 'Log each command as', kind: 'text',
       placeholder: 'daw',
-      hint: 'Optional. One row per command that actually got sent - a failed '
-        + 'send logs nothing, so the count stays honest.' },
+      hint: 'Optional - one row per command sent. A failed send logs '
+        + 'nothing, so counts stay honest.' },
     { key: 'return_after', label: 'Come back here after a branch',
-      kind: 'checkbox',
+      kind: 'checkbox', tier: 'tinker',
       hint: 'Bind a gesture to "Enter a mode" and this becomes a menu page. '
-        + 'On, leaving the page it opened brings you back here, so a long '
-        + 'press always travels exactly one level. Off drops you straight out '
-        + 'to the everyday layer instead.' },
+        + 'On: leaving what it opened returns here, so long press always '
+        + 'travels one level. Off: drops straight to the everyday layer.' },
   ],
   defaults: () => ({
     short_press: { action: 'log', event: 'control_press' },
@@ -1373,18 +1378,18 @@ export const MODE_GROUPS = [
   {
     nature: 'ambient',
     title: 'Everyday',
-    blurb: 'What a press does normally. The button reads these top to bottom and '
-      + 'uses the first one that is switched on right now and has something set for '
-      + 'the press you made. Order is priority: move a mode up to let it win. A mode '
-      + 'that does not set a gesture passes it down to the next one.',
+    blurb: 'What a press does normally. Read top to bottom: the first mode '
+      + "that's on now and sets this press, wins. Order is priority - move "
+      + 'a mode up to win. Unset gesture -> passes to the next mode.',
     emptyText: 'None yet.',
   },
   {
     nature: 'takeover',
     title: 'Takeover',
-    blurb: 'While one of these is running it owns every press and your everyday modes '
-      + 'are ignored until you leave it. An alarm starts itself at its set time; the '
-      + 'others are started by an everyday mode with an “Enter a mode” gesture.',
+    blurb: 'While running, one of these owns every press - everyday modes '
+      + 'are ignored until you leave. An alarm starts itself at its set '
+      + 'time; others start via an everyday mode with an “Enter a mode” '
+      + 'gesture.',
     emptyText: 'None yet.',
   },
 ];
@@ -1650,29 +1655,36 @@ export function describeEffect(effect) {
 export const SETTINGS_GROUPS = [
   {
     title: 'Device',
+    // Tinker-tier throughout except `sounds_enabled` (TODO 14): a rename, a
+    // database path or the flash floor are all one-per-button decisions a
+    // first-time setup never needs, not a thing to stumble into. The floor
+    // stays enforced (config.flash_safe) whether or not this field is on
+    // screen - hiding it by default only hides who can *lower* it.
     fields: [
-      { key: 'ble_device_name', label: 'Bluetooth name', kind: 'text',
-        hint: 'The name the button advertises; the host connects to it by name.' },
+      { key: 'ble_device_name', label: 'Bluetooth name', kind: 'text', tier: 'tinker',
+        hint: 'Name the button advertises - host connects by name.' },
       { key: 'sounds_enabled', label: 'Feedback sounds', kind: 'checkbox' },
-      { key: 'database_path', label: 'Event database path', kind: 'text' },
+      { key: 'database_path', label: 'Event database path', kind: 'text', tier: 'tinker' },
       // The one setting whose default exists for a medical reason rather than
       // a taste one. It is editable because this is one button on one desk and
       // its owner may decide it can go faster; the hint has to say what that
       // costs, because nothing else in the UI will.
-      { key: 'min_flash_period_s', label: 'Fastest the light may flash',
+      { key: 'min_flash_period_s', label: 'Fastest the light may flash', tier: 'tinker',
         kind: 'range', min: 0.05, max: 2, step: 0.01,
         describe: (v) => `${v.toFixed(2)}s (${(1 / v).toFixed(1)} flashes/sec)`,
-        hint: 'Floor for flash + alternate. 0.33s = 3/sec, the recommended '
-          + 'photosensitivity limit. Faster is allowed and is a seizure risk.' },
+        hint: 'Floor for flash + alternate. 0.33s = 3/sec, the photosensitivity '
+          + 'limit. Faster is allowed - and a seizure risk.' },
     ],
   },
   {
     title: 'Web server',
+    // Also tinker-tier throughout: this is how you reach the page at all, so
+    // an unsupervised toggle or a mistyped port is a lockout, not a tweak.
     fields: [
-      { key: 'web_enabled', label: 'Web UI enabled', kind: 'checkbox',
+      { key: 'web_enabled', label: 'Web UI enabled', kind: 'checkbox', tier: 'tinker',
         hint: 'Takes effect on restart.' },
-      { key: 'web_host', label: 'Bind host', kind: 'text' },
-      { key: 'web_port', label: 'Port', kind: 'number', min: 1, max: 65535, step: 1 },
+      { key: 'web_host', label: 'Bind host', kind: 'text', tier: 'tinker' },
+      { key: 'web_port', label: 'Port', kind: 'number', min: 1, max: 65535, step: 1, tier: 'tinker' },
     ],
   },
 ];
