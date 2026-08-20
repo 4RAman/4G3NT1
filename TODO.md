@@ -508,6 +508,58 @@ layers, saying which are decided; the hook and summary shapes are written as
 data (a `Mode` field and a per-app summary contract), not as prose about
 behaviour; and this item is replaced by numbered build items.
 
+### 30. Actions as a first-class idea — a pool, a taxonomy, and the data under it
+
+**Conceptualised 2026-08-19. Design before code; the UI last.** The full
+write-up is ROADMAP **3d** and decision **D9** — read those, this is the sprint
+view.
+
+**The finding.** Actions and modes feel like separate ideas because an action
+can only *append*. The only persistence in the system is the event log: a
+counter's value is recounted from rows, a Signal's position dies on exit. So
+"add one to my smoking counter" is only expressible as "write a row somebody
+counts later", and "set this to 3" is not expressible at all.
+
+**Three pieces, in dependency order. The first is cheap and useful alone.**
+
+**a) A named action pool.** `AppConfig.actions`, referenced by name from a
+gesture — precisely the move `looks` already made, and for the same reason
+(a thing edited in two places is not modular). **Naming stays optional**: most
+actions are used once, and forcing those through a library is indirection for
+nothing. A gesture holds an inline action *or* a name, exactly as a mode holds
+an inline look or a name. Nothing else depends on this; it can go first.
+
+**b) A `SequenceAction`.** A flat list with optional per-step delays. TODO
+**25** already needs one (Mackie has no return-to-zero, so "stop and rewind" is
+*Stop, Stop*). **Bounded by construction — no loops, no conditionals** — or it
+is a language and the Stage-3 device runtime cannot run it. Two edges to
+decide: a sequence with delays *holds the button*, and presses are already
+dropped during the 2 s success display, so what happens when someone presses
+mid-sequence needs an answer rather than a default.
+
+**c) App documents, and app-bound actions.** A small bounded bag of named
+values per app instance, plus effects to read and write it. This is what makes
+"Smoking +1" bindable to any gesture in any mode without entering the app —
+which is TODO **15** ("counting without entering an app"), and the strongest
+argument for the whole idea. **Keep the log separate**: history and current
+value are different jobs, and merging them loses one.
+
+**The taxonomy this produces** — System / Custom / App-bound, with app-bound
+actions offered **only while that app is in the list**, because an action
+naming a deleted app is a broken binding waiting to happen.
+
+**On the UI, which is what was originally asked.** A prominent Actions area is
+right for tinkerers and wrong as a default for novices: a novice never thinks
+*"I want to make an action"*, they think *"I want it to count cigarettes"*, and
+starting from an action then hunting for where to attach it is backwards. The
+Actions surface is a **tinker-tier** thing (TODO **14**) that *powers* a
+recipe-shaped novice path without appearing in it. Concept count is the enemy —
+there are already eleven concepts here and a novice holds about three.
+
+**Definition of done for this item is a decision, not a feature**: D9 answered
+in ROADMAP, (a) shipped if it still looks right, and (b) and (c) replaced by
+numbered build items.
+
 ### 25. A transport app that knows what the DAW is doing
 
 **Asked for 2026-08-19.** One gesture should mean different things depending on

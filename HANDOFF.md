@@ -60,11 +60,21 @@ them rather than this table; the table is only to say what exists.
 | **27** | Every slider also accepts a typed number | Small |
 | **28** | Add the missing four-tap gesture | Small |
 | **29** | Sleep, wake, hold-to-power-off | Large, blocked on **0c** |
+| **30** | Actions as a first-class idea — pool, sequences, app data | **Design first.** ROADMAP 3d / D9 |
 
-**Suggested order: 28, then 27, then 26, then 25.** The two small ones are
-independent and unblock the five-option menu page that 26 wants; 25 is the
-one with a genuine unknown in it (see below). **29 cannot start** — the button
-is physically de-soldered (**0c**) so nothing about wake-on-press is testable.
+**Suggested order: 28, then 27, then 30a, then 26.** The two small ones are
+independent and unblock the five-option menu page 26 wants. **30 is the one
+that should be thought about before anything else is built on top of it** — it
+answers what an action *is*, and 25 and 26 both lean on the answer. Its first
+piece (a named action pool, mirroring `looks`) is cheap and safe to ship on its
+own. **29 cannot start**: the button is physically de-soldered (**0c**), so
+nothing about wake-on-press is testable.
+
+**Do not build an Actions tab yet.** The user asked for one; the honest answer
+after thinking it through is that the data model has to be settled first, or
+the tab gets designed around an object that does not exist and then rebuilt.
+TODO 30 says why, including why a prominent Actions area helps tinkerers and
+hurts novices.
 
 ### The one thing worth knowing before starting 25
 

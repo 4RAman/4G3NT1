@@ -65,53 +65,32 @@ worth knowing now rather than discovering after building one.
 until it's smooth. No architecture changes. The sprint list is
 [TODO.md](TODO.md).
 
-### The blocker that used to cap you at three apps ✔ solved
+### Reaching the apps ✔ solved, twice
 
-This was the one Stage-2 finding worth acting on immediately, because it
-invalidated "load it with as many apps as it will fit" as specified. **The
-launcher shipped** (TODO 0a); the analysis is kept because it is why the
-launcher is shaped the way it is.
+Gestures do not scale as a menu: five of them, minus one kept for everyday
+logging, reaches four apps — and every extra tap count slows the shorter ones.
+Two things fixed that and both shipped.
 
-A takeover app is reached by an `enter_mode` action bound to a gesture in an
-ambient mode. There were **three gestures**; protocol v1 made tap counts data,
-so there are five now and could be more for the asking. That moved the number
-without changing the shape of the problem: keep one for everyday logging and
-you reach **four apps**, and every further gesture is a longer tap that
-nobody wants to remember — and that costs the double tap its instant response
-the moment you bind one. Time-windowed ambient modes buy you more only if
-you're willing to say *when* you want each app, which is not what an app
-launcher is.
+**The launcher** (TODO 0a) — a takeover entered by one gesture that cycles
+every installed app in that app's own colour. It needed the one thing the core
+lacked, a takeover able to enter another takeover, and it set the rule the
+whole system now follows: **long press means "up one level", everywhere.**
 
-Options, cheapest first:
-
-| Option | Cost | Verdict |
-|---|---|---|
-| Time-window ambient modes rebind gestures per hour | zero — works today | A workaround, not a launcher. Fine for 2–3 scheduled apps. |
-| N-tap gestures (4-tap = app 4…) | ✔ shipped — now free, host-side data | Still doesn't scale past ~5, is miserable to remember, and each one slows the double tap. Being cheap did not make it good |
-| Web UI / phone picks the active app | small | Breaks "no second control" for the primary flow |
-| **A launcher app** | one new template + one core change | **Recommended** |
-
-**The launcher.** A takeover mode entered by one gesture. Short press cycles
-through installed apps — the LED shows *which* one, each app carrying its own
-colour. Long press launches it. Double tap backs out. It is exactly the kind
-of thing the mode machine should be able to express, and it needs one thing
-the core doesn't have today: **a takeover mode that can enter another takeover
-mode**. Today `enter_mode` is only reachable from the ambient layer
-([main.py](aibutton/main.py)'s `handle`), and `enter_takeover` has no path
-back into itself.
-
-It also needs per-app colour, which is [TODO.md](TODO.md) item 3 and decision
-**D4** below. **D4 has shipped**, so the launcher can already show a different
-colour per entry — `set_led(state, effect)` in its cycle loop, no wire work.
-What item 3 still owes it is somewhere for those colours to *live* in the
-config. The remaining piece of work is host-side and is two things, not three.
+**The control surface** (2026-08-19) — a takeover whose four gestures each fire
+their own action, any of which can open another one. So a *tree* of menus now
+costs no new code. The two are complementary and both should survive: a
+launcher needs no configuration and never goes stale, a control surface is
+explicit and can say exactly what you want where. Which is the default front
+door is TODO **26**.
 
 ### Stage 2 exit gates
 
 - [ ] **10 apps**, verified end-to-end on real hardware (TODO items 2, 7) —
-      **built** (TODO 7 ✔: Hot/Cold, Reaction and Signal took it to ten), and
-      eight of the ten are verified. The three new ones have not met the
-      hardware yet, which is all this gate is still waiting on
+      **eleven exist** and ten are verified. Hot/Cold and Reaction were walked
+      on 2026-08-19, which also confirmed the firmware 0.6.1 press-timing fix
+      end to end. **Signal and the control surface have never met the button**
+      — both host-side with no clock in them, so low risk, but that was equally
+      true of the offline editor while it was silently broken
 - [x] **A launcher**, so all 10 are reachable without the web UI — one
       gesture opens a menu that cycles every installed app in its own
       colour. Long press means "up one level" throughout, so leaving an app
@@ -121,9 +100,9 @@ config. The remaining piece of work is host-side and is two things, not three.
 - [ ] **24-hour soak** with no manual restart, no wedged BLE, no lost presses
 - [x] **Single-instance guard** — an OS-level file lock; a second copy
       refuses with the holder's PID instead of fighting for the radio
-- [ ] **Verified power-cycle recovery** — still needs real hardware: the
-      reconnect path is tested against a fake bleak, not against a button
-      whose USB was pulled mid-session
+- [x] **Verified power-cycle recovery** — reconnected cleanly on a real
+      replug, and `DEVICE_INFO` is re-read on every reconnect, so a board
+      reflashed mid-session is not assumed into its old capabilities
 - [x] **Protocol v1 frozen** (see below) — the one architectural task Stage 2
       must not defer, and it is done: capability negotiation, ephemeral
       effects and parameterised gestures shipped, OTA and hold levels
@@ -241,6 +220,63 @@ this stage rather than as a game-specific flourish — including the detail that
 randomness is *passed in* so `step` stays a total function checkable against a
 table. Whatever the manifest format turns out to be, those two should need a
 manifest and nothing else.
+
+### 3d — Apps own data, not just history
+
+**The gap, named 2026-08-19.** The only persistence in the system is the
+append-only event log. A counter's value is not stored — it is recounted from
+rows (`count_today`). A Signal's position is session state and dies when you
+leave. Nothing an app knows survives except as history.
+
+That is why **actions and modes feel like separate ideas when they should not
+be**: an action can only ever *append*. It cannot read a value, and it cannot
+change one. So "add one to my smoking counter" is expressible only as "write a
+row that something else will later count", and "set the thermostat preset to
+3" is not expressible at all.
+
+**The fix is a small durable document per app instance**, and one new effect
+family to read and write it. Not a database — a bounded bag of named values,
+because this has to survive the move onto a microcontroller where unbounded
+growth is not an option (**D2**: an app is data, bounded by construction).
+
+**Keep both, and keep them separate.** The log is *history* — streaks, "when
+did I practise and how fast", export. The document is *current value*. Merging
+them loses one of the two: a log cannot answer "what is it now" without a scan,
+and a document cannot answer "what happened in March" at all.
+
+Three things fall out of it, and the third is the one that changes the product:
+
+1. **App state survives leaving the app.** A Signal reopens where you left it;
+   a counter has a value rather than a query.
+2. **The step function's `state` gets a durable sibling.** `(state, event, now)`
+   stays session state; the document is what an app deliberately keeps.
+3. **Actions can be bound to an app without entering it.** "Smoking +1" becomes
+   a thing any gesture in any mode can fire, which is exactly TODO **15**
+   ("counting without entering an app") and is the strongest argument for the
+   whole idea.
+
+**Which gives actions a taxonomy** (proposed 2026-08-19, not yet decided):
+
+| Family | What it is | Where it comes from |
+|---|---|---|
+| **System** | `log`, `timer_toggle`, `webhook`, `osc`, `midi`, `enter_mode` | Always available; the primitives |
+| **Custom** | Named user compositions, including sequences | A pool in config, referenced by name — the same move `looks` already made |
+| **App-bound** | "Smoking counter +1", "Pomodoro: skip block" | Offered **only when that app exists in the list**, because an action naming an app you deleted is a broken binding waiting to happen |
+
+The third family is the one that needs the document to exist first — it is
+"reach into that app's data", and there is no data to reach into today. The
+second is cheap and could be done now. **Do not build the UI for any of this
+before the data model is decided**; a tab designed around an object that does
+not exist yet gets rebuilt.
+
+**The sequence caveat, restated because it is the thing most likely to go
+wrong.** A custom action that is a *sequence* must stay a flat list with
+optional delays — no loops, no conditionals, bounded nesting or none. The
+moment it grows an `if`, it is a language, and the on-device runtime cannot run
+it, which makes it host-only forever — the exact thing this stage exists to
+escape. Sequences earn their place where the target is **local and dumb**
+(MIDI, OSC, the LED), not where it is a network service that can orchestrate
+for itself; that is what the `webhook` rule has always said.
 
 ### 3b — One manifest, served
 
@@ -389,6 +425,7 @@ back and undoing things" the brief is trying to avoid.
 | **D5** ✔ | Fixed gestures, or parameterised? | **Decided and shipped: kind + parameter**, beside the frozen originals. Tap counts are data now; hold levels have their code reserved and are unimplemented | — | — |
 | **D6** | Field firmware update | **Reserve the handshake in v1; implement before any unit leaves the building** | v1 now, working by Stage 4 | You cannot fix a bug in someone else's key fob |
 | **D7** | The name | **Rename before public disclosure.** `aibutton` is descriptive and inaccurate | Stage 4/5 boundary | Repo, package, BLE name, app namespace, domain and marks all re-bake |
+| **D9** | Do apps own data, or only write history? | **Proposed: a small bounded document per app, alongside the log.** See 3d. Undecided | Stage 3, but the *action pool* half is cheap now | Actions can only append, so a third of what people ask for is inexpressible — and the UI cannot be designed until this is settled |
 | **D8** ✔ | How do hosts and devices stay compatible? | **Decided and shipped: capability negotiation via `DEVICE_INFO`** — never assume, always ask. Protocol v1 | — | — |
 
 **D4, D5 and D6 were one piece of work with D8 — and D8 went first, on
