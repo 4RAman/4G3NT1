@@ -454,8 +454,9 @@ the two disagree. Read it from the store instead and they agree by
 construction; "count something else in counter mode" is just a different event
 name. No priority rule, no second run loop, no display arbitration.
 
-**Write that paragraph into ARCHITECTURE.md** — the decision outlives the code
-change, and the next person to want two things at once needs to find it.
+~~**Write that paragraph into ARCHITECTURE.md**~~ — done 2026-08-19:
+"Composition: an app's edges" states the one-foreground-app rule, and the
+`Set`-shaped ambient counting is item **34**'s app-bound action.
 
 Two questions it does *not* answer, neither urgent: a backgrounded timer still
 monopolises gestures (a takeover awaits `device.events` directly), and two
@@ -466,47 +467,58 @@ so a backgrounded timer is *asked* rather than watched.
 data; the Counter reading its number from the store; and the concurrency
 paragraph in ARCHITECTURE.md.
 
-### 23. Composition — apps that fire actions at their edges, carrying their data
+### 31. Lifecycle hooks — `on_enter` / `on_exit` on `Mode`
 
-**Decided 2026-08-19: design it in full before building any of it.** The
-request was for stacked behaviour with logical decision flow — enter a HIIT
-timer and it sets an "exercising" status; leave it and it posts the session's
-numbers somewhere. The pieces are nearly all present and the risk is building
-the cheap half in a shape the expensive half cannot grow into.
+**Split out of 23 (designed 2026-08-19). The design is ARCHITECTURE.md
+"Composition: an app's edges" — read it first; this item is build only.**
+Two optional `Action` fields on `Mode`, not on each behaviour: parser +
+serialiser in [config.py](aibutton/config.py), fired from `enter_takeover`
+in [main.py](aibutton/main.py) at the two moments it already logs
+`mode_enter`/`mode_exit`, editor fields in
+[schema.js](aibutton/web/static/schema.js) (tinker tier, once **14** ships).
+A hook is fire-and-forget like all feedback: a webhook that fails logs a
+warning and never blocks entry or exit.
 
-**Write the design into [ARCHITECTURE.md](ARCHITECTURE.md), not here**, because
-it settles what an app *is* and that outlives this sprint. Three layers, and
-the document should say plainly which are decided and which are not:
+**Definition of done.** A mode can post a status webhook on enter and clear
+it on exit with zero per-template code; tests cover parse fallback (a bad
+hook is dropped with a warning, the mode survives) and firing order (enter
+hook before the loop starts, exit hook after it ends).
 
-1. **Lifecycle hooks.** `on_enter` / `on_exit` as optional `Action`s on
-   **`Mode`, not on each behaviour** — one change that serves all eleven
-   takeover templates and costs zero per-app work, the same "capability as
-   data" move `SignalState.action` already makes. `enter_takeover` in
-   [main.py](aibutton/main.py) already has both points: it logs
-   `mode_enter`/`mode_exit` there today.
-2. **Variables.** An app's result is a human-readable string
-   (`ActionResult.message`); sending `{rounds: 8, total_s: 480}` needs a
-   structured session summary each app reports, merged into a webhook payload
-   and sent as OSC arguments. **This is the layer that decides whether hooks
-   are useful or decorative**, and the one to think hardest about: what a
-   summary contains is a per-app decision that a runtime will later have to
-   express as data.
-3. **Conditional flow.** "If X then Y" over the event stream is a rule engine
-   and is *not* included above. Name it, bound it, and decide whether it
-   belongs on the host at all or waits for the device runtime — the answer
-   plausibly differs for "when this app ends" versus "when this value crosses
-   a threshold".
+### 32. Session summaries — apps report structured results
 
-**The reason to design rather than build**: ARCHITECTURE.md's Stage-3 effect
-set already contains `Call(webhook)`, so hooks are a host-side rehearsal of
-the runtime rather than throwaway work — *if* they are shaped like the effect
-set. If they are shaped like a special case in `enter_takeover`, they get
-rewritten. That is the whole bet, and it is worth an hour of writing first.
+**Split out of 23; needs 31, because hooks are the carrier.** Each takeover
+reports a flat bounded dict of scalars on exit (`{"rounds": 8, "total_s":
+480}`); the exit hook merges it into a webhook payload and maps it to OSC
+arguments. Contents are each app's decision — the contract (flat, scalars
+only, bounded key count) is in ARCHITECTURE.md, and it is deliberately a
+snapshot a future manifest can declare as data. Start with pomodoro,
+stopwatch, counter, reaction and hotcold; the rest may honestly report
+nothing.
 
-**Definition of done.** ARCHITECTURE.md gains a section covering all three
-layers, saying which are decided; the hook and summary shapes are written as
-data (a `Mode` field and a per-app summary contract), not as prose about
-behaviour; and this item is replaced by numbered build items.
+**Definition of done.** An exit webhook carries the session's numbers; apps
+with nothing to say cost nothing; tests assert one real summary end to end.
+
+### 33. `SequenceAction` — a flat list with delays
+
+**Split out of 30b (D9 decided — see ROADMAP 3d).** A flat list of actions
+with optional per-step delays. TODO **25** needs it (Mackie has no
+return-to-zero, so "stop and rewind" is *Stop, Stop*). **Bounded by
+construction — no loops, no conditionals, no nesting**, or it is a language
+the device runtime cannot run. Decide the two edges before code: a sequence
+with delays *holds the button* (presses during it follow the existing
+drop-while-busy rule, and the editor hint says so), and the parser enforces a
+maximum length and total duration rather than trusting the editor to.
+
+### 34. App documents, and app-bound actions
+
+**Split out of 30c (D9 decided — ARCHITECTURE.md "Apps own data" is the
+design; this is build).** A bounded named-value document per app instance,
+host-side first: storage beside the event store, slots declared per template
+(the manifest's precursor), a `Set`-shaped action any mode can bind
+("Smoking +1" without entering the Counter — TODO **15**), and the Counter
+reading its number from its document instead of a local integer. Keep the
+log separate — history and current value are different jobs. App-bound
+actions are offered **only while the target app is in the list**.
 
 ### 30. Actions as a first-class idea — a pool, a taxonomy, and the data under it
 
@@ -514,13 +526,10 @@ behaviour; and this item is replaced by numbered build items.
 write-up is ROADMAP **3d** and decision **D9** — read those, this is the sprint
 view.
 
-**The finding.** Actions and modes feel like separate ideas because an action
-can only *append*. The only persistence in the system is the event log: a
-counter's value is recounted from rows, a Signal's position dies on exit. So
-"add one to my smoking counter" is only expressible as "write a row somebody
-counts later", and "set this to 3" is not expressible at all.
-
-**Three pieces, in dependency order. The first is cheap and useful alone.**
+**D9 is decided (2026-08-19)** — ARCHITECTURE.md "Apps own data" is the
+design, ROADMAP 3d the taxonomy (System / Custom / App-bound). The build
+halves are numbered: (b) the `SequenceAction` is item **33**, (c) app
+documents and app-bound actions are item **34**. What remains *here* is (a):
 
 **a) A named action pool.** `AppConfig.actions`, referenced by name from a
 gesture — precisely the move `looks` already made, and for the same reason
@@ -528,25 +537,6 @@ gesture — precisely the move `looks` already made, and for the same reason
 actions are used once, and forcing those through a library is indirection for
 nothing. A gesture holds an inline action *or* a name, exactly as a mode holds
 an inline look or a name. Nothing else depends on this; it can go first.
-
-**b) A `SequenceAction`.** A flat list with optional per-step delays. TODO
-**25** already needs one (Mackie has no return-to-zero, so "stop and rewind" is
-*Stop, Stop*). **Bounded by construction — no loops, no conditionals** — or it
-is a language and the Stage-3 device runtime cannot run it. Two edges to
-decide: a sequence with delays *holds the button*, and presses are already
-dropped during the 2 s success display, so what happens when someone presses
-mid-sequence needs an answer rather than a default.
-
-**c) App documents, and app-bound actions.** A small bounded bag of named
-values per app instance, plus effects to read and write it. This is what makes
-"Smoking +1" bindable to any gesture in any mode without entering the app —
-which is TODO **15** ("counting without entering an app"), and the strongest
-argument for the whole idea. **Keep the log separate**: history and current
-value are different jobs, and merging them loses one.
-
-**The taxonomy this produces** — System / Custom / App-bound, with app-bound
-actions offered **only while that app is in the list**, because an action
-naming a deleted app is a broken binding waiting to happen.
 
 **On the UI, which is what was originally asked.** A prominent Actions area is
 right for tinkerers and wrong as a default for novices: a novice never thinks
@@ -556,9 +546,9 @@ Actions surface is a **tinker-tier** thing (TODO **14**) that *powers* a
 recipe-shaped novice path without appearing in it. Concept count is the enemy —
 there are already eleven concepts here and a novice holds about three.
 
-**Definition of done for this item is a decision, not a feature**: D9 answered
-in ROADMAP, (a) shipped if it still looks right, and (b) and (c) replaced by
-numbered build items.
+**Definition of done.** A pool of named actions in config, referenced by name
+from any gesture, edited in one place; inline actions unchanged; a binding
+naming a missing action falls back with a warning, never a crash.
 
 ### 25. A transport app that knows what the DAW is doing
 
@@ -608,7 +598,8 @@ because the whole need rests on it.
 
 **Where it should live.** Probably not a new template - a `control` surface
 plus per-gesture state is most of it. Worth asking whether this is really
-"apps can hold state and choose between actions", which is TODO **23**'s
+"apps can hold state and choose between actions", which is TODO **23**'s (now
+designed — ARCHITECTURE.md "Composition: an app's edges"; build items **31**/**32**)
 composition question wearing a DAW costume. Read 23 before starting.
 
 **Definition of done.** A short press records, and a later short press stops
@@ -965,6 +956,14 @@ descriptor change per template, not new code.
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**23. Composition — apps that fire actions at their edges**~~ — designed
+  2026-08-19, which was the whole deliverable. ARCHITECTURE.md "Composition:
+  an app's edges" settles the three layers: hooks on `Mode` (build: **31**),
+  session summaries as bounded scalar dicts (build: **32**), and conditional
+  flow **refused as a host feature** — "when it ends" is a hook, "when it
+  crosses a threshold" is a guarded transition inside the app, and a host
+  rule engine would be the scripting-language trade in different clothes.
 
 - ~~**24. Follow the DAW's tempo — MIDI clock in**~~ — shipped 2026-08-19. The
   metronome takes a `clock_port`; set it and the tempo follows the project.

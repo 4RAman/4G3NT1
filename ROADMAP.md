@@ -255,7 +255,7 @@ Three things fall out of it, and the third is the one that changes the product:
    ("counting without entering an app") and is the strongest argument for the
    whole idea.
 
-**Which gives actions a taxonomy** (proposed 2026-08-19, not yet decided):
+**Which gives actions a taxonomy** (decided 2026-08-19, with **D9**):
 
 | Family | What it is | Where it comes from |
 |---|---|---|
@@ -425,7 +425,7 @@ back and undoing things" the brief is trying to avoid.
 | **D5** ✔ | Fixed gestures, or parameterised? | **Decided and shipped: kind + parameter**, beside the frozen originals. Tap counts are data now; hold levels have their code reserved and are unimplemented | — | — |
 | **D6** | Field firmware update | **Reserve the handshake in v1; implement before any unit leaves the building** | v1 now, working by Stage 4 | You cannot fix a bug in someone else's key fob |
 | **D7** | The name | **Rename before public disclosure.** `aibutton` is descriptive and inaccurate | Stage 4/5 boundary | Repo, package, BLE name, app namespace, domain and marks all re-bake |
-| **D9** | Do apps own data, or only write history? | **Proposed: a small bounded document per app, alongside the log.** See 3d. Undecided | Stage 3, but the *action pool* half is cheap now | Actions can only append, so a third of what people ask for is inexpressible — and the UI cannot be designed until this is settled |
+| **D9** ✔ | Do apps own data, or only write history? | **Decided: a small bounded document per app instance, beside the log** — slots declared in the manifest, read like variables, written by a `Set` effect. See ARCHITECTURE.md "Apps own data"; build items are TODO **33**/**34** | — | — |
 | **D8** ✔ | How do hosts and devices stay compatible? | **Decided and shipped: capability negotiation via `DEVICE_INFO`** — never assume, always ask. Protocol v1 | — | — |
 
 **D4, D5 and D6 were one piece of work with D8 — and D8 went first, on

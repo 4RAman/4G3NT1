@@ -177,11 +177,13 @@ Which is exactly what makes an app store safe without a review team.
 ```
 states        named; each with an entry effect list
 events        gesture · timer expiry · schedule fire · sync reply · sensor
-variables     a small fixed set of ints/floats + one bounded ring buffer
+variables     a small fixed set of ints/floats + one bounded ring buffer,
+              plus the document's durable slots (see "Apps own data")
 expressions   arithmetic, comparison, boolean — no calls, no side effects
 transitions   (state, event, guard) → (state, effects)
 effects       Show(look) · Play(sound) · Log(name) · Timer(set/cancel)
-              Enter(app) · Exit() · Request(payload)   ← the escape hatch
+              Set(slot, value) · Enter(app) · Exit() · Request(payload)
+                                                       ← the escape hatch
 ```
 
 `Request` is how an app reaches anything the device can't do. The device
@@ -214,6 +216,69 @@ runtime or shipping an unsafe app store.
 That boundary is the app-store security model, and it's why the launcher
 (TODO 0a) is a system app rather than a clever user app.
 
+### Composition: an app's edges
+
+*Settles TODO 23 (2026-08-19). Three layers were proposed; two are decided,
+one is deliberately refused.*
+
+**One foreground app — decided, with TODO 15.** Exactly one app owns the
+button at a time; there is no priority rule and no background app. What
+*feels* like concurrency — count from Home, then enter the Counter and
+continue the same tally — is shared **data**, not shared control: the same
+event rows, and (below) the same document. A backgrounded timer that must
+stay visible is a readout you ask for, never a second owner of the LED.
+
+**Lifecycle hooks — decided.** `on_enter` and `on_exit` are optional
+`Action`s on **`Mode`**, not on each behaviour: one field serves every
+takeover, and `enter_takeover` already owns both moments (it logs
+`mode_enter`/`mode_exit` there today). In runtime terms a hook is an entry
+effect on the app's initial state or an effect on its exit transition —
+which is why hooks shaped like the effect set port unchanged, and hooks
+shaped like a special case in the run loop get rewritten.
+
+**Session summaries — decided in shape.** An app's result is structured
+data, not a sentence: on exit, a takeover reports a **flat dict of scalars,
+bounded key count, contents chosen per app** — `{"rounds": 8, "total_s":
+480}` — which hook actions carry outward (merged into a webhook payload,
+mapped to OSC arguments). In runtime terms it is a snapshot of the app's
+variables at exit, so it costs no new machinery on the far side of the
+migration. This layer is what makes hooks useful rather than decorative.
+
+**Conditional flow — refused as a host feature.** "If X then Y" over the
+event stream is a rule engine. The two real cases decompose without one:
+*"when this app ends"* is an `on_exit` hook; *"when a value crosses a
+threshold"* is a guarded transition **inside** the app — the model above
+already has guards, and that is where conditions belong, bounded and
+analysable. A host-side rule engine would be the scripting-language trade in
+different clothes: everything expressed in it would be host-only forever.
+
+### Apps own data: the document
+
+*Settles ROADMAP **D9** (2026-08-19).* The event log is the only persistence
+the system has ever had, and it can only *append*: a counter's value is
+recounted from rows, a Signal's position dies on exit, and "set this to 3"
+is not expressible at all. **Decided: an app instance may own a small
+durable document — a bounded bag of named values — alongside the log, never
+instead of it.**
+
+- **Bounded by construction.** The document's slots are declared in the
+  manifest — names, types, defaults — so its size is fixed at install time.
+  No growth, no collections, no nesting. The same line "bounded by
+  construction" already draws, applied to storage.
+- **Read like a variable, written as an effect.** Slots are readable in
+  expressions exactly as session variables are; mutation is the `Set` effect
+  below. Reading is not an effect because it has no side effect; writing is,
+  because durability is I/O.
+- **The log stays separate.** History and current value are different jobs:
+  a log cannot answer "what is it now" without a scan, and a document cannot
+  answer "what happened in March" at all. `Log` keeps streaks and export;
+  the document holds the number.
+- **App-bound actions.** Because the document lives outside the app's run
+  loop, an action in *any* mode can mutate it — "Smoking +1" bindable to a
+  gesture in Home without entering the Counter (TODO 15). App-bound actions
+  are offered only while the target app is installed; an action naming a
+  deleted app is a broken binding by definition.
+
 ---
 
 ## Who owns which truth
@@ -224,6 +289,7 @@ Designed so a merge conflict is impossible rather than resolvable:
 |---|---|---|---|
 | App library, settings, palettes | **Phone** | phone → device | Generation counter; higher wins. The device never edits config |
 | Live app state (count, elapsed, tempo) | **Device** | device → phone | Device is authoritative; the phone only observes |
+| App documents (durable named values) | **Device** | device → phone | Device is authoritative; a phone edit is a *request* the device applies, never a write to the replica |
 | Event log | **Device** until drained | device → phone → cloud | Append-only, monotonic ids; drain is idempotent |
 | Wall-clock time | **Phone** | phone → device | Device disciplines its RTC on every connect |
 | Installed app packages | **Phone** (from cloud store) | phone → device | Content-addressed; the device asks for what it's missing |
