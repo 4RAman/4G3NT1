@@ -11,8 +11,8 @@ the wall-clock is inside `between` (windows may cross midnight, e.g.
 22:00-06:00) and the weekday is in `days` - and, if its actions behaviour
 has `unless_logged_today`, that event hasn't already been logged today. The
 first candidate that defines the gesture wins; candidates lacking it fall
-through, so a time-scoped mode can override just one gesture while Default
-keeps handling the rest.
+through, so a time-scoped mode can override just one gesture while the
+ambient floor mode (config.py's Home, by default) keeps handling the rest.
 
 Pure module - no I/O. `logged_today` is injected (typically
 EventStore.logged_today) rather than queried here, so this stays unit

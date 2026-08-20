@@ -4,6 +4,7 @@ from aibutton.config import (
     ActionsBehavior,
     AlarmBehavior,
     AlwaysActivation,
+    AppConfig,
     CounterBehavior,
     EnterModeAction,
     LogAction,
@@ -160,6 +161,24 @@ def test_enter_mode_action_resolves_from_ambient_mode():
     mode, action = resolve((starter,), "long_press", at(12))
     assert mode.name == "Default"
     assert action == EnterModeAction(target="Focus")
+
+
+def test_default_modes_resolve_their_enter_mode_bindings():
+    # Exercises the actual shipped defaults (config._default_modes via
+    # AppConfig()) rather than a hand-built fixture: Home's double_tap and
+    # long_press should resolve to the enter_mode actions that reach the
+    # Launcher and Pomodoro it ships alongside (TODO 5). Home is ambient, so
+    # resolve() finds it directly - the Launcher/Pomodoro/Stopwatch modes
+    # those actions target are manual takeovers, reached only by dispatching
+    # the returned action (main.py's job, not rules.py's).
+    modes = AppConfig().modes
+    mode, action = resolve(modes, "double_tap", at(12))
+    assert mode.name == "Home"
+    assert action == EnterModeAction(target="Launcher")
+
+    mode, action = resolve(modes, "long_press", at(12))
+    assert mode.name == "Home"
+    assert action == EnterModeAction(target="Pomodoro")
 
 
 def test_stopwatch_and_counter_modes_are_never_resolved():

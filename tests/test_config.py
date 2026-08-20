@@ -9,11 +9,14 @@ from aibutton.config import (
     AppConfig,
     ConfigManager,
     CounterBehavior,
+    CountdownBehavior,
     EnterModeAction,
+    LauncherBehavior,
     LogAction,
     ManualActivation,
     MetronomeBehavior,
     Mode,
+    PomodoroBehavior,
     ScheduleActivation,
     StopwatchBehavior,
     TimerToggleAction,
@@ -23,6 +26,7 @@ from aibutton.config import (
     bound_triggers,
     load_config,
     parse_config,
+    parse_with_warnings,
 )
 
 
@@ -98,8 +102,90 @@ def test_full_valid_v3_config(tmp_path):
 def test_default_modes_when_empty(tmp_path):
     cfg = load_config(write(tmp_path, {"ble_device_name": "x"}))
     assert cfg.modes == AppConfig().modes
-    assert cfg.modes[0].name == "Default"
+    assert cfg.modes[0].name == "Home"
     assert isinstance(cfg.modes[0].activation, AlwaysActivation)
+
+
+# --- the ambient floor is a structural guarantee, not a stored flag (TODO 5) --
+
+def test_default_modes_shape_is_home_plus_three_apps():
+    """_default_modes() seeds Home (the ambient floor) plus the three apps its
+    own bindings promise to reach - a from-scratch config.json has to be able
+    to keep that promise the moment it exists."""
+    home, launcher, pomodoro, stopwatch = AppConfig().modes
+
+    assert home.name == "Home"
+    assert home.template == "actions"
+    assert isinstance(home.activation, AlwaysActivation)
+    assert home.behavior.actions["short_press"] == LogAction(event="button_press")
+    assert home.behavior.actions["double_tap"] == EnterModeAction(target="Launcher")
+    assert home.behavior.actions["long_press"] == EnterModeAction(target="Pomodoro")
+
+    assert (launcher.name, launcher.template) == ("Launcher", "launcher")
+    assert isinstance(launcher.activation, ManualActivation)
+    assert launcher.behavior == LauncherBehavior()
+
+    assert (pomodoro.name, pomodoro.template) == ("Pomodoro", "pomodoro")
+    assert isinstance(pomodoro.activation, ManualActivation)
+    assert pomodoro.behavior == PomodoroBehavior()
+
+    assert (stopwatch.name, stopwatch.template) == ("Stopwatch", "stopwatch")
+    assert isinstance(stopwatch.activation, ManualActivation)
+    assert stopwatch.behavior == StopwatchBehavior()
+
+
+def test_default_modes_enter_mode_targets_resolve():
+    # Home's double_tap/long_press name Launcher/Pomodoro by string - the
+    # forward references EnterModeAction leaves for the runtime to resolve
+    # (see EnterModeAction's docstring). A fresh config has to actually ship
+    # modes by those names, or Home's own bindings would point nowhere.
+    cfg = AppConfig()
+    names = {m.name for m in cfg.modes}
+    targets = {
+        action.target
+        for action in cfg.modes[0].behavior.actions.values()
+        if isinstance(action, EnterModeAction)
+    }
+    assert targets == {"Launcher", "Pomodoro"}
+    assert targets <= names
+
+
+def test_no_ambient_always_mode_seeds_home_with_a_warning():
+    # Nothing but a manual-activation takeover mode: no ambient mode of any
+    # kind, let alone an Always one. _ensure_ambient_always has to notice and
+    # seed the floor back in, appended last so it never shadows a mode
+    # someone actually configured.
+    cfg, warnings = parse_with_warnings({
+        "modes": [
+            {"name": "Focus", "template": "stopwatch", "activation": {"type": "manual"}},
+        ],
+    })
+    assert [m.name for m in cfg.modes] == ["Focus", "Home"]
+    assert isinstance(cfg.modes[-1].activation, AlwaysActivation)
+    assert cfg.modes[-1].template == "actions"
+    assert any("no ambient mode has an Always activation" in w for w in warnings)
+
+
+def test_only_always_mode_edited_to_manual_still_gets_a_floor():
+    # Simulates a hand-edited config.json rather than the editor's refusal:
+    # the floor mode's activation was changed to "manual" directly in the raw
+    # dict. "actions" does not allow manual activation (_ALLOWED_ACTIVATIONS),
+    # so the mode is dropped at parse time for the mismatch - and with the
+    # other mode in this config being a manual takeover, nothing ambient is
+    # left. The guarantee still holds: Home comes back.
+    cfg, warnings = parse_with_warnings({
+        "modes": [
+            {"name": "Was Home", "template": "actions", "activation": {"type": "manual"},
+             "short_press": {"action": "log", "event": "x"}},
+            {"name": "Focus", "template": "stopwatch", "activation": {"type": "manual"}},
+        ],
+    })
+    names = [m.name for m in cfg.modes]
+    assert "Was Home" not in names  # skipped: actions can't be manual
+    assert "Home" in names
+    home = cfg.modes[names.index("Home")]
+    assert isinstance(home.activation, AlwaysActivation)
+    assert any("no ambient mode has an Always activation" in w for w in warnings)
 
 
 # --- migration: legacy v0.2 "rules" -> modes ----------------------------
@@ -465,13 +551,18 @@ def test_counter_mode_parses(tmp_path):
 
 
 def test_stopwatch_counter_defaults_when_field_missing(tmp_path):
+    # Both takeover modes are manual-activation, so an ambient Always mode is
+    # added explicitly here - without one, _ensure_ambient_always would seed
+    # "Home" as a third mode and this unpacking would fail on its own.
     cfg = load_config(write(tmp_path, {
         "modes": [
             {"name": "Focus", "template": "stopwatch", "activation": {"type": "manual"}},
             {"name": "Water", "template": "counter", "activation": {"type": "manual"}},
+            {"name": "Base", "template": "actions", "activation": {"type": "always"},
+             "short_press": {"action": "log", "event": "x"}},
         ],
     }))
-    sw, ct = cfg.modes
+    sw, ct, _base = cfg.modes
     assert sw.behavior == StopwatchBehavior(log_as="")
     assert ct.behavior == CounterBehavior(event="")
 
@@ -832,10 +923,12 @@ def test_bound_triggers_reads_a_takeover_template_too():
 
 
 def test_nothing_bound_is_an_empty_set_not_an_error():
-    config = parse_config({
-        "modes": [{
-            "name": "Tea", "template": "countdown",
-            "activation": {"type": "manual"}, "minutes": 3,
-        }],
-    })
-    assert bound_triggers(config.modes) == set()
+    # bound_triggers is pure and works on any Mode tuple - constructed
+    # directly here rather than through parse_config, whose invariant
+    # guarantee (_ensure_ambient_always) would otherwise seed a "Home" mode
+    # and put gestures back into the set this test means to find empty.
+    mode = Mode(
+        name="Tea", activation=ManualActivation(),
+        behavior=CountdownBehavior(minutes=3),
+    )
+    assert bound_triggers((mode,)) == set()

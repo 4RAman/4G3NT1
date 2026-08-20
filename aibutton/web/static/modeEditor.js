@@ -284,6 +284,19 @@ export class ModeEditor {
     if (exit) this.howtoEl.append(el('p', { className: 'howto-line', textContent: `Exit: ${exit}` }));
   }
 
+  // Whether *this* mode is the last ambient (actions-template) mode with an
+  // Always activation. Recomputed from the live sibling list every time it's
+  // asked, never cached: config.py's `_ensure_ambient_always` treats the same
+  // invariant as structural rather than a stored flag, for the same reason -
+  // a cached or stored answer can go stale the moment a sibling mode changes,
+  // or be edited away exactly like the mode it was meant to protect.
+  _isOnlyAmbientAlways() {
+    const isAmbientAlways = (m) => m.template === 'actions' && m.activation?.type === 'always';
+    if (!isAmbientAlways(this.mode)) return false;
+    const modes = this.handlers.getModes?.() || [];
+    return modes.filter(isAmbientAlways).length <= 1;
+  }
+
   _header() {
     const name = el('input', {
       type: 'text', className: 'inp mode-name',
@@ -298,8 +311,10 @@ export class ModeEditor {
     // one place "which mode is actually in charge right now?" gets answered.
     this.activeEl = el('span', { className: 'mode-active', hidden: true });
 
-    const btn = (text, title, cls, fn) => {
-      const b = el('button', { type: 'button', className: `mini ${cls}`, textContent: text, title });
+    const btn = (text, title, cls, fn, disabled = false) => {
+      const b = el('button', {
+        type: 'button', className: `mini ${cls}`, textContent: text, title, disabled,
+      });
       b.addEventListener('click', fn);
       return b;
     };
@@ -309,12 +324,26 @@ export class ModeEditor {
       btn('↑', 'Move up - higher modes win', '', () => this.handlers.onMoveUp?.()),
       btn('↓', 'Move down - lower modes win', '', () => this.handlers.onMoveDown?.()),
     ];
+    // Refused, not just discouraged: this mode is the only ambient mode left
+    // with an Always activation, and deleting it would leave the button with
+    // no mode to fall back on for an ordinary press. This protects the
+    // invariant, not this particular mode - once a second Always-ambient mode
+    // exists, either one may be deleted.
+    const lastFloor = this._isOnlyAmbientAlways();
     return el('div', { className: 'mode-edit-head' }, [
       el('span', { className: 'fld-label', textContent: 'Name' }),
       name,
       this.activeEl,
       ...reorder,
-      btn('✕', 'Delete mode', 'danger', () => this.handlers.onRemove?.()),
+      btn(
+        '✕',
+        lastFloor
+          ? "Can't delete - this is the only mode that's always on, and the button needs one to fall back to."
+          : 'Delete mode',
+        'danger',
+        () => this.handlers.onRemove?.(),
+        lastFloor,
+      ),
     ]);
   }
 
@@ -401,6 +430,15 @@ export class ModeEditor {
       ACTIVATIONS.filter((a) => allowed.has(a.type))
         .map((a) => el('option', { value: a.type, textContent: a.label })));
     select.value = this.mode.activation?.type || tplDescriptor.allowedActivations[0];
+
+    // Same refusal as the delete button, same reason: switching this mode's
+    // activation away from Always is exactly as destructive to the invariant
+    // as deleting it would be, when nothing else is holding the floor up.
+    if (this._isOnlyAmbientAlways()) {
+      select.disabled = true;
+      select.title = "Can't change - this is the only mode that's always on. "
+        + 'Give another ambient mode an Always activation first.';
+    }
 
     this.activationBody = el('div', { className: 'act-body' });
     this._buildActivationBody();

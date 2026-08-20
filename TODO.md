@@ -251,36 +251,6 @@ recorded in [hardware.py](firmware/hardware.py)'s wiring block; and `#ffffff`
 reading as white on the ring, or an explicit note saying how far off it still
 is and why that was accepted.
 
-### 5. Make the floor mode permanent, rename it to "Home", route into takeovers
-
-Two things tangled together — do the resolution-semantics half first, it's the
-one with test coverage riding on it.
-
-**a) The floor mode can't currently be protected.** Nothing in
-[rules.py](aibutton/rules.py) or `config.py` prevents deleting or rescoping the
-one ambient mode a fresh config ships with (`_default_modes()`), which means a
-button can be configured into a state where *no* ambient mode ever matches
-(visible in the dashboard as "no mode matches short_press right now"). Fix:
-guarantee exactly one ambient mode is permanent — `Always` activation, can't be
-deleted, can't have its activation changed away from `Always`. Whether that's a
-`protected: true`/role flag on `Mode` or a structural rule ("the last ambient
-mode in the list is the floor") is a real design decision — `resolve()`'s
-docstring already talks about "explicit priority instead of relying on list
-order alone", which is the same underlying problem. In the UI, `ModeEditor`'s
-delete button (`_header()`) and the name/template fields need to refuse.
-
-**b) Rename it "Home" and change its default bindings.** The name is
-**decided: `"Home"`** — chosen over `"Mode Selection"` (a UI label, not a mode
-name) because it is the place you return to, which is exactly what **0a**'s
-launcher wants to call it. Change its default bindings to
-`short_press → Log`, `long_press → Enter "Pomodoro"`,
-`double_tap → Enter "Stopwatch"`. That means `_default_modes()` can no longer
-return a single mode — it must also seed default Pomodoro and Stopwatch modes
-(`activation: manual`) for those `enter_mode` targets to resolve against, which
-changes what a from-scratch `config.json` looks like. Depends on (a): renaming
-and repurposing only make sense once this mode can't be deleted out from under
-the defaults it routes to.
-
 ### 8. Host the web UI on the user's server (docker / nginx / SSL)
 
 **Do not start building before the topology is picked — it changes the shape of
@@ -912,6 +882,20 @@ descriptor change per template, not new code.
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**5. The floor mode is permanent, named "Home", and routes into
+  takeovers**~~ — shipped 2026-08-19. Protection is **structural, not a
+  stored flag**: the invariant is "at least one Always-ambient mode exists" —
+  the parser seeds Home (appended last, warning surfaced to the editor)
+  whenever a config would violate it, scenes covered for free because they
+  merge before the one parser; the editor refuses only the delete or rescope
+  that would leave zero, never a particular mode. A fresh config ships four
+  modes: Home (`short → log`, `double → Launcher`, `long → Pomodoro`) plus
+  Launcher, Pomodoro and Stopwatch. **One deviation from the old spec, on
+  purpose:** double tap enters the *launcher*, not the stopwatch — that spec
+  predates the launcher, double tap is the launcher's gesture by rule, and a
+  fresh config with no launcher binding would fail the "all apps reachable
+  without the web UI" gate.
 
 - ~~**28. Four taps**~~ — shipped 2026-08-19, and it cost exactly what
   protocol v1 promised: **nothing on the wire**. Firmware already names

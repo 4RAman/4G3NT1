@@ -920,27 +920,95 @@ def bound_triggers(modes) -> set[str]:
     return names
 
 
-def _default_modes() -> tuple[Mode, ...]:
-    """The fail-soft floor: one always-on mode binding the everyday gestures
-    to primitives needing no setup, so a button with no config (or a broken
-    one) still does something legible instead of erroring on every press.
+def _home_mode() -> Mode:
+    """The permanent ambient floor: always on, binding the everyday gestures
+    to primitives and app launches needing no setup, so a button with no
+    config (or a broken one) still does something legible instead of
+    erroring on every press.
+
+    Split out from `_default_modes()` so `_ensure_ambient_always` can seed
+    exactly this one mode when a hand-edited config is caught with none -
+    not the three apps below it, which only a from-scratch config needs.
 
     It binds three of the six gestures rather than all of them: a longer tap
     costs every shorter one its instant response (see `max_taps_for`), so the
     default config must not spend one nobody asked for."""
-    return (
-        Mode(
-            name="Default",
-            activation=AlwaysActivation(),
-            behavior=ActionsBehavior(
-                actions={
-                    "short_press": LogAction(event="button_press"),
-                    "long_press": TimerToggleAction(log_as="focus"),
-                    "double_tap": LogAction(event="note"),
-                },
-            ),
+    return Mode(
+        name="Home",
+        activation=AlwaysActivation(),
+        behavior=ActionsBehavior(
+            actions={
+                "short_press": LogAction(event="button_press"),
+                "double_tap": EnterModeAction(target="Launcher"),
+                "long_press": EnterModeAction(target="Pomodoro"),
+            },
         ),
     )
+
+
+def _default_modes() -> tuple[Mode, ...]:
+    """The fail-soft floor a from-scratch config gets: "Home" (see
+    `_home_mode`) plus the three apps its own bindings promise to reach, so
+    that promise is true the moment the file exists rather than only once
+    someone adds those modes by hand.
+
+    double_tap goes to the Launcher, not straight to a Stopwatch as an
+    earlier plan for this default had it: the launcher launches on a double
+    tap by the codebase's own rule (CLAUDE.md), and a fresh config with no
+    launcher binding at all would fail the Stage-2 gate that every app must
+    be reachable without the web UI. Stopwatch ships as a mode the launcher
+    reaches instead - Home only spends two of its three bindings on entering
+    something, and the launcher is what makes that enough to reach all of
+    them (`LauncherBehavior.targets` defaults to every takeover mode in
+    config order).
+    """
+    return (
+        _home_mode(),
+        Mode(name="Launcher", activation=ManualActivation(), behavior=LauncherBehavior()),
+        Mode(name="Pomodoro", activation=ManualActivation(), behavior=PomodoroBehavior()),
+        Mode(name="Stopwatch", activation=ManualActivation(), behavior=StopwatchBehavior()),
+    )
+
+
+def _has_ambient_always(modes: tuple[Mode, ...]) -> bool:
+    """True if `modes` already contains an ambient (`actions`-template) mode
+    with an Always activation - the invariant `_ensure_ambient_always`
+    maintains."""
+    return any(
+        mode.template == "actions" and isinstance(mode.activation, AlwaysActivation)
+        for mode in modes
+    )
+
+
+def _ensure_ambient_always(modes: tuple[Mode, ...]) -> tuple[Mode, ...]:
+    """Guarantee at least one ambient mode with an Always activation exists.
+
+    Structural, not a stored flag: nothing is recorded on `Mode` saying "this
+    one is the floor", because a flag can be hand-deleted exactly like the
+    mode itself - the parser would still need this guarantee, and a derived
+    property can't drift from what the config actually contains.
+
+    Every path through `_parse_modes` funnels through here - the "modes" list,
+    both legacy migration ladders, and the built-in defaults - so a config
+    that deletes or rescopes its only ambient-Always mode gets one back rather
+    than leaving the button with no mode to answer a gesture by default. A
+    scene gets this for free too: scenes merge into the raw dict before
+    `parse_config` ever runs (see `load_config_full`), so this check already
+    sits downstream of that merge.
+
+    Appended last, at the lowest priority: a seeded Home mode must never
+    shadow an ambient mode someone actually configured, only catch gestures
+    nothing else claims.
+    """
+    if _has_ambient_always(modes):
+        return modes
+    home = _home_mode()
+    log.warning(
+        "config: no ambient mode has an Always activation - every gesture "
+        "would eventually fall through to nothing; adding the default %r mode",
+        home.name,
+    )
+    return modes + (home,)
 
 
 # --- LED palette --------------------------------------------------------
@@ -2213,8 +2281,16 @@ def _migrate_rule(raw, idx: int) -> Mode | None:
 
 
 def _parse_modes(raw: dict, looks: set[str] | None = None) -> tuple[Mode, ...]:
-    """Resolve the modes list, applying the migration ladder:
-    modes (v0.3) -> rules (v0.2) -> commands (v0.1) -> built-in defaults.
+    """Resolve the modes list, then guarantee it can actually answer a
+    gesture: `_ensure_ambient_always` is the last step so nothing upstream
+    (the migration ladder, a hand-written "modes" list, a scene merged over
+    either) has to re-derive the same fail-soft rule."""
+    return _ensure_ambient_always(_resolve_mode_list(raw, looks))
+
+
+def _resolve_mode_list(raw: dict, looks: set[str] | None) -> tuple[Mode, ...]:
+    """The migration ladder itself: modes (v0.3) -> rules (v0.2) -> commands
+    (v0.1) -> built-in defaults.
 
     `looks` is the pool of names a mode may reference; it is parsed first so a
     dangling reference is caught here and reported, rather than discovered at
