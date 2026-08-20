@@ -12,6 +12,7 @@ from aibutton.config import (
     CountdownBehavior,
     EnterModeAction,
     LauncherBehavior,
+    LedEffect,
     LogAction,
     ManualActivation,
     MetronomeBehavior,
@@ -28,6 +29,7 @@ from aibutton.config import (
     parse_config,
     parse_with_warnings,
 )
+from aibutton.sequencer import Sequence, Stop
 
 
 def write(tmp_path, data) -> str:
@@ -932,3 +934,127 @@ def test_nothing_bound_is_an_empty_set_not_an_error():
         behavior=CountdownBehavior(minutes=3),
     )
     assert bound_triggers((mode,)) == set()
+
+
+# --- stop-list looks (sequences) -----------------------------------------
+
+def test_a_look_pool_may_mix_plain_effects_and_sequences():
+    cfg = parse_config({
+        "looks": {
+            "warm": {"style": "breathe", "color": "#ff8800", "period_s": 4.0},
+            "pulse": {"stops": ["#ff0000", "#0000ff"]},
+        },
+    })
+    assert isinstance(cfg.looks["warm"], LedEffect)
+    assert isinstance(cfg.looks["pulse"], Sequence)
+
+
+def test_a_stops_key_is_what_selects_the_sequence_shape():
+    """The dispatch is the key's presence, not a "type" field - an object
+    with no `stops` still parses as a plain effect exactly as before."""
+    cfg = parse_config({"looks": {"plain": {"style": "solid", "color": "#00ff00"}}})
+    assert cfg.looks["plain"] == LedEffect(style="solid", color="#00ff00")
+
+
+def test_bare_colours_and_objects_both_work_as_stops():
+    cfg = parse_config({
+        "looks": {"pulse": {"stops": [
+            "#ff0000",                                            # bare shorthand
+            {"color": "#00ff00", "hold_s": 1.0, "fade_s": 0.2},    # full form
+        ]}},
+    })
+    seq = cfg.looks["pulse"]
+    assert seq.stops == (
+        Stop("#ff0000", hold_s=0.5, fade_s=0.0),  # Stop's own defaults
+        Stop("#00ff00", hold_s=1.0, fade_s=0.2),
+    )
+    assert seq.repeat is True  # the default
+
+
+def test_repeat_false_is_a_one_shot():
+    cfg = parse_config({
+        "looks": {"once": {"stops": ["#ff0000", "#00ff00"], "repeat": False}},
+    })
+    assert cfg.looks["once"].repeat is False
+
+
+def test_a_non_bool_repeat_falls_back_to_true():
+    cfg, warnings = parse_with_warnings({
+        "looks": {"a": {"stops": ["#ff0000"], "repeat": "yes"}},
+    })
+    assert cfg.looks["a"].repeat is True
+    assert any("repeat" in w for w in warnings)
+
+
+def test_a_structurally_wrong_stop_is_dropped_others_survive():
+    """One bad stop costs that stop, not the sequence - the same rule
+    _parse_ramp follows for a ramp stop of the wrong shape."""
+    cfg, warnings = parse_with_warnings({
+        "looks": {"mix": {"stops": [
+            {"color": "#ff0000"},
+            123,        # wrong shape entirely - dropped
+            {"color": "#00ff00"},
+        ]}},
+    })
+    seq = cfg.looks["mix"]
+    assert [s.color for s in seq.stops] == ["#ff0000", "#00ff00"]
+    assert any("stops[1]" in w for w in warnings)
+
+
+def test_a_bad_field_inside_a_stop_falls_back_per_field_the_stop_survives():
+    cfg, warnings = parse_with_warnings({
+        "looks": {"a": {"stops": [
+            {"color": "not-a-colour", "hold_s": -1, "fade_s": "nope"},
+        ]}},
+    })
+    stop = cfg.looks["a"].stops[0]
+    assert stop.color == "#000000"   # bad colour -> black, not dropped
+    assert stop.hold_s == 0.5
+    assert stop.fade_s == 0.0
+    assert any("a.stops[0].color" in w for w in warnings)
+    assert any("a.stops[0].hold_s" in w for w in warnings)
+    assert any("a.stops[0].fade_s" in w for w in warnings)
+
+
+def test_an_empty_stops_list_falls_back_to_the_default_effect():
+    cfg, warnings = parse_with_warnings({"looks": {"broken": {"stops": []}}})
+    assert cfg.looks["broken"] == LedEffect()
+    assert any("broken.stops" in w for w in warnings)
+
+
+def test_stops_not_a_list_falls_back_to_the_default_effect():
+    cfg = parse_config({"looks": {"broken": {"stops": "nope"}}})
+    assert cfg.looks["broken"] == LedEffect()
+
+
+def test_every_stop_unusable_falls_back_to_the_default_effect():
+    """Structurally wrong entries all the way down: nothing survives, so the
+    whole look reverts - the same "empty/invalid" rule as an empty list."""
+    cfg = parse_config({"looks": {"broken": {"stops": [None, 42, []]}}})
+    assert cfg.looks["broken"] == LedEffect()
+
+
+def test_a_sequence_look_round_trips_through_as_dict():
+    cfg = parse_config({
+        "looks": {"pulse": {
+            "stops": [
+                {"color": "#ff0000", "hold_s": 0.3, "fade_s": 0.1},
+                {"color": "#00ff00", "hold_s": 0.6, "fade_s": 0.2},
+            ],
+            "repeat": False,
+        }},
+    })
+    again = parse_config(as_dict(cfg))
+    assert again.looks["pulse"] == cfg.looks["pulse"]
+    assert isinstance(again.looks["pulse"], Sequence)
+
+
+def test_a_mixed_pool_round_trips_through_as_dict():
+    cfg = parse_config({
+        "looks": {
+            "warm": {"style": "breathe", "color": "#ff8800", "period_s": 4.0},
+            "pulse": {"stops": ["#ff0000", "#0000ff"]},
+        },
+    })
+    again = parse_config(as_dict(cfg))
+    assert again.looks == cfg.looks

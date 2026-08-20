@@ -48,7 +48,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import hotcold, ladder, ramp, reaction
+from . import hotcold, ladder, ramp, reaction, sequencer
 from .device import (
     SAFE_MIN_PERIOD_S,
     STYLE_USES_COLOR,
@@ -108,8 +108,16 @@ _SCHEDULER_TICK_S = 1.0
 # Two consumers, and they work around it differently because they mean
 # different things: run_metronome marks every Nth beat (so raising max_bpm
 # makes the button faster without making the light more dangerous), while
-# run_countdown floors its configured period. When effects become stop lists
-# the floor has to be defined over *transitions* rather than over a period.
+# run_countdown floors its configured period. Stop lists (sequencer.py) are a
+# third: config.sequence_safe defines the floor over *transitions* (a stop's
+# dwell) rather than over a period, for the reason its docstring gives.
+
+# How often a stop-list fade is re-sampled while it plays - the floor on how
+# "smooth" a host-driven fade may claim to be. Small enough to look like
+# motion, large enough that it stays honest about being pushed over a radio
+# whose contract is fire-and-forget (ble_device.py) rather than promising the
+# device's own smooth styles (breathe, fade) can't.
+_SEQUENCE_MIN_STEP_S = 0.05
 
 # How often a running countdown re-evaluates its ramp. The colour is only
 # actually pushed when it has visibly moved (ramp.differs), so this is a
@@ -309,6 +317,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         bound_triggers,
         flash_safe,
         look_for,
+        sequence_safe,
     )
     from .rules import resolve
     from .scheduler import due_alarm
@@ -354,6 +363,53 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     # be handed its own Mode and pass it along on every call.
     active_mode = None
 
+    # The task walking a Sequence look's planner, if one is currently running
+    # - see `_drive_sequence`. Cancelled by `set_led` before it does anything
+    # else, which is what makes a sequence last "until the next state change"
+    # exactly like an ephemeral effect: nothing downstream of `set_led` has
+    # to know a sequence was ever involved.
+    sequence_task: asyncio.Task | None = None
+
+    async def _drive_sequence(state: LEDState, seq: sequencer.Sequence) -> None:
+        """Walk `seq`'s planner, pushing each stepped colour as a plain solid
+        `LedEffect` - never a Sequence itself, since `device.set_led` duck-types
+        its `effect` on `.style`/`.color`/`.color2`/`.period_s` (device.py) and
+        a Sequence has none of those.
+
+        Pushes go straight through `device.set_led`, *not* through the
+        `set_led` closure above: that closure cancels this very task on every
+        call, and calling it from inside its own task would cancel itself one
+        step in. `flash_safe` is skipped for the same reason `ladder_paint`'s
+        solid ticks skip it - every pushed style here is "solid", which
+        `device.STYLE_STROBES` never floors anyway; the floor for a sequence
+        is `sequence_safe`, already applied once to `seq` before this task
+        started, over the stop *dwells* rather than over each tiny push.
+
+        **Assumes the host is awake and connected**, like every run_* loop in
+        this file (CLAUDE.md) - the sleeps below are wall-clock, and a host
+        that is asleep or disconnected simply stops advancing the sequence
+        rather than catching up, which is the same trade every other timed
+        effect in this module already makes.
+        """
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        while True:
+            color, wait = sequencer.plan_at(seq, loop.time() - start, _SEQUENCE_MIN_STEP_S)
+            if color is None:
+                # A one-shot finished. `None` is what `set_led` (and the
+                # device) already mean by "no override" - falling back to the
+                # palette entry, not to whatever `active_mode` still names for
+                # this state, which would just restart the same sequence.
+                device.set_led(state, None)
+                status.led_state = state.value
+                status.led_effect = None
+                return
+            effect = LedEffect(style="solid", color=color)
+            device.set_led(state, effect)
+            status.led_state = state.value
+            status.led_effect = effect
+            await asyncio.sleep(wait if wait and wait > 0 else _SEQUENCE_MIN_STEP_S)
+
     def set_led(state: LEDState, effect=None) -> None:
         """Show `state`, optionally wearing a one-off `effect` instead of its
         palette entry - which is how a mode gets its own look without
@@ -364,9 +420,37 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         look different: the state stays `WORKING` for both, and only its
         appearance differs. A mode that has chosen nothing resolves to None and
         the device falls back to the palette, exactly as before looks existed.
+
+        A look that is a stop list (`sequencer.Sequence`) is not pushed
+        directly - the device only understands one effect at a time, not a
+        schedule - so it is handed to `_drive_sequence` instead, which pushes
+        the sequence's steps one at a time as plain effects. Every call here
+        first cancels whatever sequence task is currently running, whatever
+        `state`/`effect` turn out to be: a sequence lasts until the next
+        state change, exactly like an ephemeral effect, and "the next state
+        change" includes this call turning out to want another sequence.
         """
+        nonlocal sequence_task
+        if sequence_task is not None:
+            sequence_task.cancel()
+            sequence_task = None
+
         if effect is None:
             effect = look_for(cm.config, active_mode, state)
+
+        if isinstance(effect, sequencer.Sequence):
+            # THE ONE GATE for a sequence's floor, mirroring flash_safe just
+            # below for a plain effect - see config.sequence_safe. Nothing
+            # else may call sequence_safe; a second call site is a second
+            # floor with its own chance to drift from this one.
+            floored = sequence_safe(effect, cm.config.min_flash_period_s)
+            sequence_task = asyncio.create_task(_drive_sequence(state, floored))
+            # The task pushes its first frame on the next loop iteration, not
+            # synchronously - set_led stays non-blocking either way. The state
+            # is already known, though, so the status line need not wait.
+            status.led_state = state.value
+            return
+
         # The one gate every pushed look passes through, which is why the floor
         # is enforced here rather than in each run_* loop: a mode computing its
         # own effect (the metronome's period, the countdown's colour) cannot
@@ -398,10 +482,21 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     def base_look(state: LEDState):
         """The look a mode should build its live effect on top of - its own if
         it has one, the palette entry otherwise. What `run_countdown` walks the
-        colour of, and what `run_metronome` rewrites the period of."""
-        return look_for(cm.config, active_mode, state) or cm.config.led_palette.get(
-            state.value
-        )
+        colour of, and what `run_metronome` rewrites the period of.
+
+        A stop-list look has no single style or period to build on top of, so
+        it is treated the same as no look chosen at all: the palette entry,
+        exactly like a mode that named nothing. That does not make a sequence
+        a second-class look - `set_led` above renders one directly wherever a
+        mode's look is used as-is (its static states, a reminder, a launcher's
+        preview) - it only means the *derived, host-animated* effects this
+        function feeds (a ramp, a beat pulse, a ladder tick) need something
+        with a style and a period to modify, which a schedule is not.
+        """
+        look = look_for(cm.config, active_mode, state)
+        if isinstance(look, sequencer.Sequence):
+            look = None
+        return look or cm.config.led_palette.get(state.value)
 
     def ladder_paint(spec, state: LEDState):
         """A `paint(seconds)` that shows `spec`'s colour for a moment in time.
@@ -1200,8 +1295,19 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         # mode has one - looks exist to be a mode's appearance, so having the
         # template's own fields quietly override one would make choosing a look
         # do nothing here. With no look these are the template's fields, which
-        # is what a countdown has always used.
+        # is what a countdown has always used. A stop-list look has no style
+        # or period to take instead - same non-fatal fallback as base_look,
+        # spelled out here with a warning because, unlike base_look's other
+        # callers, this one only runs once per countdown rather than every
+        # tick, so the cost of saying why is negligible.
         look = look_for(cm.config, active_mode, LEDState.TIMING)
+        if isinstance(look, sequencer.Sequence):
+            log.warning(
+                "countdown %r: TIMING's look is a stop list, which has no "
+                "style or period for the ramp to borrow - using the mode's "
+                "own %r/%.2fs", mode_name, behavior.style, behavior.period_s,
+            )
+            look = None
         style = look.style if look is not None else behavior.style
         # No floor applied here any more: every effect this loop pushes goes
         # through set_led, which is the one place that enforces it. Flooring
@@ -2058,6 +2164,13 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                     await asyncio.wait_for(stop.wait(), timeout=_SCHEDULER_TICK_S)
         log.info("shutting down")
     finally:
+        if sequence_task is not None:
+            # Not another `set_led` - shutting down never repaints the light,
+            # it just stops walking whatever sequence was mid-flight so the
+            # task does not outlive `run()` and trip a loop-closed warning.
+            sequence_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sequence_task
         if web_server is not None:
             web_server.should_exit = True
             # uvicorn raises SystemExit (a BaseException) if it never bound its

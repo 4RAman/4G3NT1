@@ -240,7 +240,12 @@ Three consequences for code written today:
   the palette is pushed (the device renders those unasked). Do not add a
   second clamp: a floor in three places is a floor with three chances to
   drift. Only `device.STYLE_STROBES` styles are floored, mirrored as
-  `strobes: true` in `schema.js`.
+  `strobes: true` in `schema.js`. A stop list ([sequencer.py](aibutton/sequencer.py))
+  is the second shape of the same law: `config.sequence_safe`, applied at the
+  same single point in `main.set_led`, floors each stop's *dwell* at half the
+  floor — a stop list has no period, so the floor is defined over transitions
+  — and a one-shot of three stops or fewer is exempt, which is the
+  confirmation-flash rule. One call site each, still.
 - **Long press means "up one level", everywhere.** Alarm, stopwatch, counter,
   pomodoro, metronome, countdown, both games, the signal light, the control
   surface and the launcher all leave on a long press;

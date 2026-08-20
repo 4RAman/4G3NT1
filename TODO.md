@@ -131,8 +131,8 @@ view.
 | **The gesture engine** — N taps, hold levels | 0b·2 ✔, 5-tap gesture ✔, **28** ✔ | Taps are done. Hold levels still need firmware and are the cheap half of **29** |
 | **Depth without the wire** — metronome config ✔, event values ✔, filtering/export ✔ | **1** ✔, **9** ✔, **12**, **14** ✔ | None — ship freely |
 | **Reach and hosting** — launcher ✔, ten apps ✔, remote UI | **0a** ✔, **7** ✔, **8** | Only the hardware walk left on 7 |
-| **The light as a language** — ladder ✔, where colour is edited ✔, stop list | **19** (a ✔, c, d ✔, e ✔) | Only **19b/c** left |
-| **Saying a number** — ambient counting, count readout, progress | **15**, **17** | Wants the stop list (**19b**) first — a readout *is* a stop list |
+| **The light as a language** — ladder ✔, where colour is edited ✔, stop list core ✔ | **19** (a ✔, b core ✔, c, d ✔, e ✔) | **19c** and 19b's editor UI left |
+| **Saying a number** — ambient counting, count readout, progress | **15**, **17** | Unblocked — the stop list core shipped 2026-08-19 |
 | **Play** — timing/rhythm and guessing games | **16** ✔ | Done for forgiving games; tight rhythm still needs Stage 3's on-device runtime |
 | **Reaching other software** — OSC ✔, MIDI out ✔, clock in ✔, transport state | ✔ shipped with **7**, **22** ✔, **24** ✔, **25** | Sending and listening both work. **25** wants MCU's *return* feedback, which needs the DAW's Send To pointed back |
 | **One machine, many timers** — Pomodoro/HIIT/Tabata as presets | **20** ✔ | Done |
@@ -157,12 +157,12 @@ make, and only one of them is unbuilt:
 |---|---|---|---|
 | **Ramp** [ramp.py](aibutton/ramp.py) | progress 0→1 | countdown, Pomodoro block, hold level, hot/cold | ✔ built |
 | **Subdivision ladder** [ladder.py](aibutton/ladder.py) | a counter | a time reference on any timer, beat accents | ✔ built |
-| **Stop list** | the clock | Fade/Flash/Evolve, gradients, sequencing, **a number you can read** | **19b**, unbuilt |
+| **Stop list** [sequencer.py](aibutton/sequencer.py) | the clock | Fade/Flash/Evolve, gradients, sequencing, **a number you can read** | ✔ core built 2026-08-19; editor UI pending (**19b**) |
 
 A ramp answers "how far through are you", a ladder answers "what time is it",
-a stop list answers "what happens next". None can express the others, and
-**items 15 and 17 queue behind the stop list** — a count readout *is* a stop
-list. Build it once, deliberately, and both get cheap.
+a stop list answers "what happens next". None can express the others. The
+stop list's core shipped 2026-08-19, so **items 15 and 17 are unblocked** —
+a count readout *is* a stop list, and the play-once mode was built for it.
 
 **16 no longer queues behind it**, which is worth recording because it was the
 assumption that made games look expensive. A host-pushed *sequence* needs the
@@ -732,34 +732,35 @@ second backlog.
 
 Part (a), the subdivision ladder, shipped — see **Done**. Four parts remain.
 
-#### b) The sequencer — a stop list, and one-offs
+#### b) The sequencer — a stop list, and one-offs — **core shipped 2026-08-19**
 
-The `{colour, hold, fade}` stop list: it subsumes all six current styles
-(solid = one stop; flash = colour + black, stepped; fade = two stops, smoothed;
-breathe = colour → black) and *then* gives gradients (many stops), sequencing
-(stepped stops) and asymmetric duty (unequal holds) for nothing. **"Fade,
-Flash, Evolve" are three presets over one structure, not three features.**
+The Python half is in: [sequencer.py](aibutton/sequencer.py) (a pure leaf —
+`Stop`/`Sequence`/`plan_at`, table-tested), a `stops` key parsing anywhere a
+*look* parses (per-stop fallback; the system palette stays plain effects,
+because palette entries ship to the device), `as_dict` round-tripping, and a
+driver in `main.set_led` that walks the planner and pushes each step as a
+plain solid — cancelled by the next `set_led`, so a sequence lasts exactly as
+long as an ephemeral effect. `repeat: false` is the play-once mode; a
+finished one-shot falls back to the palette (`set_led(state, None)`), which
+is what makes it the readout primitive **15**/**17** want.
 
-**The new requirement, and it is a real addition to the effect model: not
-everything loops.** "Do x sequence over y interval" needs a *play once* mode.
-Today every style repeats until the next state change, and the 0.03 s
-confirmation flash is a one-off only because it is a state display rather than
-an effect.
+**The floor is settled and is now a CLAUDE.md invariant**: `sequence_safe`,
+applied at the same single point as `flash_safe`, floors each stop's dwell at
+half the floor (a stop is one transition; a period is two). A one-shot of
+≤3 stops is exempt — the confirmation-flash rule, decided rather than
+inherited. The ladder was **not** unified with it: a ladder tick floors at
+the *full* period and a stop's dwell at *half*, different multiples for
+different shapes, so sharing the constant would have changed one behaviour
+rather than deduplicating code. Both docstrings say so.
 
-That has a safety consequence to settle **before** building: **0.03 s is 33 Hz
-and is fine precisely because it happens once.** So `config.flash_safe` needs to
-know whether an effect repeats — the floor is over *repeating* transitions. A
-one-off and a looping sequence are different questions and the current
-signature cannot tell them apart.
+**Still open on this item:** the colour engine growing a sequence editor
+(the UI half — a look you can only hand-write in JSON is half-shipped), and
+an *animated* live preview (`/api/dev/led` currently previews a sequence as
+its first stop, static, with a warning saying so — honest, but not a
+preview). Fade smoothing is stepped at 50 ms by design; smooth fades remain
+the device's styles until the runtime moves on-device.
 
-**The other floor gap, already paid for once:** the flash floor is enforced
-over `period_s`, and a stop list breaks that — five colours at 0.1 s each is a
-2 Hz cycle but a 10 Hz *change* rate. The ladder solved this for itself by
-flooring its cadence (`ladder_paint`); the stop list must do the same, and the
-right fix is to redefine the floor over transitions once, in `flash_safe`, for
-both.
-
-**This is the item items 15, 16 and 17 are waiting on.**
+**15 and 17 are now unblocked; Simon-says (16's parked half) too.**
 
 #### c) Reuse the ramp widget wherever a gradient makes sense
 

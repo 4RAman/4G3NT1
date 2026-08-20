@@ -24,9 +24,11 @@ from aibutton.config import (
     flash_safe,
     parse_config,
     parse_with_warnings,
+    sequence_safe,
 )
 from aibutton.device import SAFE_MIN_PERIOD_S, STYLE_STROBES, LED_STYLES, MockDevice
 from aibutton.main import Clock, DeviceStatus, metronome_flash
+from aibutton.sequencer import Sequence, Stop
 from aibutton.store import EventStore
 from aibutton.webui import WebContext, create_app
 
@@ -69,6 +71,72 @@ def test_raising_the_setting_slows_the_light_further():
 def test_lowering_the_setting_lets_the_light_go_faster():
     kept = flash_safe(LedEffect(style="flash", period_s=0.1), 0.05)
     assert kept.period_s == pytest.approx(0.1)
+
+
+# --- the floor over transitions (sequences) ---------------------------------
+#
+# A strobe period is two transitions (`_flash`/`_alternate` toggle at
+# `period_s / 2` in firmware/led.py), so flooring `period_s` already means
+# "no transition interval shorter than half the period". A stop list has no
+# period - a stop-to-stop change is one transition - so `sequence_safe`
+# floors a stop's dwell (`hold_s + fade_s`) at that same half-period, and a
+# one-shot of 3 stops or fewer (the confirmation-flash case: a handful of
+# transitions, once) is exempt from it entirely.
+
+def test_a_fast_repeating_sequence_is_floored_to_half_the_period():
+    seq = Sequence(
+        stops=(Stop("#ff0000", hold_s=0.01), Stop("#00ff00", hold_s=0.01)),
+        repeat=True,
+    )
+    floored = sequence_safe(seq, 1 / 3)
+    assert all(s.hold_s == pytest.approx(1 / 6) for s in floored.stops)
+    assert floored.repeat is True
+
+
+def test_a_one_shot_of_three_stops_or_fewer_passes_untouched():
+    """The confirmation-flash case: a few transitions once is not what WCAG
+    2.3.1 is worried about, which is *sustained* flashing."""
+    seq = Sequence(
+        stops=(Stop("#ff0000", 0.01), Stop("#00ff00", 0.01), Stop("#0000ff", 0.01)),
+        repeat=False,
+    )
+    assert sequence_safe(seq, 1 / 3) is seq
+
+
+def test_a_one_shot_of_more_than_three_stops_is_floored():
+    """Past three stops a one-shot can sustain a flash for as long as
+    something keeps re-triggering it, which is the strobing-style case."""
+    seq = Sequence(
+        stops=tuple(Stop(f"#{i:02x}0000", hold_s=0.01) for i in range(10)),
+        repeat=False,
+    )
+    floored = sequence_safe(seq, 1 / 3)
+    assert all(s.hold_s == pytest.approx(1 / 6) for s in floored.stops)
+
+
+def test_a_sequence_already_inside_the_floor_is_returned_untouched():
+    seq = Sequence(stops=(Stop("#ff0000", hold_s=1.0),), repeat=True)
+    assert sequence_safe(seq, 1 / 3) is seq
+
+
+def test_flooring_raises_hold_s_and_leaves_fade_s_alone():
+    """The dwell is `hold_s + fade_s`; only `hold_s` is adjustable without
+    changing how the colour arrives, so that is the field that moves."""
+    seq = Sequence(stops=(Stop("#ff0000", hold_s=0.0, fade_s=0.05),), repeat=True)
+    floored = sequence_safe(seq, 1 / 3)
+    stop = floored.stops[0]
+    assert stop.fade_s == pytest.approx(0.05)
+    assert stop.hold_s == pytest.approx(1 / 6 - 0.05)
+    assert stop.hold_s + stop.fade_s == pytest.approx(1 / 6)
+
+
+def test_a_slower_floor_needs_less_flooring():
+    """The setting is the floor here too, not a law - raising it floors more,
+    lowering it floors less, exactly like flash_safe."""
+    seq = Sequence(stops=(Stop("#ff0000", hold_s=0.2), Stop("#00ff00", hold_s=0.2)), repeat=True)
+    assert sequence_safe(seq, 0.1) is seq            # 0.2 >= 0.1/2 already
+    floored = sequence_safe(seq, 2.0)                # 0.2 < 2.0/2
+    assert floored.stops[0].hold_s == pytest.approx(1.0)
 
 
 # --- the setting -----------------------------------------------------------

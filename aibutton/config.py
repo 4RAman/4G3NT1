@@ -76,7 +76,7 @@ import os
 from dataclasses import dataclass, field, fields, replace
 from datetime import time
 
-from . import ladder, midi, ramp, scenes
+from . import ladder, midi, ramp, scenes, sequencer
 from .device import LED_STYLES, SAFE_MIN_PERIOD_S, STYLE_STROBES, LEDState, TriggerType
 from .scenes import SceneSettings
 
@@ -1132,6 +1132,88 @@ def _parse_ramp(raw, where: str, default: tuple[ramp.Stop, ...]) -> tuple[ramp.S
     return tuple(stops)
 
 
+def _parse_stop(raw, where: str) -> sequencer.Stop | None:
+    """One stop in a sequence: a bare colour, or an object with `color` plus
+    optional `hold_s` / `fade_s`.
+
+    Mirrors `_parse_ramp`'s two-tier fallback: an entry of the wrong *shape*
+    (not a string or an object) is dropped - `None` here, skipped by the
+    caller - while a dict with a bad *field* keeps the stop and falls back
+    per field, same as `_parse_effect`. "One bad stop costs that stop" means
+    the shape rule; a typo in `hold_s` costs you a number, not the stop.
+    """
+    if isinstance(raw, str):
+        return sequencer.Stop(_parse_color(raw, where, "#000000"))
+    if not isinstance(raw, dict):
+        log.error("config: %s must be a colour or an object - ignored", where)
+        return None
+
+    color = _parse_color(raw.get("color"), f"{where}.color", "#000000")
+
+    hold_s = raw.get("hold_s", 0.5)
+    if not (isinstance(hold_s, (int, float)) and not isinstance(hold_s, bool) and hold_s >= 0):
+        log.error("config: %s.hold_s must be a number >= 0 - using 0.5", where)
+        hold_s = 0.5
+
+    fade_s = raw.get("fade_s", 0.0)
+    if not (isinstance(fade_s, (int, float)) and not isinstance(fade_s, bool) and fade_s >= 0):
+        log.error("config: %s.fade_s must be a number >= 0 - using 0.0", where)
+        fade_s = 0.0
+
+    return sequencer.Stop(color=color, hold_s=float(hold_s), fade_s=float(fade_s))
+
+
+def _parse_sequence(raw: dict, where: str, default: LedEffect) -> LedEffect | sequencer.Sequence:
+    """`raw["stops"]` as a `sequencer.Sequence` - the stop-list form of a
+    look, alongside the plain-effect form `_parse_effect` already handles.
+
+    Falls back to `default` (a plain `LedEffect`, never an invented
+    `Sequence`) rather than to some degenerate stop list: a look that fails
+    to parse should end up looking like *something* real, and `LedEffect()`
+    is what every other broken look already becomes. That happens both when
+    `stops` is not a usable list at all, and when every entry in it turned
+    out to be unusable - a sequence with nothing left to play is exactly as
+    broken as one that never had anything to play.
+    """
+    entries = raw.get("stops")
+    if not isinstance(entries, list) or not entries:
+        log.error(
+            "config: %s.stops must be a non-empty list - using the default look", where
+        )
+        return default
+
+    repeat = raw.get("repeat", True)
+    if not isinstance(repeat, bool):
+        log.error("config: %s.repeat must be true or false - using true", where)
+        repeat = True
+
+    stops: list[sequencer.Stop] = []
+    for index, entry in enumerate(entries):
+        stop = _parse_stop(entry, f"{where}.stops[{index}]")
+        if stop is not None:
+            stops.append(stop)
+
+    if not stops:
+        log.error("config: %s.stops has no usable stops - using the default look", where)
+        return default
+    return sequencer.Sequence(stops=tuple(stops), repeat=repeat)
+
+
+def _parse_look(raw, where: str, default: LedEffect) -> LedEffect | sequencer.Sequence:
+    """One look, either shape it may take: a plain effect (the only shape
+    before this existed), or - when `raw` has a `stops` key - a stop list.
+
+    The dispatch is the key's presence alone, not a `"type"` field: a look
+    is either "here is the one colour and style it wears" or "here is the
+    playlist it wears", and those two questions have different required
+    keys already. Not a valid object at all falls back the same way
+    `_parse_effect` always has.
+    """
+    if isinstance(raw, dict) and "stops" in raw:
+        return _parse_sequence(raw, where, default)
+    return _parse_effect(raw, where, default)
+
+
 def _parse_palette(raw) -> dict[str, LedEffect]:
     """Merge the configured palette over the defaults. Always returns an
     entry for every LED state: a state the device can enter but the palette
@@ -1151,7 +1233,7 @@ def _parse_palette(raw) -> dict[str, LedEffect]:
     return palette
 
 
-def _parse_looks(raw) -> dict[str, LedEffect]:
+def _parse_looks(raw) -> dict[str, LedEffect | sequencer.Sequence]:
     """The named-look pool: `{"focus-warm": {...}}`.
 
     A pool rather than an inline effect per mode, for three reasons that all
@@ -1161,10 +1243,15 @@ def _parse_looks(raw) -> dict[str, LedEffect]:
     invented names would be noise, and a mode with no look falls back to the
     global palette exactly as it always has.
 
+    A pool entry may be a plain effect or a stop list (`_parse_look`) - the
+    system palette stays effect-only (see `_parse_palette`), because a
+    palette entry ships to the device and renders unattended, and a sequence
+    is a schedule only the host can walk.
+
     Per-key fallback like everything else: one broken look costs you that
     look, not the pool.
     """
-    looks: dict[str, LedEffect] = {}
+    looks: dict[str, LedEffect | sequencer.Sequence] = {}
     if "looks" not in raw:
         return looks
     entries = raw["looks"]
@@ -1175,7 +1262,7 @@ def _parse_looks(raw) -> dict[str, LedEffect]:
         if not (isinstance(name, str) and name.strip()):
             log.error("config: looks has an unusable name %r - ignored", name)
             continue
-        looks[name] = _parse_effect(entry, f"looks.{name}", LedEffect())
+        looks[name] = _parse_look(entry, f"looks.{name}", LedEffect())
     return looks
 
 
@@ -1229,8 +1316,9 @@ class AppConfig:
     led_palette: dict[str, LedEffect] = field(default_factory=_default_palette)
     # Named looks a mode can wear instead of the palette entry for the state
     # it is showing (see `look_for`). Empty means every mode uses the palette,
-    # which is what they all did before this existed.
-    looks: dict[str, LedEffect] = field(default_factory=dict)
+    # which is what they all did before this existed. A look is a plain
+    # effect or a stop list (sequencer.Sequence) - see `_parse_looks`.
+    looks: dict[str, LedEffect | sequencer.Sequence] = field(default_factory=dict)
     # Where the swappable scene files live and which one is active. The scene
     # itself is merged in before parsing (see load_config_full), so nothing
     # downstream of here knows a scene was involved.
@@ -2419,7 +2507,53 @@ def flash_safe(effect: LedEffect | None, min_period_s: float) -> LedEffect | Non
     return replace(effect, period_s=min_period_s)
 
 
-def look_for(config: AppConfig, mode: Mode | None, state: LEDState) -> LedEffect | None:
+def sequence_safe(seq: sequencer.Sequence, min_period_s: float) -> sequencer.Sequence:
+    """`seq` with every stop's dwell raised to `min_period_s / 2`, if the
+    sequence is one that could sustain a strobe.
+
+    **The maths, carried over from `flash_safe`.** `flash_safe` floors
+    `period_s`, and `period_s` is a *full cycle* - `_flash`/`_alternate` in
+    firmware/led.py toggle at `period_s / 2` - so the existing floor already
+    means "no transition interval shorter than half the period". A stop list
+    has no period; it has stops, and moving from one stop to the next is one
+    transition. Flooring a stop's dwell (`hold_s + fade_s`: the time it
+    occupies before the *next* transition starts) at `min_period_s / 2`
+    enforces the identical property over the axis that actually moves here -
+    the same move `main.ladder_paint` makes for its tick, independently
+    arrived at (see CLAUDE.md for why the two are not unified into one
+    number: a ladder's tick and a stop's dwell floor at different multiples
+    of `min_period_s`, so sharing the constant would mean changing one of
+    their behaviours, not just their code).
+
+    **Exempt: a one-shot of three stops or fewer.** A handful of transitions
+    played once - three quick confirmation flashes, say - is not what WCAG
+    2.3.1 is worried about; that limit is about *sustained* flashing, and a
+    sequence that plays once and stops cannot sustain anything. Once a
+    sequence can either repeat or run past three stops, it can flash for as
+    long as something keeps it running, which is exactly the strobing-style
+    case `flash_safe` already floors.
+
+    Pure, like `flash_safe`, and enforced at the same single point: `main.
+    set_led`'s Sequence branch, mirroring where `flash_safe` runs for a plain
+    effect. Nothing else calls this - a second call site would be a second
+    floor with its own chance to drift from this one.
+    """
+    if not (seq.repeat or len(seq.stops) > 3):
+        return seq
+    floor = min_period_s / 2
+    stops = tuple(
+        stop if stop.hold_s + stop.fade_s >= floor
+        else replace(stop, hold_s=floor - stop.fade_s)
+        for stop in seq.stops
+    )
+    if stops == seq.stops:
+        return seq
+    return replace(seq, stops=stops)
+
+
+def look_for(
+    config: AppConfig, mode: Mode | None, state: LEDState
+) -> LedEffect | sequencer.Sequence | None:
     """The look `mode` wears for `state`, or None to use the palette entry.
 
     None rather than the palette entry on purpose: None is what `set_led`
@@ -2485,6 +2619,25 @@ def parse_effect_with_warnings(raw, where: str = "effect") -> tuple[LedEffect, l
     with _collecting(warnings):
         effect = _parse_effect(raw, where, LedEffect())
     return effect, warnings
+
+
+def parse_look_with_warnings(
+    raw, where: str = "look"
+) -> tuple[LedEffect | sequencer.Sequence, list[str]]:
+    """`parse_effect_with_warnings`, but a `stops` body parses as a
+    `sequencer.Sequence` too - the same dispatch `_parse_looks` uses for the
+    named-look pool (see `_parse_look`).
+
+    A separate function rather than widening `parse_effect_with_warnings`:
+    that one's return type is depended on as always-`LedEffect` (test_look_
+    presets.py, and everywhere a preview is asserted to be a plain effect),
+    and a look-pool entry or a test-bench push are the only two places that
+    legitimately need the wider answer.
+    """
+    warnings: list[str] = []
+    with _collecting(warnings):
+        look = _parse_look(raw, where, LedEffect())
+    return look, warnings
 
 
 @dataclass(frozen=True)
@@ -2621,6 +2774,22 @@ def _effect_to_dict(effect: LedEffect) -> dict:
     }
 
 
+def _look_to_dict(look: LedEffect | sequencer.Sequence) -> dict:
+    """One look-pool entry, either shape. A sequence writes back the same
+    `stops`/`repeat` keys `_parse_sequence` reads, always in the object form
+    (never the bare-colour shorthand `_parse_stop` also accepts) - the
+    round-trip has to be exact the way `ramp`'s does, not merely equivalent."""
+    if isinstance(look, sequencer.Sequence):
+        return {
+            "stops": [
+                {"color": stop.color, "hold_s": stop.hold_s, "fade_s": stop.fade_s}
+                for stop in look.stops
+            ],
+            "repeat": look.repeat,
+        }
+    return _effect_to_dict(look)
+
+
 def _mode_to_dict(mode: Mode) -> dict:
     entry: dict = {
         "name": mode.name,
@@ -2754,7 +2923,7 @@ def as_dict(cfg: AppConfig) -> dict:
         "led_palette": {
             name: _effect_to_dict(effect) for name, effect in cfg.led_palette.items()
         },
-        "looks": {name: _effect_to_dict(effect) for name, effect in cfg.looks.items()},
+        "looks": {name: _look_to_dict(look) for name, look in cfg.looks.items()},
     }
 
 

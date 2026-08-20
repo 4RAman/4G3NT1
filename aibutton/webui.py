@@ -56,15 +56,16 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, scenes
+from . import __version__, scenes, sequencer
 from .audio import ToneLibrary
 from .config import (
     TRIGGER_TYPES,
     AppConfig,
     ConfigManager,
+    LedEffect,
     as_dict,
     flash_safe,
-    parse_effect_with_warnings,
+    parse_look_with_warnings,
     parse_with_warnings,
 )
 from .device import ButtonDevice, LEDState, MockDevice, Sound, TriggerType
@@ -623,6 +624,18 @@ def create_app(ctx: WebContext) -> FastAPI:
 
         Same exposure as the rest of this API: it can already rewrite the whole
         config, so being able to light the LED adds nothing (see the header).
+
+        A `stops` body (a sequence look) parses through the same rules as
+        everywhere else a look is read (`parse_look_with_warnings`, shared
+        with the named-look pool), so a broken sequence is rejected here the
+        same way it would be on save. It does not *animate*, though: doing
+        that safely needs the same cancellable background task main.set_led
+        owns, walking the plan behind `sequence_safe` - CLAUDE.md's "ONE
+        gate" for that floor is main.py's Sequence branch, and this
+        stateless preview endpoint has nowhere to keep a task between
+        requests without becoming a second one. Until that exists, a
+        sequence previews as its first stop's colour: enough to confirm it
+        parsed, not what it will look like playing.
         """
         raw_state = body.get("state", LEDState.IDLE.value)
         try:
@@ -633,7 +646,13 @@ def create_app(ctx: WebContext) -> FastAPI:
         if body.get("clear"):
             effect, warnings = None, []
         else:
-            effect, warnings = parse_effect_with_warnings(body, "look")
+            effect, warnings = parse_look_with_warnings(body, "look")
+            if isinstance(effect, sequencer.Sequence):
+                warnings = warnings + [
+                    "this look is a sequence; the live preview shows only "
+                    "its first stop's colour, not the animation"
+                ]
+                effect = LedEffect(style="solid", color=effect.stops[0].color)
 
         # This pushes a look at the real LED, so it is subject to the same flash
         # floor as anything the run loop pushes - a preview that could strobe

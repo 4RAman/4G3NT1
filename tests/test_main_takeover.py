@@ -15,7 +15,7 @@ import json
 import pytest
 
 import aibutton.main as main
-from aibutton.device import MockDevice, TriggerType
+from aibutton.device import LEDState, MockDevice, TriggerType
 from aibutton.store import EventStore
 
 CONFIG = {
@@ -169,3 +169,156 @@ async def test_the_device_is_told_how_far_to_count_taps(
         run_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await run_task
+
+
+# --- stop-list ("sequence") looks: the async half of set_led ---------------
+#
+# sequencer.plan_at is tested on its own (test_sequencer.py) as a pure table;
+# what only an event loop can prove is that main.set_led actually walks it,
+# cancels it on the next state change, and falls back to the palette when a
+# one-shot finishes. Stops are 0.05s so a few real asyncio.sleep()s cover
+# several full cycles without the test taking long.
+
+SEQUENCE_CONFIG = {
+    "sounds_enabled": False,
+    "web_enabled": False,
+    "looks": {
+        "pulse": {
+            "stops": [
+                {"color": "#ff0000", "hold_s": 0.05},
+                {"color": "#00ff00", "hold_s": 0.05},
+            ],
+            "repeat": True,
+        },
+        "once": {
+            "stops": [
+                {"color": "#ff0000", "hold_s": 0.05},
+                {"color": "#00ff00", "hold_s": 0.05},
+            ],
+            "repeat": False,
+        },
+    },
+    "modes": [
+        {
+            "name": "Default", "template": "actions", "activation": {"type": "always"},
+            "short_press": {"action": "enter_mode", "target": "Pulse"},
+            "double_tap": {"action": "enter_mode", "target": "Once"},
+        },
+        {
+            "name": "Pulse", "template": "pomodoro", "activation": {"type": "manual"},
+            "looks": {"WORKING": "pulse"},
+        },
+        {
+            "name": "Once", "template": "pomodoro", "activation": {"type": "manual"},
+            "looks": {"WORKING": "once"},
+        },
+    ],
+}
+
+COUNTDOWN_SEQUENCE_CONFIG = {
+    "sounds_enabled": False,
+    "web_enabled": False,
+    "looks": {
+        "pulse": {
+            "stops": [{"color": "#ff0000", "hold_s": 0.05}, {"color": "#00ff00", "hold_s": 0.05}],
+        },
+    },
+    "modes": [
+        {
+            "name": "Default", "template": "actions", "activation": {"type": "always"},
+            "short_press": {"action": "enter_mode", "target": "Tea"},
+        },
+        {
+            "name": "Tea", "template": "countdown", "activation": {"type": "manual"},
+            "minutes": 10, "ring_on_finish": False,
+            "looks": {"TIMING": "pulse"},
+        },
+    ],
+}
+
+
+async def _run_sequence(tmp_path, raw, script):
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(
+        json.dumps(dict(raw, database_path=str(tmp_path / "e.db"))), encoding="utf-8"
+    )
+    device = MockDevice()
+    args = main._parse_args(["--no-web", "--config", str(cfg_path)])
+    task = asyncio.create_task(main.run(args, device=device))
+    await asyncio.sleep(0.1)
+    try:
+        await script(device, task)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    return device
+
+
+async def _press(device, trigger):
+    device.press(trigger)
+    await _drain(device.events)
+    await asyncio.sleep(0.1)  # let the consumer (and any mode transition) settle
+
+
+async def test_a_repeating_sequence_look_cycles_colours(tmp_path):
+    seen = []
+
+    async def script(device, task):
+        await _press(device, TriggerType.SHORT_PRESS)  # -> Pulse (WORKING)
+        for _ in range(6):
+            if device.led_effect is not None:
+                seen.append(device.led_effect.color)
+            await asyncio.sleep(0.05)
+
+    await _run_sequence(tmp_path, SEQUENCE_CONFIG, script)
+    assert "#ff0000" in seen
+    assert "#00ff00" in seen
+
+
+async def test_a_one_shot_sequence_finishes_and_falls_back_to_the_palette(tmp_path):
+    """`device.set_led(state, None)`, not a re-resolved look - None is what
+    set_led already means by "no override", and re-resolving would just find
+    the same look and restart the one-shot forever."""
+
+    async def script(device, task):
+        await _press(device, TriggerType.DOUBLE_TAP)  # -> Once (WORKING)
+        await asyncio.sleep(0.3)  # well past the 0.1s one-shot
+        assert device.led_effect is None
+        assert device.led_state is LEDState.WORKING  # state unchanged
+
+    await _run_sequence(tmp_path, SEQUENCE_CONFIG, script)
+
+
+async def test_leaving_the_mode_cancels_the_running_sequence(tmp_path):
+    async def script(device, task):
+        await _press(device, TriggerType.SHORT_PRESS)  # -> Pulse, sequence running
+        await asyncio.sleep(0.12)
+        await _press(device, TriggerType.LONG_PRESS)   # exit -> IDLE
+        assert device.led_state is LEDState.IDLE
+        assert device.led_effect is None
+        # If the old task were still running, it would overwrite this with a
+        # stop's colour within one more hold (0.05s) - give it several and
+        # confirm IDLE sticks rather than flickering back.
+        await asyncio.sleep(0.2)
+        assert device.led_state is LEDState.IDLE
+        assert device.led_effect is None
+
+    await _run_sequence(tmp_path, SEQUENCE_CONFIG, script)
+
+
+async def test_a_sequence_look_on_a_ramp_driven_state_does_not_crash(tmp_path):
+    """TIMING is walked by the countdown's own ramp, which needs a style and
+    a period to modify - config.py's mode-looks validation only checks that
+    a named look *exists*, not that it is the right *kind*, so a stop-list
+    look assigned to a ramp-driven state must degrade to the template's own
+    style (base_look, and run_countdown's own guard) rather than raising out
+    of the run loop entirely."""
+
+    async def script(device, task):
+        await _press(device, TriggerType.SHORT_PRESS)  # -> Tea (TIMING)
+        await asyncio.sleep(0.1)
+        assert not task.done()
+        assert device.led_state is LEDState.TIMING
+
+    await _run_sequence(tmp_path, COUNTDOWN_SEQUENCE_CONFIG, script)
