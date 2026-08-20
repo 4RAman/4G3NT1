@@ -96,8 +96,9 @@ def test_it_round_trips_through_the_editor():
 
 def test_binding_the_long_press_is_refused_with_a_warning():
     """Long press means "up one level" everywhere. A control surface is where
-    breaking that would be most tempting - four gestures feels tight and there
-    is a fifth right there - so the parser takes the choice away."""
+    breaking that would be most tempting - five gestures already fills the
+    page and there is a sixth right there - so the parser takes the choice
+    away."""
     config, warnings = parse_with_warnings(_mode(
         long_press={"action": "log", "event": "marker"},
     ))
@@ -140,7 +141,7 @@ def test_the_editor_offers_exactly_the_gestures_the_parser_accepts():
     offered = re.search(r"gestures: \[([^\]]*)\]", _control_descriptor())
     assert offered
     keys = set(re.findall(r"'([^']+)'", offered.group(1)))
-    assert keys == {"short_press", "double_tap", "triple_tap", "tap_5"}
+    assert keys == {"short_press", "double_tap", "triple_tap", "tap_4", "tap_5"}
     assert "long_press" not in keys
 
 
@@ -312,7 +313,7 @@ async def test_an_unbound_gesture_keeps_the_surface_open(tmp_path):
 
 
 # --- branching ------------------------------------------------------------
-# Four gestures per page is tight; four gestures per page and a branch on any
+# Five gestures per page is tight; five gestures per page and a branch on any
 # of them is a tree. This is what makes a menu of menus cost no new template.
 
 

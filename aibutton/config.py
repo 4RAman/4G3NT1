@@ -251,19 +251,20 @@ class ControlBehavior:
 
     **Long press is not bindable, and the parser enforces it.** CLAUDE.md's
     rule is that a long press means "up one level" everywhere, and a control
-    surface is the case where breaking it would be most tempting - four
-    gestures feels tight and there is a fifth right there. Taking it would buy
-    one more command and cost the one gesture people are supposed to trust
-    without thinking, in the app most likely to be used without looking. A
-    binding on `long_press` is dropped with a warning rather than honoured.
+    surface is the case where breaking it would be most tempting - five
+    gestures already fills the page and there is a sixth right there. Taking
+    it would buy one more command and cost the one gesture people are supposed
+    to trust without thinking, in the app most likely to be used without
+    looking. A binding on `long_press` is dropped with a warning rather than
+    honoured.
 
-    So the budget is four: short press, double tap, triple tap, five taps. If
-    that is not enough, **bind one of them to `enter_mode` and branch** - a
-    control surface can open another one, so four gestures per page buys as
-    many pages as you care to build. That is why `return_after` is here and
-    defaults to on: without it, long press out of a sub-page would drop you all
-    the way to the ambient layer, and the gesture would mean "up one level" or
-    "up two" depending on how deep you had gone.
+    So the budget is five: short press, double tap, triple tap, four taps,
+    five taps. If that is not enough, **bind one of them to `enter_mode` and
+    branch** - a control surface can open another one, so five gestures per
+    page buys as many pages as you care to build. That is why `return_after`
+    is here and defaults to on: without it, long press out of a sub-page would
+    drop you all the way to the ambient layer, and the gesture would mean "up
+    one level" or "up two" depending on how deep you had gone.
     """
 
     actions: dict[str, Action]  # trigger value -> action, never long_press
@@ -924,7 +925,7 @@ def _default_modes() -> tuple[Mode, ...]:
     to primitives needing no setup, so a button with no config (or a broken
     one) still does something legible instead of erroring on every press.
 
-    It binds three of the five gestures rather than all of them: a longer tap
+    It binds three of the six gestures rather than all of them: a longer tap
     costs every shorter one its instant response (see `max_taps_for`), so the
     default config must not spend one nobody asked for."""
     return (

@@ -131,8 +131,16 @@ async def test_run_enter_mode_stopwatch_then_counter(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     "extra_binding,expected",
-    [(None, 2), ({"triple_tap": {"action": "log", "event": "note"}}, 3)],
-    ids=["nothing longer than a double is bound", "a triple tap is bound"],
+    [
+        (None, 2),
+        ({"triple_tap": {"action": "log", "event": "note"}}, 3),
+        ({"tap_4": {"action": "log", "event": "note"}}, 4),
+    ],
+    ids=[
+        "nothing longer than a double is bound",
+        "a triple tap is bound",
+        "four taps is bound",
+    ],
 )
 async def test_the_device_is_told_how_far_to_count_taps(
     tmp_path, extra_binding, expected

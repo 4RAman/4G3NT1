@@ -18,6 +18,12 @@ export const GESTURES = [
   { key: 'long_press', label: 'Long press' },
   { key: 'double_tap', label: 'Double tap' },
   { key: 'triple_tap', label: 'Triple tap' },
+  // Binding this makes the button count to four, which costs the double tap
+  // and triple tap their instant response (see max_taps_for) - the same cost
+  // tap_5's hint explains below, paid one gesture earlier.
+  { key: 'tap_4', label: 'Four taps',
+    hint: 'Binding it slows every shorter tap slightly, because the button '
+      + "has to wait to be sure a fourth tap isn't coming." },
   // Binding this makes the button count to five, which costs the double tap
   // its instant response (see max_taps_for). Worth saying in the UI, because
   // it is the one gesture whose cost is paid by the *other* gestures.
@@ -1112,10 +1118,10 @@ TEMPLATES.push({
   nature: 'takeover',
   allowedActivations: ['manual'],
   body: 'actions',
-  // Four, not five. Long press is how you leave every app, so a control
+  // Five, not six. Long press is how you leave every app, so a control
   // surface cannot have it - the parser drops a binding on it too, which is
   // what makes this a real constraint rather than a UI suggestion.
-  gestures: ['short_press', 'double_tap', 'triple_tap', 'tap_5'],
+  gestures: ['short_press', 'double_tap', 'triple_tap', 'tap_4', 'tap_5'],
   // No daily stand-down: `unless_logged_today` answers "has this already
   // happened today", which is a question about an ambient mode that fires
   // whether or not you were thinking about it. An app you opened on purpose

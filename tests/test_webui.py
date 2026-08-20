@@ -208,6 +208,13 @@ def test_lights_editor_offers_every_led_state():
     assert _descriptor_values("LED_STATES", "key") == {s.value for s in LEDState}
 
 
+def test_mode_editor_offers_every_gesture():
+    """The other mirrored table TODO 28 is about: a TriggerType with no entry
+    here is a gesture nothing in the editor could ever bind, the same failure
+    mode as a missing LED state above."""
+    assert _descriptor_values("GESTURES", "key") == {t.value for t in TriggerType}
+
+
 def test_lights_editor_offers_every_led_style():
     assert _descriptor_values("LED_STYLES", "type") == set(LED_STYLES)
 

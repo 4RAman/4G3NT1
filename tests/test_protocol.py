@@ -129,6 +129,7 @@ def test_the_classic_three_still_travel_as_one_byte():
 
 def test_a_longer_tap_travels_as_a_kind_plus_a_count():
     assert fw.gesture_payload("triple_tap") == bytes([fw.GESTURE_TAP, 3])
+    assert fw.gesture_payload("tap_4") == bytes([fw.GESTURE_TAP, 4])
     assert fw.gesture_payload("tap_5") == bytes([fw.GESTURE_TAP, 5])
 
 
@@ -200,6 +201,7 @@ def test_max_taps_is_derived_from_what_is_actually_bound():
     assert device.max_taps_for([T.SHORT_PRESS, T.LONG_PRESS]) == 2
     assert device.max_taps_for([T.DOUBLE_TAP]) == 2
     assert device.max_taps_for([T.SHORT_PRESS, T.TRIPLE_TAP]) == 3
+    assert device.max_taps_for([T.TAP_4]) == 4
 
 
 def test_led_codes_match():

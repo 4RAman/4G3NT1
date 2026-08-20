@@ -128,7 +128,7 @@ view.
 | Body of work | Items it spans | Gate |
 |---|---|---|
 | **The colour engine** — named looks, ramps, the safety floor | **3** ✔, **4** ✔, 0b·3 ✔ | Done. What is left of it is the stop list, in **19b** |
-| **The gesture engine** — N taps, hold levels | 0b·2 ✔, 5-tap gesture ✔, **28** | Ungated for taps (**28** adds the missing four). Hold levels still need firmware and are the cheap half of **29** |
+| **The gesture engine** — N taps, hold levels | 0b·2 ✔, 5-tap gesture ✔, **28** ✔ | Taps are done. Hold levels still need firmware and are the cheap half of **29** |
 | **Depth without the wire** — metronome config ✔, event values ✔, filtering/export ✔ | **1** ✔, **9**, **12**, **14** | None — ship freely |
 | **Reach and hosting** — launcher ✔, ten apps ✔, remote UI | **0a** ✔, **7** ✔, **8** | Only the hardware walk left on 7 |
 | **The light as a language** — ladder ✔, where colour is edited ✔, stop list | **19** (a ✔, c, d ✔, e ✔) | Only **19b/c** left |
@@ -136,7 +136,7 @@ view.
 | **Play** — timing/rhythm and guessing games | **16** ✔ | Done for forgiving games; tight rhythm still needs Stage 3's on-device runtime |
 | **Reaching other software** — OSC ✔, MIDI out ✔, clock in ✔, transport state | ✔ shipped with **7**, **22** ✔, **24** ✔, **25** | Sending and listening both work. **25** wants MCU's *return* feedback, which needs the DAW's Send To pointed back |
 | **One machine, many timers** — Pomodoro/HIIT/Tabata as presets | **20** ✔ | Done |
-| **Getting around** — launcher ✔, control surfaces ✔, colour-coded pages | **0a** ✔, **26**, **27**, **28** | **26** decides the launcher's fate; **27**/**28** are small and independent |
+| **Getting around** — launcher ✔, control surfaces ✔, colour-coded pages | **0a** ✔, **26**, **27** ✔, **28** ✔ | **26** decides the launcher's fate |
 | **Power** — sleep, wake, deliberate off | **29** | Blocked on **0c** (the button is de-soldered) and on measuring what it draws |
 
 Two things sit outside the table. **0c** is hardware (re-solder + the 5 V
@@ -649,29 +649,6 @@ missing. Look before rebuilding - `app_look` in main.py.
 and a branch visibly changes it; the launcher's fate is decided in writing; and
 whichever is the default front door is what a fresh config ships with.
 
-### 28. Four taps — the gesture that is missing for no reason
-
-**Asked for 2026-08-19.** `GESTURES` has short press, long press, double tap,
-triple tap and **five** taps. There is no four. That is an accident of how the
-5-tap gesture arrived (chosen to be deliberately awkward, for an on/off), not a
-decision, and it makes the menu one option short of the five-option page the
-request wants.
-
-**This should be cheap, and CLAUDE.md says why**: since protocol v1
-parameterised gestures, a new tap count is a data change in `TriggerType` and
-`GESTURES` with **no reflash under it**. Verify that before assuming it -
-`max_taps_for` and `bound_triggers` are the two places that turn bound gestures
-into what the device is told to count.
-
-**The honest cost, and it belongs in the UI hint**: binding four taps makes
-every *shorter* tap wait longer, because the device has to be sure no fourth
-tap is coming. That is the same cost `tap_5`'s hint already explains, and it is
-paid by the gestures you did not change.
-
-**Definition of done.** `tap_4` works end to end on real hardware, appears in
-the editor with a hint about what it costs the shorter gestures, and the
-mirrored gesture tables have a drift test covering it.
-
 ### 29. Power: sleep, wake, and a hold that turns it off
 
 **Asked for 2026-08-19**, and the largest thing on this list by some way. Three
@@ -935,6 +912,15 @@ descriptor change per template, not new code.
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**28. Four taps**~~ — shipped 2026-08-19, and it cost exactly what
+  protocol v1 promised: **nothing on the wire**. Firmware already names
+  `tap_4`..`tap_9` generically, so this was a `TriggerType` member, a
+  `GESTURES` entry whose hint states the honest cost (shorter taps wait
+  longer), and a new drift test pinning schema.js's gesture list to
+  `TriggerType`. The control surface's budget grew to five gestures — the
+  five-option page the request wanted. **Not yet walked on hardware**, same
+  standing as Signal and the control surface.
 
 - ~~**27. Every slider also accepts a typed number**~~ — shipped 2026-08-19.
   `range` and `level` grew a number box bound to the same key, one shared

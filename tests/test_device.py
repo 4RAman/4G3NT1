@@ -72,10 +72,29 @@ def test_five_taps_reaches_the_host_with_no_reflash_under_it():
     assert decode_gesture(payload) is TriggerType.TAP_5
 
 
+def test_four_taps_reaches_the_host_with_no_reflash_under_it():
+    """TODO 28: four was a gap left by how tap_5 arrived, not a decision - the
+    firmware has named it since v1 shipped, same as five. Same proof as
+    `test_five_taps_reaches_the_host_with_no_reflash_under_it`: the payload
+    comes from the device's own encoder, so filling the gap cost no reflash."""
+    payload = protocol.gesture_payload("tap_4")
+    assert payload == bytes([GESTURE_TAP, 4])
+    assert decode_gesture(payload) is TriggerType.TAP_4
+
+
 def test_a_count_the_host_cannot_name_is_dropped_rather_than_guessed():
-    """Four taps is deliberately unnamed: a stray extra tap on a triple should
-    do nothing, not something else."""
-    assert decode_gesture(protocol.gesture_payload("tap_4")) is None
+    """Six taps is deliberately unnamed: a stray extra tap on a five-tap
+    burst should do nothing, not something else."""
+    assert decode_gesture(protocol.gesture_payload("tap_6")) is None
+
+
+def test_binding_four_taps_is_what_makes_the_button_count_that_far():
+    """Nobody sets max_taps by hand - it is derived from what is bound, so the
+    cost of counting is paid only by a button that has a long tap on it."""
+    assert max_taps_for([TriggerType.TRIPLE_TAP]) == 3
+    assert max_taps_for([TriggerType.TAP_4]) == 4
+    assert gesture_config_payload(max_taps_for([TriggerType.TAP_4])) == bytes([4])
+    assert protocol.decode_gesture_config(bytes([4])) == 4
 
 
 def test_binding_five_taps_is_what_makes_the_button_count_that_far():

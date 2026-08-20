@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 class TriggerType(Enum):
     """A gesture, as detected on-device and notified to the host.
 
-    Tap counts past three are expressible on the wire and have no member
+    Tap counts past five are expressible on the wire and have no member
     here yet - adding one is a host-side change with no reflash behind it,
     which is the property parameterised gestures exist to buy (ROADMAP D5).
     """
@@ -44,13 +44,16 @@ class TriggerType(Enum):
     LONG_PRESS = "long_press"
     DOUBLE_TAP = "double_tap"
     TRIPLE_TAP = "triple_tap"
-    # Five, and deliberately not four. The names come from
-    # firmware/protocol.py's TAP_NAMES, which already covers 4..9; what a
-    # count means to the *host* is this table, and a count with no member here
-    # is dropped rather than fired. That is the useful behaviour for four - a
-    # stray extra tap on a triple should do nothing, not something else - and
-    # five is far enough out to be unmistakably deliberate, which is what a
-    # global on/off wants.
+    # Four was the gap TAP_5 left behind, not a decision: five arrived first,
+    # chosen to be deliberately awkward for a global on/off, and nothing ever
+    # filled in behind it (TODO 28). The names come from firmware/protocol.py's
+    # TAP_NAMES, which already covers 4..9; what a count means to the *host*
+    # is this table, and a count with no member here is dropped rather than
+    # fired - a stray extra tap on a triple should do nothing, not something
+    # else.
+    TAP_4 = "tap_4"
+    # Far enough out to be unmistakably deliberate, which is what a global
+    # on/off wants.
     TAP_5 = "tap_5"
 
 
@@ -208,6 +211,7 @@ TAP_TRIGGERS: dict[int, TriggerType] = {
     1: TriggerType.SHORT_PRESS,
     2: TriggerType.DOUBLE_TAP,
     3: TriggerType.TRIPLE_TAP,
+    4: TriggerType.TAP_4,
     5: TriggerType.TAP_5,
 }
 TAP_COUNTS = {trigger: count for count, trigger in TAP_TRIGGERS.items()}
