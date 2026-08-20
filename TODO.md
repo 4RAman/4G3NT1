@@ -128,14 +128,16 @@ view.
 | Body of work | Items it spans | Gate |
 |---|---|---|
 | **The colour engine** — named looks, ramps, the safety floor | **3** ✔, **4** ✔, 0b·3 ✔ | Done. What is left of it is the stop list, in **19b** |
-| **The gesture engine** — N taps, hold levels | 0b·2 ✔, 5-tap gesture ✔ | Ungated for taps; hold levels still need firmware |
+| **The gesture engine** — N taps, hold levels | 0b·2 ✔, 5-tap gesture ✔, **28** | Ungated for taps (**28** adds the missing four). Hold levels still need firmware and are the cheap half of **29** |
 | **Depth without the wire** — metronome config ✔, event values ✔, filtering/export ✔ | **1** ✔, **9**, **12**, **14** | None — ship freely |
 | **Reach and hosting** — launcher ✔, ten apps ✔, remote UI | **0a** ✔, **7** ✔, **8** | Only the hardware walk left on 7 |
 | **The light as a language** — ladder ✔, where colour is edited ✔, stop list | **19** (a ✔, c, d ✔, e ✔) | Only **19b/c** left |
 | **Saying a number** — ambient counting, count readout, progress | **15**, **17** | Wants the stop list (**19b**) first — a readout *is* a stop list |
 | **Play** — timing/rhythm and guessing games | **16** ✔ | Done for forgiving games; tight rhythm still needs Stage 3's on-device runtime |
-| **Reaching other software** — OSC ✔, MIDI out ✔, clock in ✔ | ✔ shipped with **7**, **22** ✔, **24** ✔ | Done both ways. Wants a bench session against a real DAW rather than a loopback |
+| **Reaching other software** — OSC ✔, MIDI out ✔, clock in ✔, transport state | ✔ shipped with **7**, **22** ✔, **24** ✔, **25** | Sending and listening both work. **25** wants MCU's *return* feedback, which needs the DAW's Send To pointed back |
 | **One machine, many timers** — Pomodoro/HIIT/Tabata as presets | **20** ✔ | Done |
+| **Getting around** — launcher ✔, control surfaces ✔, colour-coded pages | **0a** ✔, **26**, **27**, **28** | **26** decides the launcher's fate; **27**/**28** are small and independent |
+| **Power** — sleep, wake, deliberate off | **29** | Blocked on **0c** (the button is de-soldered) and on measuring what it draws |
 
 Two things sit outside the table. **0c** is hardware (re-solder + the 5 V
 rework) and gates nothing but its own verification. **18** (Notion) is process
@@ -506,6 +508,192 @@ layers, saying which are decided; the hook and summary shapes are written as
 data (a `Mode` field and a per-app summary contract), not as prose about
 behaviour; and this item is replaced by numbered build items.
 
+### 25. A transport app that knows what the DAW is doing
+
+**Asked for 2026-08-19.** One gesture should mean different things depending on
+what the DAW is *currently* doing:
+
+| Gesture | Wanted |
+|---|---|
+| short press | record → (later) stop **and return to 00:00** → record again |
+| double tap | play / pause toggle |
+| triple tap | metronome on/off |
+| five taps | cycle/loop on/off |
+
+**Three of the four are already possible and need no state.** Click and Cycle
+are toggles *in the DAW* — MCU note 89 and 86 flip them, so the button sends
+one message and the DAW remembers. Play/pause is the same: MCU Play toggles in
+most DAWs. Those three are a `control` surface today (**shipped**), and if that
+is all someone wants, this item is not needed. **Only the record cycle needs
+state**, because "start recording" and "stop and rewind" are different messages
+that share a gesture.
+
+**The important finding: the state does not have to be guessed.** A Mackie
+Control is a *two-way* protocol - the DAW sends note-on back to the surface to
+light its buttons, so a real MCU knows the transport state because the DAW told
+it. Point the device's **Send To** at a port the button listens on and the same
+feedback arrives here. (README currently says to leave Send To empty, which was
+right when nothing listened and is now the thing to revisit.) There is also a
+second, cruder source already built: MIDI clock's `0xFA`/`0xFC` are start and
+stop, and `ClockListener.rolling` already tracks them.
+
+**So the design decision is derived state versus modelled state, and derived
+wins.** A local toggle ("I sent Record, so we must be recording") is correct
+until somebody clicks in the DAW, and then it is silently inverted for the rest
+of the session - every press doing the opposite of what the light says. Model
+locally only as the fallback when no feedback port is configured, and *say so*
+on the status line rather than pretending to know.
+
+**A second finding, and it is a real gap: MCU has no "return to zero".** The
+transport section is Rewind/FF/Stop/Play/Record and nothing else. In Studio One
+a Stop when already stopped returns to the start, so "stop and return to 00:00"
+is **Stop, Stop** - two messages from one gesture, which `MidiAction` cannot
+express. That is the other thing to decide: a *sequence* action (a list of
+messages with optional gaps, useful well beyond this) or a transport app that
+owns the sequence internally. The sequence action is more general and is
+probably right; check first whether Stop-twice is actually what S1 does,
+because the whole need rests on it.
+
+**Where it should live.** Probably not a new template - a `control` surface
+plus per-gesture state is most of it. Worth asking whether this is really
+"apps can hold state and choose between actions", which is TODO **23**'s
+composition question wearing a DAW costume. Read 23 before starting.
+
+**Definition of done.** A short press records, and a later short press stops
+and returns to zero, *driven by what the DAW reports* rather than by what the
+button last sent; a session where someone clicks Stop in the DAW by hand does
+not invert the button; and the no-feedback case is honest about being a guess.
+
+### 26. Menus: colour-coded Actions pages, and what happens to the launcher
+
+**Asked for 2026-08-19**, and half of it shipped the same day. The request:
+the main menu should be **"Actions" — fully customisable, with more Actions
+pages addable** — and menus should be **clearly colour coded**.
+
+**The customisable-pages half exists**: the `control` template is a takeover
+whose four gestures each fire an action, and any of them can `enter_mode`
+another one, so a tree of Actions pages costs no new code. What is missing is
+the colour, and a decision about the launcher.
+
+**Colour is the real work, and it is not the same problem the launcher solved.**
+A launcher shows *one app at a time* and wears that app's colour
+(`app_look`), so it is already colour-coded in the only way a sequential menu
+can be. A control surface shows **four gestures at once**, so there is no "the
+current entry" to colour - what can carry an identity is the **page**. That
+suggests: each Actions page gets its own look, the light wears it the whole
+time the page is open, and branching to a sub-page visibly changes colour. That
+is a `ledStates` entry or an inline colour on `ControlBehavior`, and it is
+genuinely new - the template shipped with `ledStates: []` on the argument that
+a remote should speak the button's existing vocabulary. That argument was about
+a *remote*; a **menu** is the counter-case, because knowing where you are is
+the entire job.
+
+**The launcher question, which should be answered before building.** The
+launcher's advantage is that it needs no configuration - `targets: []` lists
+every takeover automatically, so a newly added app appears with nobody editing
+a menu. An Actions page is explicit: more control, more upkeep, and it will go
+stale when an app is added. **These are complementary and both should probably
+survive**, with the Actions page as the *default* front door and the launcher
+still reachable as "everything installed". Deleting the launcher to make room
+for this would trade a self-maintaining menu for one that needs maintaining.
+
+**Also check the existing colour-coding actually reads.** The launcher already
+colours each entry by app; if that is not landing, the cause may be that
+several apps resolve to similar palette colours rather than that the feature is
+missing. Look before rebuilding - `app_look` in main.py.
+
+**Definition of done.** An Actions page carries a colour, shows it while open,
+and a branch visibly changes it; the launcher's fate is decided in writing; and
+whichever is the default front door is what a fresh config ships with.
+
+### 27. Every slider should also accept a typed number
+
+**Asked for 2026-08-19.** Sliders are good for picking a value you can picture
+and bad for entering one you already know. Both, everywhere.
+
+`range` and `level` in [widgets.js](aibutton/web/static/widgets.js) render a
+slider; `number` renders a box. The fix is that the slider widgets grow a
+number input beside them, bound to the same key, each updating the other -
+**not** a second field in the schema, because that would put one value in two
+places and let a template descriptor forget one.
+
+Watch the bounds: a typed number must be clamped or refused the same way the
+slider's ends are, or typing 0.02 into the flash-period box walks straight
+through the photosensitivity floor that the slider exists to stop at. The floor
+is `config.flash_safe` and stays the enforcement; this is about the widget not
+*offering* a way around it silently.
+
+**Definition of done.** Every sliding field can be typed into, the two stay in
+sync, and out-of-range typing is handled the way the slider's limits already
+are.
+
+### 28. Four taps — the gesture that is missing for no reason
+
+**Asked for 2026-08-19.** `GESTURES` has short press, long press, double tap,
+triple tap and **five** taps. There is no four. That is an accident of how the
+5-tap gesture arrived (chosen to be deliberately awkward, for an on/off), not a
+decision, and it makes the menu one option short of the five-option page the
+request wants.
+
+**This should be cheap, and CLAUDE.md says why**: since protocol v1
+parameterised gestures, a new tap count is a data change in `TriggerType` and
+`GESTURES` with **no reflash under it**. Verify that before assuming it -
+`max_taps_for` and `bound_triggers` are the two places that turn bound gestures
+into what the device is told to count.
+
+**The honest cost, and it belongs in the UI hint**: binding four taps makes
+every *shorter* tap wait longer, because the device has to be sure no fourth
+tap is coming. That is the same cost `tap_5`'s hint already explains, and it is
+paid by the gestures you did not change.
+
+**Definition of done.** `tap_4` works end to end on real hardware, appears in
+the editor with a hint about what it costs the shorter gestures, and the
+mirrored gesture tables have a drift test covering it.
+
+### 29. Power: sleep, wake, and a hold that turns it off
+
+**Asked for 2026-08-19**, and the largest thing on this list by some way. Three
+related wants: **hold roughly 3× the normal long press to power off**, wake
+again with the button, and an **auto-sleep** after idle.
+
+**Measure before building.** There is no battery on this build and therefore no
+power budget to optimise against - "saves power" cannot be checked, and an
+optimisation nobody can measure is a guess that costs complexity. First number
+wanted: what the board actually draws idle, advertising, and connected. This
+is the item the parking lot flags as *"the one thing that might justify a
+C++/NimBLE rework"*, so knowing whether MicroPython's floor is the problem
+decides how big this is.
+
+**What already exists to build on.** `GESTURE_HOLD` is **claimed and
+unimplemented** in protocol v1, which is exactly the reserved wire code a
+hold-level gesture wants - so "hold 3× as long" is the gesture the protocol was
+already left room for. Doing it as a *level* rather than a special case also
+gives every other app graded holds for free.
+
+**What makes it hard, and it is not the sleeping.** ESP32-S3 deep sleep with
+GPIO wake is well-trodden. The problems are around it:
+
+- **Deep sleep drops the BLE connection.** The host already reconnects, but a
+  button that vanishes and reappears needs the *host* to not treat that as an
+  error - and needs `DEVICE_INFO` re-read on reconnect, which `BLEDevice`
+  already does.
+- **Waking is a press, and that press must not also mean something.** The wake
+  press should be swallowed, or the first thing you do after waking is fire
+  whatever short press is bound.
+- **Auto-sleep must not fire mid-app.** A Pomodoro with 20 minutes left is idle
+  from the button's point of view and must not sleep. The device does not know
+  what app is running; the host does. So either the host says "stay awake" or
+  the device's idle timer is reset by more than presses.
+- **Off must be distinguishable from broken.** A button that is asleep and a
+  button that has crashed look identical to a user. Whatever "off" is, it needs
+  a visible confirmation on the way down.
+
+**Split it.** This is at least three items - the hold-level gesture (cheap,
+useful alone), auto-sleep on the device, and the deliberate power-off. The
+first is worth doing on its own even if the rest is parked. **Do not start any
+of it before TODO 0c**: the button is still de-soldered and `BUTTON_PIN` is 0,
+so "wake on a button press" cannot be tested at all right now.
+
 ### 21. WiFi as an alternative transport ⏸ parked, with a trigger
 
 **Decided 2026-08-18: not now. BLE is adequate, and the reason to wait is not
@@ -690,7 +878,9 @@ descriptor change per template, not new code.
 
 ## Parking lot (deliberately later)
 
-- Battery + deep sleep — the one thing that might justify a C++/NimBLE rework
+- Battery + deep sleep — the one thing that might justify a C++/NimBLE rework.
+  **Now written up as item 29**, which was asked for directly; this line stays
+  because the *battery* half is still parked and 29 says to measure first.
 - Offline buffering of presses while disconnected (needs a time sync)
 - WiFi transport, which would remove the host-must-be-awake constraint (and
   would change the calculus on item 8)

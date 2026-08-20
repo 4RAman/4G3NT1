@@ -261,7 +261,17 @@
       "dismiss_event": ""
     },
     {
-      "name": "Actions",
+      "name": "Launcher",
+      "template": "launcher",
+      "activation": {
+        "type": "manual"
+      },
+      "targets": "Stopwatch\nPomodoro\nMetronome\nCounter\nAlarm\nCountdown 60s\nReaction",
+      "return_after": true,
+      "log_as": ""
+    },
+    {
+      "name": "Midi Actions",
       "template": "actions",
       "activation": {
         "type": "always"
@@ -272,8 +282,11 @@
         "channel": 1,
         "kind": "note_on",
         "number": 94,
-        "value": 127,
-        "daw_command": "play"
+        "value": 127
+      },
+      "long_press": {
+        "action": "enter_mode",
+        "target": "Stopwatch"
       },
       "double_tap": {
         "action": "midi",
@@ -283,9 +296,32 @@
         "number": 94,
         "value": 127
       },
+      "triple_tap": {
+        "action": "midi",
+        "port": "4G3NT",
+        "channel": 1,
+        "kind": "note_on",
+        "number": 89,
+        "value": 127
+      },
       "tap_5": {
+        "action": "midi",
+        "port": "4G3NT",
+        "channel": 1,
+        "kind": "note_on",
+        "number": 86,
+        "value": 127
+      }
+    },
+    {
+      "name": "Actions",
+      "template": "actions",
+      "activation": {
+        "type": "always"
+      },
+      "short_press": {
         "action": "log",
-        "event": "five_taps"
+        "event": "button_press"
       }
     }
   ],
