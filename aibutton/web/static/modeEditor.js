@@ -617,6 +617,7 @@ export class ModeEditor {
         el('span', { className: 'gesture-name', textContent: gesture.label }),
         select,
       ]),
+      gesture.hint ? el('span', { className: 'fld-hint', 'data-help': true, textContent: gesture.hint }) : null,
       fields,
     ]);
   }
