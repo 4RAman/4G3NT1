@@ -720,12 +720,20 @@ the *full* period and a stop's dwell at *half*, different multiples for
 different shapes, so sharing the constant would have changed one behaviour
 rather than deduplicating code. Both docstrings say so.
 
-**Still open on this item:** the colour engine growing a sequence editor
-(the UI half — a look you can only hand-write in JSON is half-shipped), and
-an *animated* live preview (`/api/dev/led` currently previews a sequence as
-its first stop, static, with a warning saying so — honest, but not a
-preview). Fade smoothing is stepped at 50 ms by design; smooth fades remain
-the device's styles until the runtime moves on-device.
+**The UI half shipped the same day.** The colour engine edits stop lists
+(`allowSequence`, opt-in — on for the named-look pool and the mode page's
+inline pool editor, off by construction for the system palette, whose
+entries ship to the device); `describeEffect` and ledPreview's `colorAt`
+both know the shape, so a sequence look summarises and animates correctly
+in every swatch, with fades quantised to the same 50 ms steps the host
+pushes — the preview keeps its never-disagree-with-hardware rule, except
+that a one-shot previews looping, because a swatch that goes dark looks
+broken.
+
+**Still open on this item:** an *animated* device-side live preview —
+`/api/dev/led` previews a sequence as its first stop, static, with a
+warning saying so. Honest, but not a preview; needs a cancellable task in
+webui.py mirroring main.py's driver.
 
 **15 and 17 are now unblocked; Simon-says (16's parked half) too.**
 

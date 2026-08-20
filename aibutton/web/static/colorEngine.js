@@ -67,6 +67,44 @@ function ledCtx(style, floor) {
   return { minFlashPeriod: style?.strobes ? limit : 0.05 };
 }
 
+// --- sequences ----------------------------------------------------------
+// A look with a `stops` key is a stop list (sequencer.Sequence, host-side)
+// rather than a device-animated effect: several colours the *host* walks
+// through and pushes one at a time, not a style the firmware renders on its
+// own. That is why it has none of LED_STYLES' machinery - no `style`, no
+// `uses`, nothing schema.js needs to know about, because the firmware never
+// sees the shape (sequencer.py: "a sequence is not an effect").
+
+/** One row per stop: the engine's own colour field, plus the two seconds a
+ *  stop knows about. Module-level like DIAGNOSTIC - pure data, no `o`. */
+const STOP_FIELDS = [
+  { key: 'color', label: 'Colour', kind: 'color' },
+  { key: 'hold_s', label: 'Hold (s)', kind: 'number', min: 0, step: 0.05,
+    hint: 'How long this colour stays once it has arrived.' },
+  { key: 'fade_s', label: 'Fade (s)', kind: 'number', min: 0, step: 0.05,
+    hint: "How long arriving here takes. 0 is a hard cut from the stop before it." },
+];
+
+/**
+ * The floor `config.sequence_safe` applies to a stop's dwell (hold_s +
+ * fade_s), once the sequence can sustain a strobe (it repeats, or runs past
+ * three stops): half the configured flash period, the same maths
+ * `flash_safe` already applies to a plain effect's `period_s` - see
+ * CLAUDE.md's flash-floor invariant. Read off the live config exactly like
+ * `ledCtx` does, so raising the setting widens what this hint promises
+ * instead of lying about it.
+ *
+ * Informational only. The clamp itself stays host-side; a second one here
+ * would be the "floor in three places" CLAUDE.md warns against, and this
+ * floor is conditional (repeat, or >3 stops) and combined across two
+ * fields - not a bound either field's `min` could honestly express alone.
+ */
+function sequenceFloor(floor) {
+  const configured = Number(floor);
+  const limit = Number.isFinite(configured) && configured > 0 ? configured : FALLBACK_FLOOR;
+  return limit / 2;
+}
+
 /**
  * A colour control bound to one effect object, which it mutates in place.
  *
@@ -81,6 +119,13 @@ function ledCtx(style, floor) {
  * @param {Function} [o.onRemove]- shows a Delete button
  * @param {string}   [o.previewState] - LED state a live preview reports as
  * @param {boolean}  [o.openPresets] - start with the library expanded
+ * @param {boolean}  [o.allowSequence] - offer switching this look to a stop
+ *   list (sequencer.Sequence). Off by default: only the named-look pool may
+ *   hold a sequence - the system palette must stay effect-only, because a
+ *   palette entry ships to the device and renders unattended while a
+ *   sequence is a schedule only the host can walk (config.py's
+ *   `_parse_looks`). A caller editing a pool entry opts in; a caller editing
+ *   `led_palette` must not.
  * @returns {{el: Element, validate: Function, refresh: Function}}
  */
 export function createLookEditor(o) {
@@ -92,10 +137,16 @@ export function createLookEditor(o) {
   const validators = [];
 
   const effect = () => o.get();
+  const isSequence = () => Array.isArray(effect().stops);
 
   const refresh = () => {
-    applySwatch(swatch, effect());
-    summary.textContent = describeEffect(effect());
+    // Both shapes: ledPreview's colorAt and schema.js's describeEffect know
+    // stop lists now - they had to, because a pool look that is a sequence
+    // also shows up in modeEditor.js's compact swatch, well outside this
+    // control. One implementation there beats a private twin here.
+    const eff = effect();
+    applySwatch(swatch, eff);
+    summary.textContent = describeEffect(eff);
   };
 
   // --- live preview ---------------------------------------------------
@@ -136,9 +187,7 @@ export function createLookEditor(o) {
 
   // --- the fields -----------------------------------------------------
 
-  const renderFields = () => {
-    clear(fields);
-    validators.length = 0;
+  const renderEffectFields = () => {
     const style = LED_STYLE_BY_TYPE[effect().style] || LED_STYLE_BY_TYPE.solid;
     for (const spec of LED_FIELDS) {
       // Hide what this style ignores: a rainbow has no hue to pick.
@@ -152,6 +201,112 @@ export function createLookEditor(o) {
       validators.push(field.validate);
       fields.append(field.el);
     }
+  };
+
+  const renderSequenceFields = () => {
+    const seq = effect();
+    if (!Array.isArray(seq.stops)) seq.stops = [];
+    if (typeof seq.repeat !== 'boolean') seq.repeat = true;
+
+    // Adding, removing or reordering a stop changes which rows and which up
+    // /down buttons exist, so - like a style switch above - that gets a full
+    // rebuild rather than a targeted patch. A row's own field edits (colour,
+    // hold, fade) don't touch row count and skip this, same split as the
+    // effect fields above.
+    const commitStructure = () => {
+      renderFields();
+      refresh();
+      o.onChange?.();
+    };
+
+    const rows = el('div', { className: 'sequence-rows' });
+    seq.stops.forEach((stop, index) => {
+      const rowFields = el('div', { className: 'sequence-row-fields' });
+      for (const spec of STOP_FIELDS) {
+        const field = createField(spec, stop, () => { refresh(); o.onChange?.(); });
+        validators.push(field.validate);
+        rowFields.append(field.el);
+      }
+
+      const up = el('button', {
+        type: 'button', className: 'mini', textContent: '↑', title: 'Move earlier',
+      });
+      up.disabled = index === 0;
+      up.addEventListener('click', () => {
+        [seq.stops[index - 1], seq.stops[index]] = [seq.stops[index], seq.stops[index - 1]];
+        commitStructure();
+      });
+
+      const down = el('button', {
+        type: 'button', className: 'mini', textContent: '↓', title: 'Move later',
+      });
+      down.disabled = index === seq.stops.length - 1;
+      down.addEventListener('click', () => {
+        [seq.stops[index], seq.stops[index + 1]] = [seq.stops[index + 1], seq.stops[index]];
+        commitStructure();
+      });
+
+      const remove = el('button', {
+        type: 'button', className: 'mini danger', textContent: '×', title: 'Remove this stop',
+      });
+      // Never offer to remove the last one - same rule the ramp widget
+      // (widgets.js) already follows: an empty sequence is not a thing you
+      // can mean, and the parser would just hand back the default look.
+      remove.disabled = seq.stops.length <= 1;
+      remove.addEventListener('click', () => {
+        seq.stops.splice(index, 1);
+        commitStructure();
+      });
+
+      rows.append(el('div', { className: 'sequence-row' }, [
+        el('span', { className: 'sequence-index', textContent: String(index + 1) }),
+        rowFields,
+        el('div', { className: 'sequence-row-actions' }, [up, down, remove]),
+      ]));
+    });
+
+    const add = el('button', { type: 'button', className: 'mini', textContent: '+ Stop' });
+    add.addEventListener('click', () => {
+      const last = seq.stops[seq.stops.length - 1];
+      seq.stops.push({ color: last ? last.color : '#ffffff', hold_s: 0.5, fade_s: 0 });
+      commitStructure();
+    });
+
+    const repeatField = createField(
+      {
+        key: 'repeat', label: 'Repeat', kind: 'checkbox',
+        hint: 'On loops until the light is told to show something else. Off '
+          + 'plays the list once, then the light falls back to its configured colour.',
+      },
+      seq,
+      () => { refresh(); o.onChange?.(); },
+    );
+    validators.push(repeatField.validate);
+
+    const floorHint = el('span', {
+      className: 'menu-hint', 'data-help': true,
+      textContent: 'A repeating sequence, or one longer than 3 stops, cannot move faster '
+        + `than the flash safety limit: each stop's hold + fade together is floored to at `
+        + `least ${sequenceFloor(o.floor).toFixed(2)}s, the same way a fast flash or `
+        + 'alternate is slowed down. A one-shot of 3 stops or fewer is exempt.',
+    });
+
+    // Caught here rather than left to `_parse_sequence`'s own fallback: that
+    // fallback is silent recovery for a *saved* config (CLAUDE.md: a bad
+    // config never crashes the service), and Save should refuse before it
+    // ever gets there, the same way every other required field does.
+    validators.push(() => (seq.stops.length ? null : 'A sequence needs at least one stop'));
+
+    fields.append(el('div', { className: 'sequence-edit' }, [rows, add, repeatField.el, floorHint]));
+  };
+
+  const renderFields = () => {
+    clear(fields);
+    validators.length = 0;
+    if (isSequence()) renderSequenceFields();
+    else renderEffectFields();
+    if (modeToggle) modeToggle.sync();
+    if (presetDrawerEl) presetDrawerEl.hidden = isSequence();
   };
 
   // --- the library ----------------------------------------------------
@@ -253,11 +408,60 @@ export function createLookEditor(o) {
     actions.append(tryIt, stop, status);
   }
 
+  // --- switching shape --------------------------------------------------
+  // Only offered where a sequence is a legal look at all (see the
+  // `allowSequence` doc above). The object is mutated in place, key by key,
+  // like `applyPreset` above - callers hold a reference to it.
+  const switchShape = (wantSequence) => {
+    const cur = effect();
+    if (Array.isArray(cur.stops) === wantSequence) return;
+    // Read the colour to carry across *before* clearing the object below -
+    // both branches want it, and it lives under a different key in each
+    // shape (`color` on a plain effect, `stops[0].color` on a sequence).
+    const carryColor = wantSequence
+      ? (typeof cur.color === 'string' && cur.color) || '#ffffff'
+      : cur.stops?.[0]?.color || '#ffffff';
+    for (const key of Object.keys(cur)) delete cur[key];
+    if (wantSequence) {
+      // Starts from the one colour already chosen rather than blank: a
+      // single-stop sequence *is* the plain effect it replaces, minus the
+      // animation, so nothing about the current pick needs re-deciding.
+      cur.stops = [{ color: carryColor, hold_s: 0.5, fade_s: 0 }];
+      cur.repeat = true;
+    } else {
+      Object.assign(cur, { style: 'solid', color: carryColor, color2: '#000000', period_s: 1 });
+    }
+    renderFields();
+    refresh();
+    o.onChange?.();
+    if (canPreview) show(cur);
+  };
+
+  let modeToggle = null;
+  if (o.allowSequence) {
+    const oneBtn = el('button', { type: 'button', className: 'mini', textContent: 'Single colour',
+      title: 'One colour or animation the device renders on its own.' });
+    const seqBtn = el('button', { type: 'button', className: 'mini', textContent: 'Sequence',
+      title: 'A list of colours the host walks through in order.' });
+    oneBtn.addEventListener('click', () => switchShape(false));
+    seqBtn.addEventListener('click', () => switchShape(true));
+    modeToggle = {
+      el: el('div', { className: 'look-mode-toggle' }, [oneBtn, seqBtn]),
+      sync: () => {
+        oneBtn.classList.toggle('active', !isSequence());
+        seqBtn.classList.toggle('active', isSequence());
+      },
+    };
+  }
+
+  const presetDrawerEl = presetDrawer();
+
   renderFields();
   refresh();
   row.append(
     el('div', { className: 'palette-head' }, head),
-    presetDrawer(),
+    presetDrawerEl,
+    modeToggle?.el,
     fields,
     actions,
   );

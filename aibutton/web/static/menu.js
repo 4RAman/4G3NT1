@@ -431,6 +431,10 @@ export class ConfigMenu {
         get: () => this.model.looks[name],
         label: name,
         meaning: '',
+        // Pool looks may be stop lists; palette entries may not (they ship
+        // to the device), which is why the flag is here and not in the
+        // palette section's spec above.
+        allowSequence: true,
         // Renaming rewrites every mode pointing here, so the pool and the
         // references can never drift into a dangling name from the UI. The
         // Python parser still warns about one, because a hand-edited config
@@ -470,6 +474,7 @@ export class ConfigMenu {
       label: spec.label,
       meaning: spec.meaning,
       previewState: spec.previewState,
+      allowSequence: spec.allowSequence,
       rename: spec.rename && ((next) => {
         if (!spec.rename(next)) return false;
         this._renderLooks();

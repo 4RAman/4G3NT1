@@ -167,6 +167,9 @@ export class ModeEditor {
           api: this.handlers.api,
           label: select.value,
           previewState: key,
+          // This edits a *pool* look in place, and pool looks may be stop
+          // lists - the same rule as the Lights tab's named-look rows.
+          allowSequence: true,
         });
         editorSlot.append(editor.el);
 

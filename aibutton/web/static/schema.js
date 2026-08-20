@@ -1650,6 +1650,13 @@ export const LED_FIELDS = [
 
 /** One-line summary of an effect, e.g. "Breathe #0000ff, fading every 3s". */
 export function describeEffect(effect) {
+  // A stop list (TODO 19b) is a look but not a style, so it summarises
+  // before the style table gets a say.
+  if (effect && Array.isArray(effect.stops)) {
+    const n = effect.stops.length;
+    return `Sequence, ${n} stop${n === 1 ? '' : 's'}, `
+      + (effect.repeat === false ? 'plays once' : 'looping');
+  }
   const style = effect && LED_STYLE_BY_TYPE[effect.style];
   if (!style) return 'unknown';
   const swatch = style.uses.includes('color') ? ` ${effect.color}` : '';

@@ -51,6 +51,36 @@ const css = ([r, g, b]) =>
 
 /** The colour an effect shows at time `t` seconds. Mirrors firmware/led.py. */
 export function colorAt(effect, t) {
+  // A stop list (TODO 19b) - the browser twin of sequencer.plan_at, and it
+  // keeps that module's honesty rules: fades are quantised to the same 50 ms
+  // steps the host actually pushes over the radio, and the first instant of
+  // a fade shows the untouched starting colour. One deliberate difference:
+  // a one-shot previews looping, because a swatch that goes dark after one
+  // pass looks broken - what a one-shot does at its end is the driver's
+  // business, not the preview's.
+  if (Array.isArray(effect.stops) && effect.stops.length) {
+    const stops = effect.stops;
+    const spans = stops.map((s) => [
+      Math.max(Number(s.fade_s) || 0, 0), Math.max(Number(s.hold_s) || 0, 0),
+    ]);
+    const total = spans.reduce((sum, [fade, hold]) => sum + fade + hold, 0);
+    let prev = stops[stops.length - 1].color;
+    if (total <= 0) return hexToRgb(prev);
+    let tt = t % total;
+    for (let i = 0; i < stops.length; i += 1) {
+      const [fade, hold] = spans[i];
+      if (tt < fade) {
+        const level = Math.min(Math.floor(tt / 0.05) * 0.05 / fade, 1);
+        const from = hexToRgb(prev);
+        const to = hexToRgb(stops[i].color);
+        return from.map((c, j) => c + (to[j] - c) * level);
+      }
+      if (tt < fade + hold) return hexToRgb(stops[i].color);
+      tt -= fade + hold;
+      prev = stops[i].color;
+    }
+    return hexToRgb(prev);
+  }
   const period = Number(effect.period_s) > 0 ? Number(effect.period_s) : 1;
   const phase = (t % period) / period;
   switch (effect.style) {
