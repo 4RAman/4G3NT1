@@ -18,6 +18,7 @@ from aibutton.config import (
     MetronomeBehavior,
     Mode,
     PomodoroBehavior,
+    ReadoutAction,
     ScheduleActivation,
     StopwatchBehavior,
     TimerToggleAction,
@@ -1058,3 +1059,61 @@ def test_a_mixed_pool_round_trips_through_as_dict():
     })
     again = parse_config(as_dict(cfg))
     assert again.looks == cfg.looks
+
+
+# --- the readout action (TODO 15/17) --------------------------------------
+
+def _mode_with(action: dict) -> dict:
+    return {"modes": [{
+        "name": "Desk", "template": "actions", "activation": {"type": "always"},
+        "short_press": action,
+    }]}
+
+
+def test_a_readout_action_parses_with_its_defaults():
+    cfg = parse_config(_mode_with({"action": "readout", "event": "coffee"}))
+    action = cfg.modes[0].behavior.actions["short_press"]
+    assert action == ReadoutAction(event="coffee")
+    assert action.tens_color != action.units_color  # clearly different, by design
+
+
+def test_a_readout_action_carries_its_own_colours():
+    cfg = parse_config(_mode_with({
+        "action": "readout", "event": "coffee",
+        "tens_color": "#112233", "units_color": "#445566",
+    }))
+    action = cfg.modes[0].behavior.actions["short_press"]
+    assert action == ReadoutAction(
+        event="coffee", tens_color="#112233", units_color="#445566"
+    )
+
+
+def test_a_readout_with_no_event_is_not_a_valid_action():
+    cfg, warnings = parse_with_warnings(_mode_with({"action": "readout"}))
+    # The mode is seeded with the default Home actions instead (same
+    # fail-soft rule _ensure_ambient_always applies whenever an ambient mode
+    # is left with no usable gesture actions).
+    mode = next((m for m in cfg.modes if m.name == "Desk"), None)
+    assert mode is None
+    assert any("not a valid action" in w for w in warnings)
+
+
+def test_a_readout_actions_bad_colour_costs_the_colour_not_the_action():
+    """Per-field fallback, like `_parse_effect` - a typo in a colour must not
+    take the whole binding down with it."""
+    cfg, warnings = parse_with_warnings(_mode_with({
+        "action": "readout", "event": "coffee", "tens_color": "not-a-colour",
+    }))
+    action = cfg.modes[0].behavior.actions["short_press"]
+    assert action == ReadoutAction(event="coffee")  # default tens_color, event kept
+    assert any("tens_color" in w for w in warnings)
+
+
+def test_a_readout_action_round_trips_through_the_editor():
+    raw = _mode_with({
+        "action": "readout", "event": "coffee",
+        "tens_color": "#ff8800", "units_color": "#3399ff",
+    })
+    once = parse_config(raw)
+    twice = parse_config(as_dict(once))
+    assert as_dict(once)["modes"] == as_dict(twice)["modes"]

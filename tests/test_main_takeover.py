@@ -322,3 +322,153 @@ async def test_a_sequence_look_on_a_ramp_driven_state_does_not_crash(tmp_path):
         assert device.led_state is LEDState.TIMING
 
     await _run_sequence(tmp_path, COUNTDOWN_SEQUENCE_CONFIG, script)
+
+
+# --- the readout action, and the Counter agreeing with the store -----------
+#
+# TODO 15/17: a `readout` action's display is its own feedback, so it must
+# never be followed (or preceded) by the ambient dispatch's usual SUCCESS
+# flash, and the Counter takeover must start counting from the same rows an
+# ambient `log` already wrote rather than from a local zero. Both need the
+# real run loop (readout drives an async sequence task; the Counter reads the
+# store at takeover-entry time), so they live here rather than in
+# test_config.py/test_sequencer.py, which only exercise the pure halves.
+
+READOUT_CONFIG = {
+    "sounds_enabled": False,
+    "web_enabled": False,
+    "modes": [
+        {
+            "name": "Default", "template": "actions", "activation": {"type": "always"},
+            "short_press": {
+                "action": "readout", "event": "coffee",
+                "tens_color": "#ff8800", "units_color": "#3399ff",
+            },
+        },
+    ],
+}
+
+
+async def test_readout_action_shows_the_count_and_never_flashes_success(tmp_path):
+    db_path = tmp_path / "e.db"
+    seed = EventStore(str(db_path))
+    for _ in range(3):  # tens=0, units=3 -> three quick blue pulses
+        seed.log_event("coffee")
+    seed.close()
+
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(
+        json.dumps(dict(READOUT_CONFIG, database_path=str(db_path))),
+        encoding="utf-8",
+    )
+
+    device = MockDevice()
+    args = main._parse_args(["--no-web", "--config", str(cfg_path)])
+    run_task = asyncio.create_task(main.run(args, device=device))
+    await asyncio.sleep(0.1)
+
+    seen_states, seen_colors = [], []
+    try:
+        device.press(TriggerType.SHORT_PRESS)
+        await _drain(device.events)
+        # Watch for longer than the three-pulse readout (3*0.18 + 2*0.18 =
+        # 0.9s) so the whole thing plays out and a stray SUCCESS has time to
+        # show up if it were going to.
+        for _ in range(24):
+            seen_states.append(device.led_state)
+            if device.led_effect is not None:
+                seen_colors.append(device.led_effect.color)
+            await asyncio.sleep(0.05)
+    finally:
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+    assert LEDState.SUCCESS not in seen_states
+    assert "#3399ff" in seen_colors  # the units pulses for a count of 3
+
+    # Read-only: a readout must never write the row it is reporting on.
+    store = EventStore(str(db_path))
+    try:
+        assert store.count_today("coffee") == 3
+    finally:
+        store.close()
+
+
+COUNTER_AGREEMENT_CONFIG = {
+    "sounds_enabled": False,
+    "web_enabled": False,
+    "modes": [
+        {
+            "name": "Default", "template": "actions", "activation": {"type": "always"},
+            "double_tap": {"action": "enter_mode", "target": "Water"},
+        },
+        {
+            "name": "Water", "template": "counter", "activation": {"type": "manual"},
+            "event": "water",
+        },
+    ],
+}
+
+
+async def test_counter_starts_from_the_stores_count_not_zero(tmp_path, monkeypatch):
+    """Counting from Home (an ambient `log`, or a readout) and then entering
+    the Counter to continue must agree by construction (TODO 15's "one line
+    of state") - this presses no gesture inside Home at all, so the only way
+    the Counter can show anything but 0 on entry is reading the store."""
+    db_path = tmp_path / "e.db"
+    seed = EventStore(str(db_path))
+    seed.log_event("water")
+    seed.log_event("water")
+    seed.close()
+
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(
+        json.dumps(dict(COUNTER_AGREEMENT_CONFIG, database_path=str(db_path))),
+        encoding="utf-8",
+    )
+
+    # No route to the status line without the web UI (off here, like every
+    # other test in this file) - a DeviceStatus that remembers every
+    # `last_message` it was given is the plain substitute.
+    messages: list[str] = []
+
+    class _RecordingStatus(main.DeviceStatus):
+        def __setattr__(self, name, value):
+            super().__setattr__(name, value)
+            if name == "last_message":
+                messages.append(value)
+
+    monkeypatch.setattr(main, "DeviceStatus", _RecordingStatus)
+
+    device = MockDevice()
+    args = main._parse_args(["--no-web", "--config", str(cfg_path)])
+    run_task = asyncio.create_task(main.run(args, device=device))
+    await asyncio.sleep(0.1)
+
+    try:
+        device.press(TriggerType.DOUBLE_TAP)  # enter_mode -> Water
+        await _drain(device.events)
+        await asyncio.sleep(0.1)
+
+        # Continue the same tally from inside the Counter, then leave.
+        device.press(TriggerType.SHORT_PRESS)  # +1
+        await _drain(device.events)
+        await asyncio.sleep(0.1)
+        device.press(TriggerType.LONG_PRESS)  # exit
+        await _drain(device.events)
+        await asyncio.sleep(0.1)
+    finally:
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+    # The very first count the Counter ever showed already said 2, not 0.
+    assert "water: 2" in messages
+    assert "water: 0" not in messages
+
+    store = EventStore(str(db_path))
+    try:
+        assert store.count_today("water") == 3  # 2 seeded + 1 counter press
+    finally:
+        store.close()

@@ -132,7 +132,7 @@ view.
 | **Depth without the wire** — metronome config ✔, event values ✔, filtering/export ✔ | **1** ✔, **9** ✔, **12**, **14** ✔ | None — ship freely |
 | **Reach and hosting** — launcher ✔, ten apps ✔, remote UI | **0a** ✔, **7** ✔, **8** | Only the hardware walk left on 7 |
 | **The light as a language** — ladder ✔, where colour is edited ✔, stop list core ✔ | **19** (a ✔, b core ✔, c, d ✔, e ✔) | **19c** and 19b's editor UI left |
-| **Saying a number** — ambient counting, count readout, progress | **15**, **17** | Unblocked — the stop list core shipped 2026-08-19 |
+| **Saying a number** — ambient counting ✔, count readout ✔ | **15** ✔, **17** ✔ | Only the human read test, on hardware (same sitting as **26b**) |
 | **Play** — timing/rhythm and guessing games | **16** ✔ | Done for forgiving games; tight rhythm still needs Stage 3's on-device runtime |
 | **Reaching other software** — OSC ✔, MIDI out ✔, clock in ✔, transport state | ✔ shipped with **7**, **22** ✔, **24** ✔, **25** | Sending and listening both work. **25** wants MCU's *return* feedback, which needs the DAW's Send To pointed back |
 | **One machine, many timers** — Pomodoro/HIIT/Tabata as presets | **20** ✔ | Done |
@@ -348,49 +348,6 @@ performance": (a) *habit* analytics for the user (mode usage, streaks,
 time-of-day patterns — a dashboard over `EventStore`), (b) *device* telemetry
 (BLE reconnect frequency, gesture-to-feedback latency, dropped presses), or
 (c) *hosting* metrics once item 8 exists. **Ask which.**
-
-### 15. Counting without entering an app
-
-**Half of this already works.** Binding a gesture to count something does not
-need the Counter takeover and never did: `LogAction` is an ambient action and
-`count_today`/`current_streak` group by event name, so this counts coffees with
-no code at all —
-
-```json
-{ "name": "Home", "template": "actions", "activation": {"type": "always"},
-  "double_tap": {"action": "log", "event": "coffee"} }
-```
-
-**So what is the Counter takeover for?** Three things, and only the third is
-hard: it zeroes a session tally, it owns `COUNTING`, and it *tells you the
-number*. An ambient `log` gives you a `SUCCESS` flash — you learn that it
-counted, not what it counted to. **The gap is the readout, which makes this
-item and item 17 the same feature.** Do 17's scheme first, then this is a new
-ambient action and a preset, not a new template.
-
-**The concurrency question is decided: one foreground app, and shared state
-lives in the event log rather than in the app.** Not "N concurrent apps with a
-priority rule". Counting from Home and then entering the Counter to *continue*
-the same tally needs no concurrency — they are already the same rows.
-
-**What actually has to change is one line of state.** The Counter holds its
-session number as a local integer starting at zero, which is the only reason
-the two disagree. Read it from the store instead and they agree by
-construction; "count something else in counter mode" is just a different event
-name. No priority rule, no second run loop, no display arbitration.
-
-~~**Write that paragraph into ARCHITECTURE.md**~~ — done 2026-08-19:
-"Composition: an app's edges" states the one-foreground-app rule, and the
-`Set`-shaped ambient counting is item **34**'s app-bound action.
-
-Two questions it does *not* answer, neither urgent: a backgrounded timer still
-monopolises gestures (a takeover awaits `device.events` directly), and two
-things wanting the LED still needs a stated priority — or the readout from 17,
-so a backgrounded timer is *asked* rather than watched.
-
-**Definition of done.** Ambient counting with a readout gesture, shipped as
-data; the Counter reading its number from the store; and the concurrency
-paragraph in ARCHITECTURE.md.
 
 ### 31. Lifecycle hooks — `on_enter` / `on_exit` on `Mode`
 
@@ -625,49 +582,6 @@ concurrent** — one transport per boot, chosen like `--ble` is. Measure first
 Dockerfile or a protocol change: the wire vocabulary is transport-agnostic
 already and should stay that way.
 
-### 17. A number you can read off one light
-
-**The question was whether a universal colour-to-digit code exists. It does:**
-the resistor colour code (IEC 60062) — black 0, brown 1, **red 2**, orange 3,
-yellow 4, green 5, blue 6, violet 7, grey 8, white 9.
-
-**And it is the wrong tool here.** Black is 0, which on an LED is *off* and
-indistinguishable from idle; brown and grey are "dim orange" and "dim white",
-which is to say not colours a diffused pixel can deliver; violet against blue
-is hard on a single dot. That is ten-way hue discrimination on one diffused
-LED — and this build's ring has a *measured* colour cast (**0c**) that eats
-exactly those distinctions. A number system nobody can read under a warm
-lampshade is not a number system.
-
-**One LED has three channels, and they are not equally good at numbers:**
-
-| Channel | Good for | Bad for |
-|---|---|---|
-| Count / rhythm | **exact integers**, no legend, no learning | anything large |
-| Hue | **proportion**, magnitude, hot/cold | exact values |
-| Brightness | emphasis, grouping | anything on its own |
-
-So: **exact counts are blinks, proportions are hue.** Do not make hue carry
-digits.
-
-**The proposal** — tens as slow pulses in one colour, units as quick pulses in
-another. 27 is two slow, then seven quick. It covers 0–99 in at most eleven
-blinks, reads like an abacus, needs no legend, and has an engineering property
-worth more than elegance here: **it does not depend on telling colours apart at
-all**, so it survives the ring's cast, a warm room, and a colourblind user. Hue
-then stays free to mean *which thing* is being counted.
-
-**The subdivision ladder is not this**, and the difference is worth keeping
-straight: a ladder is driven by a clock and repeats forever; a readout is
-driven by a *value* and happens once. The readout is a **stop list** (**19b**),
-including its one-shot mode.
-
-**Definition of done.** The scheme written down as data (in `schema.js` and
-`config.py`, not as branches); a readout reachable from an ambient counter
-(item 15); and one person who has *not* been told the rule reading a two-digit
-number off it correctly. That last one is the actual test — if it needs
-explaining, it failed.
-
 ### 18. Move project management into Notion ⏸ parked
 
 **Deferred deliberately, not dropped.** Nothing is created in Notion and
@@ -768,13 +682,12 @@ descriptor change per template, not new code.
   spare — but the new one has the same status the other three had: **it has
   never met the button.** It is host-side dispatch with no clock in it, so the
   risk is low, but the offline editor looked built too.
-- **The MIDI port field could be a dropdown.** `midi_io.ports()` already
-  answers "what can this machine reach", and typing a port name is the one
-  place the `midi` action asks a person to know something the service knows.
-  It would follow the colour engine's rule exactly — **optional by
-  construction**, since the offline editor has no service to ask, so the
-  control degrades to the free-text box it is today rather than requiring one.
-  Small, and it is the last rough edge on item 22.
+- **`readout` inside a control surface is not wired.** The action is
+  ambient-only: `run_control` hands actions to the generic `execute()`,
+  which does not know it, and a page's `resting()` repaint would cancel the
+  sequence anyway — wiring it means the page lending its light to the
+  readout and taking it back. Do it when someone actually binds one there;
+  the failure today is a visible action error, not a silent wrong thing.
 
 ## Parking lot (deliberately later)
 
@@ -813,6 +726,32 @@ descriptor change per template, not new code.
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**17. A number you can read off one light**~~ — shipped 2026-08-19 as
+  `sequencer.readout(value, tens_color, units_color)`: tens as slow pulses
+  (0.5 s on / 0.35 s off), a 0.7 s group gap only when both digits have
+  pulses, units quick (0.18 s / 0.18 s), zero as one dim neutral blink;
+  one-shot, 0–99, every dwell clears the flash floor by construction.
+  Blinks not hues, exactly as designed — it survives the ring's colour cast
+  and a colourblind user, and hue stays free to mean *which thing*. **The
+  human test remains**: someone who has not been told the rule reads a
+  two-digit number correctly — that needs the button, same sitting as 26b.
+
+- ~~**15. Counting without entering an app**~~ — shipped 2026-08-19. The
+  `readout` action is ambient data: bind it to any gesture and it counts
+  today's rows for an event and plays the number — it bypasses the SUCCESS
+  flash on purpose (the readout *is* the feedback) and any next press
+  cancels it, so it never holds the button. The Counter now reads its
+  session number from the store (`count_today`), so counting from Home and
+  continuing in the Counter agree by construction. The concurrency decision
+  lives in ARCHITECTURE.md ("Composition: an app's edges"); the app-bound
+  "+1 without a log row" generalisation is item **34**.
+
+- ~~**The MIDI port dropdown**~~ (from "Smaller, worth doing") — shipped
+  2026-08-19. `GET /api/midi/ports` (in and out listed separately, graceful
+  when no backend), a generic `suggest:` datalist on the text widget, free
+  text still first-class, offline editor degrades to the plain box by
+  construction — the colour engine's optionality rule, applied again.
 
 - ~~**26. Colour-coded Actions pages, and the launcher's fate**~~ — shipped
   2026-08-19 (the eyeball check on hardware split off as **26b**). A control

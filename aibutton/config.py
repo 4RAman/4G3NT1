@@ -101,6 +101,28 @@ class LogAction:
 
 
 @dataclass(frozen=True)
+class ReadoutAction:
+    """Show `event`'s count for today on the light, without entering an app -
+    the "counting without entering an app" readout TODO 15 and 17 designed
+    together: tens digit as slow pulses, units digit as quick ones (see
+    `sequencer.readout`), because exact counts are what blink *rhythm* is
+    good at and hue is not - a scheme that "does not depend on telling
+    colours apart at all", so it survives the ring's colour cast, a warm
+    room and a colourblind reader (TODO 17).
+
+    A sibling of `LogAction` rather than a mode of it: one writes a row, this
+    only reads what is already there, and what each pushes to the LED differs
+    enough (nothing, versus a whole one-shot sequence) that main.py's ambient
+    dispatch handles it separately from the other primitives, the same way it
+    already special-cases `EnterModeAction` - see `handle()`.
+    """
+
+    event: str
+    tens_color: str = "#ff8800"  # warm orange - the coarse (tens) digit
+    units_color: str = "#3399ff"  # cool blue - the fine (units) digit
+
+
+@dataclass(frozen=True)
 class TimerToggleAction:
     log_as: str
 
@@ -176,8 +198,8 @@ class EnterModeAction:
 
 
 Action = (
-    LogAction | TimerToggleAction | WebhookAction | OscAction | MidiAction
-    | EnterModeAction
+    LogAction | ReadoutAction | TimerToggleAction | WebhookAction | OscAction
+    | MidiAction | EnterModeAction
 )
 
 
@@ -1389,6 +1411,23 @@ def _parse_action(raw, where: str) -> Action | None:
         event = raw.get("event")
         if isinstance(event, str) and event:
             return LogAction(event=event)
+    elif kind == "readout":
+        event = raw.get("event")
+        if isinstance(event, str) and event:
+            # Per-field fallback below, like `_parse_effect` - a bad colour
+            # costs you that colour, not the whole readout.
+            defaults = ReadoutAction(event=event)
+            return ReadoutAction(
+                event=event,
+                tens_color=_parse_color(
+                    raw.get("tens_color", defaults.tens_color),
+                    f"{where}.tens_color", defaults.tens_color,
+                ),
+                units_color=_parse_color(
+                    raw.get("units_color", defaults.units_color),
+                    f"{where}.units_color", defaults.units_color,
+                ),
+            )
     elif kind == "timer_toggle":
         log_as = raw.get("log_as")
         if isinstance(log_as, str) and log_as:
@@ -2726,6 +2765,11 @@ def load_config(path: str) -> AppConfig:
 def _action_to_dict(action: Action) -> dict:
     if isinstance(action, LogAction):
         return {"action": "log", "event": action.event}
+    if isinstance(action, ReadoutAction):
+        return {
+            "action": "readout", "event": action.event,
+            "tens_color": action.tens_color, "units_color": action.units_color,
+        }
     if isinstance(action, TimerToggleAction):
         return {"action": "timer_toggle", "log_as": action.log_as}
     if isinstance(action, WebhookAction):

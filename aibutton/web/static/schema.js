@@ -342,6 +342,30 @@ export const ACTIONS = [
     describe: (a) => `Log event “${a.event || '…'}”`,
   },
   {
+    type: 'readout',
+    label: 'Show a count on the light',
+    fields: [
+      // Same reading as `log`'s event field - a readout is a sibling of log,
+      // not a mode of it: this one only reads count_today(event), it never
+      // writes a row, so it can sit on a gesture that a `log` binding
+      // elsewhere already feeds without double-counting anything.
+      { key: 'event', label: 'Event name', kind: 'text', required: true,
+        placeholder: 'coffee',
+        hint: 'Blinks today’s count for this event: tens as slow '
+          + 'pulses, units as quick ones - 27 is two slow, then seven '
+          + 'quick. 0 is one dim blink, so a real zero reads differently '
+          + 'from nothing happening.' },
+      { key: 'tens_color', label: 'Tens colour', kind: 'color', tier: 'tinker',
+        hint: 'The slow pulses - the coarse digit.' },
+      { key: 'units_color', label: 'Units colour', kind: 'color', tier: 'tinker',
+        hint: 'The quick pulses - the fine digit.' },
+    ],
+    defaults: () => ({
+      action: 'readout', event: '', tens_color: '#ff8800', units_color: '#3399ff',
+    }),
+    describe: (a) => `Show “${a.event || '…'}” as a readout`,
+  },
+  {
     type: 'timer_toggle',
     label: 'Start / stop a timer',
     fields: [

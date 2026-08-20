@@ -311,6 +311,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         MetronomeBehavior,
         PomodoroBehavior,
         ReactionBehavior,
+        ReadoutAction,
         ReminderBehavior,
         SignalBehavior,
         StopwatchBehavior,
@@ -837,13 +838,21 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 store.toggle_timer(log_as, mode=mode_name)
 
     async def run_counter(behavior: CounterBehavior, mode_name: str) -> ActionResult:
-        """Takeover counter: count starts at 0, then own the button -
-        short_press or double_tap logs `event` (so count_today / streaks just
-        work) and bumps the live count, long_press exits with a session
-        summary. A None trigger (shutdown) just exits. The caller drops the
-        LED/status back to IDLE."""
+        """Takeover counter: count starts at today's `count_today(event)`
+        rather than 0, then owns the button - short_press or double_tap logs
+        `event` (so count_today / streaks just work) and bumps the live
+        count, long_press exits with a session summary. A None trigger
+        (shutdown) just exits. The caller drops the LED/status back to IDLE.
+
+        Reading the starting count from the store rather than a local zero is
+        TODO 15's "one line of state": an ambient `log`/`readout` binding and
+        this takeover both log the same event name, and there is no second
+        tally to keep in sync - counting from Home and then entering the
+        Counter to continue agrees by construction, because they were already
+        the same rows. No reset gesture exists here to reconsider: the only
+        bindings are short_press/double_tap (+1) and long_press (exit)."""
         event = behavior.event
-        count = 0
+        count = store.count_today(event)
         set_led(LEDState.COUNTING)
         set_status("COUNTING")
         status.last_mode = mode_name
@@ -2049,6 +2058,28 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 await enter_takeover(target)
             else:
                 await fail(f"enter_mode: no takeover mode named {action.target!r}")
+            return
+        elif isinstance(action, ReadoutAction):
+            # A readout's light *is* its feedback (TODO 15/17), so it must not
+            # be preceded or followed by the SUCCESS flash the generic branch
+            # below plays: `set_led` cancels whatever sequence is running on
+            # every call, so a SUCCESS push after this would cut the readout
+            # off mid-count, and pushing THINKING/SUCCESS around a query this
+            # cheap would just flicker before the real answer showed up. So
+            # this is never handed to execute() - same reasoning as the
+            # enter_mode branch above - and returns immediately rather than
+            # falling into the shared SUCCESS/IDLE tail.
+            mode = resolved[0]
+            status.last_mode = mode.name
+            count = store.count_today(action.event)
+            set_led(
+                LEDState.IDLE,
+                sequencer.readout(count, action.tens_color, action.units_color),
+            )
+            status.last_ok = True
+            status.last_message = f"{action.event}: {count} today"
+            set_status("IDLE")
+            log.info("readout %s -> %d today", action.event, count)
             return
         else:
             mode, action = resolved

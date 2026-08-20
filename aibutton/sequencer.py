@@ -212,3 +212,82 @@ def plan_at(
     # there is nothing more to wait for at *this* elapsed time; the next
     # call is what advances it.
     return spans[-1].to_color, 0.0
+
+
+# --- readout: a value played as blinks (TODO 15 and 17) --------------------
+#
+# TODO 17's finding is why this looks the way it does: one LED has three
+# channels, and only one of them - count/rhythm - is good at *exact*
+# integers; hue is good at proportion, not digits. So a readout is blinks,
+# not colours, and it "does not depend on telling colours apart at all" -
+# which is what lets it survive this build's measured ring colour cast, a
+# warm room, and a colourblind reader (see hardware gotchas in CLAUDE.md).
+
+_READOUT_TENS_ON_S = 0.5
+_READOUT_TENS_OFF_S = 0.35
+_READOUT_GROUP_GAP_S = 0.7
+_READOUT_UNITS_ON_S = 0.18
+_READOUT_UNITS_OFF_S = 0.18
+_READOUT_ZERO_HOLD_S = 0.4
+_READOUT_ZERO_COLOR = "#404040"  # dim neutral - not either digit's colour
+_READOUT_MAX = 99
+_BLACK = "#000000"
+
+
+def _digit_pulses(count: int, color: str, on_s: float, off_s: float) -> list[Stop]:
+    """`count` hard-cut pulses of `color`, `on_s` each, separated by `off_s`
+    of black - with no trailing gap after the last pulse, so whatever comes
+    next (the group gap, or the end of the sequence) decides what follows."""
+    stops: list[Stop] = []
+    for i in range(count):
+        stops.append(Stop(color, hold_s=on_s))
+        if i < count - 1:
+            stops.append(Stop(_BLACK, hold_s=off_s))
+    return stops
+
+
+def readout(
+    value: int, tens_color: str = "#ff8800", units_color: str = "#3399ff"
+) -> Sequence:
+    """`value` as blinks: the tens digit as slow pulses in `tens_color`, the
+    units digit as quick ones in `units_color` - 27 is two slow, then seven
+    quick, reading like an abacus with no legend needed.
+
+    `value` is clamped to 0..99 (a caller that cares may also say so - this
+    only returns the `Sequence`). 0 is a special case: a single dim neutral
+    blink (`_READOUT_ZERO_COLOR`, matching neither digit's colour) rather
+    than zero pulses, so "counted zero" reads differently from "nothing
+    happened" - a button that just sat there dark.
+
+    A zero *digit* contributes none of its pulses, and the group gap between
+    the two digit groups only appears when both groups have at least one
+    pulse to separate - so a zero tens digit ("7") starts straight into the
+    quick pulses with no leading pause, and a zero units digit ("20") ends
+    after the slow pulses with no trailing gap to nothing.
+
+    One-shot, always (`repeat=False`): a readout is a value at a moment, not
+    something to loop. Every stop's dwell (`hold_s + fade_s`, though nothing
+    here fades) clears `SAFE_MIN_PERIOD_S / 2` (~0.167s) by construction, so
+    it never needs `config.sequence_safe`'s floor to save it - that gate
+    still runs centrally in `main.set_led`, this just doesn't lean on it.
+    """
+    value = max(0, min(_READOUT_MAX, value))
+    if value == 0:
+        return Sequence(
+            stops=(Stop(_READOUT_ZERO_COLOR, hold_s=_READOUT_ZERO_HOLD_S),),
+            repeat=False,
+        )
+
+    tens, units = divmod(value, 10)
+    stops: list[Stop] = []
+    if tens:
+        stops += _digit_pulses(
+            tens, tens_color, _READOUT_TENS_ON_S, _READOUT_TENS_OFF_S
+        )
+    if tens and units:
+        stops.append(Stop(_BLACK, hold_s=_READOUT_GROUP_GAP_S))
+    if units:
+        stops += _digit_pulses(
+            units, units_color, _READOUT_UNITS_ON_S, _READOUT_UNITS_OFF_S
+        )
+    return Sequence(stops=tuple(stops), repeat=False)

@@ -9,6 +9,7 @@ this says to push - see test_main_takeover.py for that half.
 import pytest
 
 from aibutton import sequencer
+from aibutton.device import SAFE_MIN_PERIOD_S
 from aibutton.sequencer import Sequence, Stop
 
 RED, GREEN, BLUE, BLACK = "#ff0000", "#00ff00", "#0000ff", "#000000"
@@ -204,3 +205,74 @@ def test_stop_defaults_match_the_documented_ones():
 
 def test_sequence_defaults_to_repeating():
     assert Sequence(stops=(Stop(RED),)).repeat is True
+
+
+# --- readout(): a value played as blinks (TODO 15/17) -----------------------
+
+TENS, UNITS = "#ff8800", "#3399ff"
+
+
+def test_27_is_two_slow_pulses_then_a_gap_then_seven_quick_pulses():
+    seq = sequencer.readout(27, tens_color=TENS, units_color=UNITS)
+    assert seq.repeat is False
+    assert [s.color for s in seq.stops] == [
+        TENS, BLACK, TENS, BLACK,
+        UNITS, BLACK, UNITS, BLACK, UNITS, BLACK, UNITS, BLACK,
+        UNITS, BLACK, UNITS, BLACK, UNITS,
+    ]
+    # "slow" and "quick" named exactly: the tens dwell, the units dwell, and
+    # the one gap standing apart from both between the two digit groups.
+    assert seq.stops[0].hold_s == pytest.approx(0.5)   # tens: colour ~0.5s
+    assert seq.stops[1].hold_s == pytest.approx(0.35)  # tens: black gap ~0.35s
+    assert seq.stops[3].hold_s == pytest.approx(0.7)   # the group gap
+    assert seq.stops[4].hold_s == pytest.approx(0.18)  # units: colour ~0.18s
+    assert seq.stops[5].hold_s == pytest.approx(0.18)  # units: black ~0.18s
+
+
+def test_0_is_a_single_dim_neutral_blink_not_zero_pulses():
+    """Distinguishable from "nothing happened" - a button that just sat
+    there dark - rather than looking like the digit code simply had nothing
+    to show."""
+    seq = sequencer.readout(0, tens_color=TENS, units_color=UNITS)
+    assert seq.repeat is False
+    assert len(seq.stops) == 1
+    stop = seq.stops[0]
+    assert stop.color not in (TENS, UNITS, BLACK)
+    assert stop.hold_s > 0
+
+
+def test_7_is_no_slow_pulses_no_group_gap_seven_quick_pulses():
+    seq = sequencer.readout(7, tens_color=TENS, units_color=UNITS)
+    assert [s.color for s in seq.stops] == [
+        UNITS, BLACK, UNITS, BLACK, UNITS, BLACK, UNITS,
+        BLACK, UNITS, BLACK, UNITS, BLACK, UNITS,
+    ]
+
+
+def test_a_zero_units_digit_ends_after_the_tens_group_no_trailing_gap():
+    """The mirror of the zero-tens case: "20" is two slow pulses and then
+    nothing, not a gap left dangling with no units group to separate."""
+    seq = sequencer.readout(20, tens_color=TENS, units_color=UNITS)
+    assert [s.color for s in seq.stops] == [TENS, BLACK, TENS]
+
+
+def test_values_above_99_clamp_to_99():
+    assert sequencer.readout(100) == sequencer.readout(99)
+    assert sequencer.readout(1000) == sequencer.readout(99)
+
+
+@pytest.mark.parametrize(
+    "value", [0, 1, 5, 7, 9, 10, 19, 20, 27, 40, 55, 90, 99, 100]
+)
+def test_every_stops_dwell_clears_the_default_flash_floor(value):
+    """Chosen so `config.sequence_safe` never has to touch it - every dwell
+    clears `SAFE_MIN_PERIOD_S / 2` (~0.167s) by construction, which is the
+    property the sequencer.readout docstring promises."""
+    seq = sequencer.readout(value)
+    floor = SAFE_MIN_PERIOD_S / 2
+    assert all(stop.hold_s + stop.fade_s >= floor for stop in seq.stops)
+
+
+def test_readout_is_always_a_one_shot():
+    for value in (0, 5, 27, 99):
+        assert sequencer.readout(value).repeat is False
