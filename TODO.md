@@ -89,7 +89,7 @@ confirm with the user first if it might be running against the real button.
 ## Where Stage 2 actually stands
 
 [ROADMAP.md](ROADMAP.md)'s exit gates, scored honestly. This is the checkpoint
-**item 10** asks for, done on 2026-08-16.
+**item 10** asks for — last scored 2026-08-19.
 
 | Gate | State |
 |---|---|
@@ -320,13 +320,18 @@ certbot, add a docker-compose service and a reverse-proxy vhost.
 
 ### 10. Checkpoint — review and re-triage
 
-**Last run: 2026-08-16** (this cleanup). Shipped items compressed into
-**Done**, superseded scope deleted, Stage-2 gates scored in "Where Stage 2
-actually stands" above.
+**Last run: 2026-08-19**, at the end of the host-side sprint that shipped
+items **5, 9, 14, 15, 17, 19b, 26, 27, 28**, the MIDI port dropdown, the
+item-23 design and decision **D9**, and created build items **31–34**.
+Shipped items are compressed into **Done**, superseded scope deleted, and
+the gates re-scored above. Nothing shipped today has met the button.
 
-**Next checkpoint: after 0a and 2.** Those two together answer the only
-question Stage 2 has left — whether ten apps are real and reachable — and
-between them they will produce new items, which is what a checkpoint is for.
+**Next checkpoint: after the next hardware sitting.** That sitting now has
+a queue worth doing in one go: **0c** (re-solder + the 5 V rework), the
+Signal and control-surface walks, **26b** (does the colour coding read),
+`tap_4` end to end (**28**'s residue), and the human readout test (**17**'s
+residue). One session at the bench clears every open hardware residue;
+checkpoint after it.
 
 The standing job: re-read this file against what actually shipped, move
 finished items to Done, prune what the shipped version superseded, and score
