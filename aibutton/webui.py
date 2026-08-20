@@ -19,6 +19,7 @@ Endpoints (a future phone app should use these same routes):
                                   kind/name/mode/since/until
     GET  /api/events/kinds        the kinds actually present in the log
     GET  /api/events/export       the same rows, as a csv or json download
+    GET  /api/midi/ports          MIDI ports this machine can reach (out/in)
     POST /api/trigger/{trigger}   simulate a button press
     POST /api/dev/led             show one look now, saving nothing
 
@@ -56,7 +57,7 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, scenes, sequencer
+from . import __version__, midi_io, scenes, sequencer
 from .audio import ToneLibrary
 from .config import (
     TRIGGER_TYPES,
@@ -493,6 +494,28 @@ def create_app(ctx: WebContext) -> FastAPI:
     async def reload_config():
         ctx.cm.reload()
         return {"effective": as_dict(ctx.cm.config)}
+
+    @app.get("/api/midi/ports")
+    async def midi_ports():
+        """What `midi_io.ports()`/`in_ports()` can see on this machine - the
+        same answer the midi action's `send()` and the metronome's
+        `ClockListener.start()` would resolve a typed name against.
+
+        `out` is what the midi action sends to; `in` is what the metronome's
+        clock listens on - two separate, separately-indexed lists, exactly
+        as midi_io keeps them (a machine commonly has different counts of
+        each).
+
+        Optional by construction, the same rule as colorEngine.js's
+        showLook: midi_io is optional-at-import and both its backends can be
+        absent (no rtmidi, not Windows), which is a normal state rather than
+        an error - so this never 500s, it answers with empty lists and a
+        note the port field can show instead of a suggestion.
+        """
+        try:
+            return {"available": True, "out": midi_io.ports(), "in": midi_io.in_ports(), "note": None}
+        except midi_io.MidiUnavailable as exc:
+            return {"available": False, "out": [], "in": [], "note": str(exc)}
 
     def _events(limit: int, kind, name, mode, since, until) -> list[dict]:
         """The filtered log as dicts. Shared by the JSON endpoint and the

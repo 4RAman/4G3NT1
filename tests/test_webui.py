@@ -254,6 +254,48 @@ async def test_config_reload_endpoint(client, ctx):
     assert ctx.cm.config.ble_device_name == "EditedViaSSH"
 
 
+# --- MIDI ports: TODO 22's last rough edge, the port field's dropdown ------
+
+
+async def test_midi_ports_endpoint_lists_out_and_in_separately(client, monkeypatch):
+    from aibutton import webui
+
+    # out (what the midi action sends to) and in (what the metronome's clock
+    # listens on) are separately indexed on a real machine, so the endpoint
+    # must keep them as two lists rather than merging them into one.
+    monkeypatch.setattr(webui.midi_io, "ports", lambda: ["Button 2", "loopMIDI Port"])
+    monkeypatch.setattr(webui.midi_io, "in_ports", lambda: ["Button 2"])
+    data = (await client.get("/api/midi/ports")).json()
+    assert data == {
+        "available": True,
+        "out": ["Button 2", "loopMIDI Port"],
+        "in": ["Button 2"],
+        "note": None,
+    }
+
+
+async def test_midi_ports_endpoint_degrades_with_no_backend(client, monkeypatch):
+    # Both backends can be absent - no rtmidi installed, or not Windows - and
+    # midi_io.py's own docstring says that is a normal state, not an error.
+    # The endpoint must answer gracefully rather than 500, so the port
+    # field's suggestions just have nothing to offer and it stays a plain
+    # text box.
+    from aibutton import midi_io, webui
+
+    def _unavailable():
+        raise midi_io.MidiUnavailable("no MIDI backend: install python-rtmidi, or run on Windows")
+
+    monkeypatch.setattr(webui.midi_io, "ports", _unavailable)
+    monkeypatch.setattr(webui.midi_io, "in_ports", _unavailable)
+    res = await client.get("/api/midi/ports")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["available"] is False
+    assert data["out"] == []
+    assert data["in"] == []
+    assert data["note"]  # says why, for whoever is staring at an empty dropdown
+
+
 async def test_trigger_presses_the_device(client, ctx):
     res = await client.post("/api/trigger/double_tap")
     assert res.status_code == 200

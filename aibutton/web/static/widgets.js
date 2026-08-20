@@ -54,7 +54,51 @@ function bound(spec, name, ctx) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-function textInput(type, spec, obj, onInput) {
+// Which api method (and which field of its JSON) a `suggest` name pulls
+// from - a table entry rather than a branch, so the midi action's `port`
+// (output) and the metronome's `clock_port` (input) can share one mechanism
+// while asking for different lists (Open/Closed). See webui.py's
+// /api/midi/ports and api.js's midiPorts().
+const SUGGEST_SOURCES = {
+  midi_out: { method: 'midiPorts', field: 'out' },
+  midi_in: { method: 'midiPorts', field: 'in' },
+};
+
+let _suggestSeq = 0;
+
+// Layers a <datalist> onto a text `input`, fed by the service - free text
+// stays first-class (a port plugged in after the page loaded still types in
+// fine; a <datalist> only ever offers, never restricts). Optional by
+// construction, the same rule as colorEngine.js's showLook: no `ctx.api`, no
+// matching method on it (the offline editor's FileApi has none), or a
+// failed call all leave the plain input exactly as it already was, rather
+// than surfacing an error - a missing suggestion is not a broken field.
+//
+// Returns a DocumentFragment holding [input, datalist] so the caller's DOM
+// shape does not change: appending a fragment moves its children in place
+// of itself, so the datalist rides along as an invisible sibling of the
+// input rather than adding a wrapping element around it. Returns null when
+// `spec.suggest` does not apply, so the caller falls back to the bare input.
+function attachSuggestions(spec, input, ctx) {
+  const source = spec.suggest && SUGGEST_SOURCES[spec.suggest];
+  if (!source || typeof ctx?.api?.[source.method] !== 'function') return null;
+
+  const listId = `suggest-${spec.key}-${(_suggestSeq += 1)}`;
+  const datalist = el('datalist', { id: listId });
+  input.setAttribute('list', listId);
+  ctx.api[source.method]()
+    .then((data) => {
+      const names = (data && data[source.field]) || [];
+      datalist.append(...names.map((name) => el('option', { value: name })));
+    })
+    .catch(() => {}); // no suggestions beats a broken field
+
+  const fragment = document.createDocumentFragment();
+  fragment.append(input, datalist);
+  return fragment;
+}
+
+function textInput(type, spec, obj, onInput, ctx) {
   const input = el('input', {
     type,
     className: 'inp',
@@ -67,7 +111,7 @@ function textInput(type, spec, obj, onInput) {
     onInput();
   });
   return {
-    el: wrap(spec, input, err),
+    el: wrap(spec, attachSuggestions(spec, input, ctx) ?? input, err),
     validate() {
       const msg = requiredError(spec, obj[spec.key]);
       err.textContent = msg ? 'Required' : '';
@@ -77,7 +121,7 @@ function textInput(type, spec, obj, onInput) {
 }
 
 const WIDGETS = {
-  text: (spec, obj, onInput) => textInput('text', spec, obj, onInput),
+  text: (spec, obj, onInput, ctx) => textInput('text', spec, obj, onInput, ctx),
 
   // A length of time, stored in seconds and shown in whichever unit reads
   // better. Seconds are canonical because the same field has to express a

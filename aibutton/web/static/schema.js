@@ -441,7 +441,7 @@ export const ACTIONS = [
       // The DAW-command preset above is the guided path; hand-tuning the raw
       // note/channel/port numbers is exactly the fringe surface Tinker is
       // for - a preset already fills all four correctly.
-      { key: 'port', label: 'MIDI port', kind: 'text', tier: 'tinker',
+      { key: 'port', label: 'MIDI port', kind: 'text', tier: 'tinker', suggest: 'midi_out',
         placeholder: 'Button',
         hint: 'Partial name is enough - Windows appends a number that '
           + 'changes per session, so "Button" matches "Button 2". Windows '
@@ -837,7 +837,7 @@ export const TEMPLATES = [
       { key: 'log_as', label: 'Log each session as', kind: 'text', required: true,
         placeholder: 'metronome',
         hint: 'One event per session, carries the tempo you settled on.' },
-      { key: 'clock_port', label: 'Follow a DAW (MIDI clock in)', kind: 'text', tier: 'tinker',
+      { key: 'clock_port', label: 'Follow a DAW (MIDI clock in)', kind: 'text', tier: 'tinker', suggest: 'midi_in',
         placeholder: 'leave blank to tap the tempo',
         hint: 'Partial MIDI input port name. Enable Clock Out in your DAW, '
           + 'point it here - tempo follows the project. Tapping then marks '

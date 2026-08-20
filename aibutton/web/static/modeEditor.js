@@ -46,9 +46,11 @@ export class ModeEditor {
   // Context handed to dynamic widgets (e.g. the enter_mode target select).
   // `getModes` returns the sibling modes so an options function can list
   // them; menu.js injects the provider, so this editor never reaches into
-  // the modes list itself (Dependency Inversion).
+  // the modes list itself (Dependency Inversion). `api` rides along for
+  // widgets whose suggestions come from the service (the MIDI port
+  // datalist) - optional by construction, absent in the offline editor.
   _fieldCtx() {
-    return { getModes: this.handlers.getModes || (() => []) };
+    return { getModes: this.handlers.getModes || (() => []), api: this.handlers.api };
   }
 
   _build() {

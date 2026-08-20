@@ -54,6 +54,17 @@ export class ConfigApi {
     return this._send('/api/dev/led', 'POST', body);
   }
 
+  /** MIDI ports this machine can reach: { available, out, in, note }. `out`
+   *  is what the midi action sends to, `in` is what the metronome's clock
+   *  listens on. `available` is false (with empty lists and a `note`) when
+   *  there is no MIDI backend - never an error, so a caller can always just
+   *  read the lists. Optional by construction like showLook: the offline
+   *  editor's FileApi has no such method, and the midi port field's
+   *  suggestions degrade to the plain text box when it is absent. */
+  midiPorts() {
+    return this._json('/api/midi/ports');
+  }
+
   // --- scenes ---
   // Every one of these returns the same shape (the saved scenes, which is
   // active, the resulting effective config, and anything waiting on a
