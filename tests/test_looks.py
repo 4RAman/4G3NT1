@@ -148,11 +148,14 @@ def test_a_mode_with_no_looks_stays_out_of_the_serialised_form():
 
 def test_every_led_state_is_owned_by_a_mode_or_by_the_button():
     """The split the Lights tab and the mode editor divide on: a state in
-    neither list would be uneditable, and one in both would be editable in two
+    neither list would be uneditable. LISTENING is the one deliberate dual
+    citizen (TODO 26): the ambient layer wears it with no mode involved, so
+    its global default stays editable, and a control page may also name a
+    look that overrides it only while the page is open - two scopes, not two
     places that disagree."""
     owned = {state for states in MODE_LED_STATES.values() for state in states}
     assert owned | set(SYSTEM_LED_STATES) == {s.value for s in LEDState}
-    assert not owned & set(SYSTEM_LED_STATES)
+    assert owned & set(SYSTEM_LED_STATES) == {LEDState.LISTENING.value}
 
 
 def test_every_template_declares_which_states_it_owns():
@@ -279,3 +282,132 @@ async def test_a_countdown_walks_its_ramp_over_the_mode_look(tmp_path):
     assert seen["effect"].style == "flash"
     assert seen["effect"].period_s == pytest.approx(0.4)
     assert seen["effect"].color == "#ff0000"
+
+
+# --- control surfaces: a page's own look (TODO 26) ----------------------
+#
+# `control` used to own no LED state at all - it "spoke the button's
+# vocabulary" and left it there. That was right for a remote (the interesting
+# feedback is whether the *action* worked), but wrong for a menu: bind
+# enter_mode and a control surface becomes a tree of pages, and knowing which
+# page you are on is the entire job. LISTENING - the state the surface
+# actually sits in between actions - is what got added to MODE_LED_STATES;
+# SUCCESS/ERROR stay transient flashes, exactly as before.
+
+def _pages_config(**over):
+    base = {
+        "sounds_enabled": False,
+        "web_enabled": False,
+        "looks": {"warm": dict(WARM), "cool": dict(COOL)},
+        "modes": [
+            {
+                "name": "Home", "template": "actions",
+                "activation": {"type": "always"},
+                "long_press": {"action": "enter_mode", "target": "Menu"},
+            },
+            {
+                "name": "Menu", "template": "control",
+                "activation": {"type": "manual"},
+                "short_press": {"action": "enter_mode", "target": "Mix"},
+                "double_tap": {"action": "log", "event": "menu_thing"},
+                "looks": {"LISTENING": "warm"},
+            },
+            {
+                "name": "Mix", "template": "control",
+                "activation": {"type": "manual"},
+                "short_press": {"action": "log", "event": "mix_thing"},
+                "looks": {"LISTENING": "cool"},
+            },
+        ],
+    }
+    base.update(over)
+    return base
+
+
+async def test_a_control_page_wears_the_look_it_names(tmp_path):
+    """The light wears the page's look the whole time the page is open - the
+    same machinery two Pomodoros use, one state along."""
+    seen = {}
+
+    async def script(device):
+        await _enter(device, TriggerType.LONG_PRESS)  # Home -> Menu
+        seen["effect"] = device.led_effect
+        seen["state"] = device.led_state
+
+    await _run(tmp_path, _pages_config(), script)
+    assert seen["state"] is LEDState.LISTENING
+    assert seen["effect"].color == "#ff4400"
+
+
+async def test_entering_a_sub_page_changes_the_pushed_look(tmp_path):
+    """`enter_mode` from inside a control surface hands the button off exactly
+    like the launcher does - `active_mode` changes, so the very next
+    `set_led` resolves the child's own look rather than the parent's."""
+    seen = {}
+
+    async def script(device):
+        await _enter(device, TriggerType.LONG_PRESS)   # Home -> Menu
+        seen["menu"] = device.led_effect
+        await _enter(device, TriggerType.SHORT_PRESS)  # Menu -> Mix
+        seen["mix"] = device.led_effect
+
+    await _run(tmp_path, _pages_config(), script)
+    assert seen["menu"].color == "#ff4400"
+    assert seen["mix"].color == "#0044ff"
+
+
+async def test_leaving_a_sub_page_restores_the_parents_look(tmp_path):
+    """The `return_after` path: a long press out of Mix hands the button back
+    to Menu, and Menu's own look comes back with it - not the palette's, and
+    not Mix's left over from a moment ago."""
+    seen = {}
+
+    async def script(device):
+        await _enter(device, TriggerType.LONG_PRESS)   # Home -> Menu
+        await _enter(device, TriggerType.SHORT_PRESS)  # Menu -> Mix
+        await _enter(device, TriggerType.LONG_PRESS)   # leave Mix -> Menu
+        seen["effect"] = device.led_effect
+        seen["state"] = device.led_state
+
+    await _run(tmp_path, _pages_config(), script)
+    assert seen["state"] is LEDState.LISTENING
+    assert seen["effect"].color == "#ff4400"
+
+
+async def test_a_pages_look_survives_an_actions_success_flash(tmp_path):
+    """A fired command still gets its own SUCCESS flash - `run_control`'s
+    feedback is per action, not per app - but the light must not be left
+    there. `resting()` re-pushes LISTENING once the flash's confirm delay
+    passes, and now that LISTENING is ownable that repaint resolves the
+    page's look again rather than losing it to two seconds of green."""
+    seen = {}
+
+    async def script(device):
+        await _enter(device, TriggerType.LONG_PRESS)   # Home -> Menu
+        await _enter(device, TriggerType.DOUBLE_TAP)   # menu_thing, logged
+        await asyncio.sleep(main._CONTROL_CONFIRM_S + 0.1)
+        seen["effect"] = device.led_effect
+        seen["state"] = device.led_state
+
+    await _run(tmp_path, _pages_config(), script)
+    assert seen["state"] is LEDState.LISTENING
+    assert seen["effect"].color == "#ff4400"
+
+
+async def test_a_page_naming_no_look_costs_no_wire_traffic(tmp_path):
+    """The existing invariant, one state along: a control surface that
+    chooses nothing for LISTENING still resolves to None - the palette entry,
+    not a borrowed effect - exactly like every other mode that owns a state
+    and leaves it uncoloured."""
+    modes = _pages_config()["modes"]
+    modes[1] = {k: v for k, v in modes[1].items() if k != "looks"}
+    seen = {}
+
+    async def script(device):
+        await _enter(device, TriggerType.LONG_PRESS)  # Home -> Menu
+        seen["effect"] = device.led_effect
+        seen["state"] = device.led_state
+
+    await _run(tmp_path, _pages_config(modes=modes), script)
+    assert seen["state"] is LEDState.LISTENING
+    assert seen["effect"] is None

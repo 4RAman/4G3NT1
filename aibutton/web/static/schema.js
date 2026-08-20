@@ -1112,14 +1112,18 @@ TEMPLATES.push({
   },
 });
 
-// ledStates is none: a control surface speaks the button's existing
-// vocabulary - LISTENING while it waits, SUCCESS or ERROR per action - because
-// what you want to know is whether the thing on the other end took the
-// message, not what app you are in.
+// ledStates owns LISTENING - the state a control surface actually sits in
+// between actions (SUCCESS/ERROR are transient flashes, not something a
+// page can wear). A remote's page can be a menu too: bind enter_mode and
+// you get a tree of pages, and knowing which one you are on is the whole
+// job. Naming a look for LISTENING here wears it the whole time the page
+// is open and swaps it on every sub-page transition, at zero wire cost -
+// a page that names nothing still falls back to the palette's LISTENING
+// colour, exactly as before this existed.
 // (Comment above `type` so the drift test reads the two keys as adjacent.)
 TEMPLATES.push({
   type: 'control',
-  ledStates: [],
+  ledStates: ['LISTENING'],
   label: 'Control surface',
   nature: 'takeover',
   allowedActivations: ['manual'],
@@ -1501,8 +1505,11 @@ export const LED_STATES = [
 export const MODE_LED_STATE_KEYS = new Set(
   TEMPLATES.flatMap((t) => t.ledStates || []),
 );
+// LISTENING is the one dual citizen: the ambient layer wears it while an
+// action runs - no mode involved - so its global default stays on the Lights
+// tab even though a control page may also name a look for it (TODO 26).
 export const SYSTEM_LED_STATES = LED_STATES.filter(
-  (s) => !MODE_LED_STATE_KEYS.has(s.key),
+  (s) => s.key === 'LISTENING' || !MODE_LED_STATE_KEYS.has(s.key),
 );
 export const MODE_LED_STATES = LED_STATES.filter(
   (s) => MODE_LED_STATE_KEYS.has(s.key),

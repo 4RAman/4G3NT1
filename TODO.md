@@ -136,7 +136,7 @@ view.
 | **Play** — timing/rhythm and guessing games | **16** ✔ | Done for forgiving games; tight rhythm still needs Stage 3's on-device runtime |
 | **Reaching other software** — OSC ✔, MIDI out ✔, clock in ✔, transport state | ✔ shipped with **7**, **22** ✔, **24** ✔, **25** | Sending and listening both work. **25** wants MCU's *return* feedback, which needs the DAW's Send To pointed back |
 | **One machine, many timers** — Pomodoro/HIIT/Tabata as presets | **20** ✔ | Done |
-| **Getting around** — launcher ✔, control surfaces ✔, colour-coded pages | **0a** ✔, **26**, **27** ✔, **28** ✔ | **26** decides the launcher's fate |
+| **Getting around** — launcher ✔, control surfaces ✔, colour-coded pages ✔ | **0a** ✔, **26** ✔, **27** ✔, **28** ✔ | Only **26b**, an eyeball test on real hardware |
 | **Power** — sleep, wake, deliberate off | **29** | Blocked on **0c** (the button is de-soldered) and on measuring what it draws |
 
 Two things sit outside the table. **0c** is hardware (re-solder + the 5 V
@@ -532,47 +532,14 @@ and returns to zero, *driven by what the DAW reports* rather than by what the
 button last sent; a session where someone clicks Stop in the DAW by hand does
 not invert the button; and the no-feedback case is honest about being a guess.
 
-### 26. Menus: colour-coded Actions pages, and what happens to the launcher
+### 26b. Check the launcher's colour-coding actually reads *(hardware walk)*
 
-**Asked for 2026-08-19**, and half of it shipped the same day. The request:
-the main menu should be **"Actions" — fully customisable, with more Actions
-pages addable** — and menus should be **clearly colour coded**.
-
-**The customisable-pages half exists**: the `control` template is a takeover
-whose four gestures each fire an action, and any of them can `enter_mode`
-another one, so a tree of Actions pages costs no new code. What is missing is
-the colour, and a decision about the launcher.
-
-**Colour is the real work, and it is not the same problem the launcher solved.**
-A launcher shows *one app at a time* and wears that app's colour
-(`app_look`), so it is already colour-coded in the only way a sequential menu
-can be. A control surface shows **four gestures at once**, so there is no "the
-current entry" to colour - what can carry an identity is the **page**. That
-suggests: each Actions page gets its own look, the light wears it the whole
-time the page is open, and branching to a sub-page visibly changes colour. That
-is a `ledStates` entry or an inline colour on `ControlBehavior`, and it is
-genuinely new - the template shipped with `ledStates: []` on the argument that
-a remote should speak the button's existing vocabulary. That argument was about
-a *remote*; a **menu** is the counter-case, because knowing where you are is
-the entire job.
-
-**The launcher question, which should be answered before building.** The
-launcher's advantage is that it needs no configuration - `targets: []` lists
-every takeover automatically, so a newly added app appears with nobody editing
-a menu. An Actions page is explicit: more control, more upkeep, and it will go
-stale when an app is added. **These are complementary and both should probably
-survive**, with the Actions page as the *default* front door and the launcher
-still reachable as "everything installed". Deleting the launcher to make room
-for this would trade a self-maintaining menu for one that needs maintaining.
-
-**Also check the existing colour-coding actually reads.** The launcher already
-colours each entry by app; if that is not landing, the cause may be that
-several apps resolve to similar palette colours rather than that the feature is
-missing. Look before rebuilding - `app_look` in main.py.
-
-**Definition of done.** An Actions page carries a colour, shows it while open,
-and a branch visibly changes it; the launcher's fate is decided in writing; and
-whichever is the default front door is what a fresh config ships with.
+What is left of item 26 after the code shipped (see Done): the launcher
+already colours each entry by app; if that is not landing on the real ring,
+the cause may be several apps resolving to similar palette colours rather
+than a missing feature. Look before rebuilding — `app_look` in main.py. The
+new page colours (a control mode's LISTENING look) want the same eyeball
+test in the same sitting.
 
 ### 29. Power: sleep, wake, and a hold that turns it off
 
@@ -838,6 +805,22 @@ descriptor change per template, not new code.
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**26. Colour-coded Actions pages, and the launcher's fate**~~ — shipped
+  2026-08-19 (the eyeball check on hardware split off as **26b**). A control
+  page owns its colour at zero new code: `MODE_LED_STATES["control"]` claims
+  LISTENING — the state the page actually sits in — so a page names a look,
+  wears it the whole time it is open (`resting()` already re-pushes after
+  every action's flash), and a sub-page visibly changes it via the machinery
+  `enter_mode` already had. LISTENING became the system's one **dual
+  citizen** (see CLAUDE.md's Lights-tab invariant): the ambient layer wears
+  it with no mode involved, so it stays globally editable too. **The
+  launcher's fate, decided in writing: both survive.** The launcher stays
+  the fresh-config front door — it is self-maintaining (`targets: []` lists
+  every app), and a fresh config cannot know what pages its user wants;
+  an Actions page becomes the front door by binding it yourself, which is
+  the power move and the documented intent. A fresh config ships
+  `double_tap → Launcher` (TODO 5).
 
 - ~~**14. Tinker mode**~~ — shipped 2026-08-19, built exactly like Tips:
   `tier: 'tinker'` on ~36 field descriptors (default basic when absent),

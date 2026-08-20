@@ -288,6 +288,11 @@ Three consequences for code written today:
   places that need a colour mount the engine; they do not grow their own.
 - **The Lights tab is the button's vocabulary; a mode's colour lives on the
   mode.** IDLE/LISTENING/THINKING/SUCCESS/ERROR are edited once, globally.
+  LISTENING is the one dual citizen (TODO 26): the ambient layer wears it
+  with no mode involved, so its global default stays on the Lights tab —
+  *and* a control page may name a look for it, overriding the global colour
+  only while that page is open. Two scopes, one state; every other state
+  belongs to exactly one side.
   Everything a mode owns (ALERT/TIMING/COUNTING/WORKING/RESTING/METRONOME) is
   edited on that mode's page, because a mode you configure in two tabs is not
   modular. Their palette entries **stay in config** as the invisible fallback a

@@ -76,8 +76,12 @@ def test_mode_owned_states_still_have_palette_entries():
         assert state in palette, state
 
 
-def test_system_and_mode_states_are_still_disjoint():
-    assert not set(SYSTEM_LED_STATES) & _mode_owned_states()
+def test_system_and_mode_states_overlap_only_on_listening():
+    """Disjoint, with one deliberate exception (TODO 26): LISTENING is worn
+    by the ambient layer with no mode involved, so its global default must
+    stay on the Lights tab - and a control page may also name a look for it,
+    overriding the global colour only while that page is open."""
+    assert set(SYSTEM_LED_STATES) & _mode_owned_states() == {"LISTENING"}
 
 
 # --- the engine works with nothing plugged in ------------------------------

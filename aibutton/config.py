@@ -864,17 +864,31 @@ MODE_LED_STATES: dict[str, tuple[str, ...]] = {
     # those are the app's own, not the button's vocabulary.
     "signal": (),
     # LISTENING while it waits, then the usual SUCCESS/ERROR per action - the
-    # same vocabulary the ambient layer already speaks, which is the point of
-    # the template. Giving a remote its own colour would be a new LEDState
-    # earning nothing: the interesting feedback is whether the *action* worked.
-    "control": (),
+    # same vocabulary the ambient layer already speaks. But a control surface
+    # is not only a remote: bind enter_mode and it is a menu of pages, and a
+    # menu's entire job is telling you where you are. So LISTENING - the
+    # state it actually sits in between actions - is ownable: a page names a
+    # look for it and wears that colour the whole time it is open, and
+    # walking into a sub-page changes it, at zero wire cost (set_led already
+    # resolves the active mode's look for whatever state it pushes, and
+    # `resting()` in main.py re-pushes LISTENING after every action's
+    # SUCCESS/ERROR flash). A page that names nothing still resolves to the
+    # palette's LISTENING colour, exactly as before this existed.
+    "control": (LEDState.LISTENING.value,),
 }
 
-# The rest: the button's own vocabulary, which no mode owns.
+# The rest: the button's own vocabulary, which no mode owns. LISTENING is
+# the one dual citizen: the ambient layer wears it while an action runs -
+# no mode involved - so it must stay globally editable, and a control page
+# may *also* name a look for it, overriding the global colour only while
+# that page is open. Deriving it out with the others would delete the
+# system default from the Lights tab while the ambient layer still
+# renders it.
 SYSTEM_LED_STATES: tuple[str, ...] = tuple(
     state.value
     for state in LEDState
-    if not any(state.value in states for states in MODE_LED_STATES.values())
+    if state is LEDState.LISTENING
+    or not any(state.value in states for states in MODE_LED_STATES.values())
 )
 
 
