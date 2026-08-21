@@ -131,7 +131,7 @@ view.
 | **The gesture engine** — N taps, hold levels | 0b·2 ✔, 5-tap gesture ✔, **28** ✔ | Taps are done. Hold levels still need firmware and are the cheap half of **29** |
 | **Depth without the wire** — metronome config ✔, event values ✔, filtering/export ✔ | **1** ✔, **9** ✔, **12**, **14** ✔ | None — ship freely |
 | **Reach and hosting** — launcher ✔, ten apps ✔, remote UI | **0a** ✔, **7** ✔, **8** | Only the hardware walk left on 7 |
-| **The light as a language** — ladder ✔, where colour is edited ✔, stop list core ✔ | **19** (a ✔, b core ✔, c, d ✔, e ✔) | **19c** and 19b's editor UI left |
+| **The light as a language** — ladder ✔, where colour is edited ✔, stop list ✔ | **19** (a ✔, b ✔, c *checked, not free*, d ✔, e ✔), **36** | Item **19** is spent; **36** is where the light goes next — curves, a style per stop, one primitive |
 | **Saying a number** — ambient counting ✔, count readout ✔ | **15** ✔, **17** ✔ | Only the human read test, on hardware (same sitting as **26b**) |
 | **Play** — timing/rhythm and guessing games | **16** ✔ | Done for forgiving games; tight rhythm still needs Stage 3's on-device runtime |
 | **Reaching other software** — OSC ✔, MIDI out ✔, clock in ✔, transport state | ✔ shipped with **7**, **22** ✔, **24** ✔, **25** | Sending and listening both work. **25** wants MCU's *return* feedback, which needs the DAW's Send To pointed back |
@@ -353,6 +353,115 @@ performance": (a) *habit* analytics for the user (mode usage, streaks,
 time-of-day patterns — a dashboard over `EventStore`), (b) *device* telemetry
 (BLE reconnect frequency, gesture-to-feedback latency, dropped presses), or
 (c) *hosting* metrics once item 8 exists. **Ask which.**
+
+### 36. One colour primitive — curves, effects per stop, and one editor
+
+Asked for 2026-08-21 as "the primo colour editor", and the framing that
+justifies it is not the UI. [ARCHITECTURE.md](ARCHITECTURE.md) lists three
+ways an app may gain a capability and ranks **"extend the effect set (a
+system decision, not an app's)"** second, above shipping native code; the
+rule it has to satisfy is *bounded by construction* — no loops, no
+allocation, no recursion, worst case knowable before the app runs. **A stop
+list with curves is exactly that**: a finite table. So this is the sanctioned
+growth path for what a light can say, and it costs the on-device runtime
+nothing it was not already prepared to pay.
+
+**The vision, as given.** A step sequencer over "nodes": 0% solid red, 50%
+solid yellow, 75% flashing yellow, 100% solid green. A loop checkbox (unchecked
+= play once, then back to the previous colour). Positions in percent, or
+seconds/ms, or beats, chosen from a dropdown. Interpolation you can shape
+between nodes — hold red a while, then a fast exponential run up to yellow,
+then a linear fade to green — the synth idea of a waveform whose peaks are
+shorter than its valleys and lag behind centre. And programmable one-offs:
+a confirmation that is *green pause green pause green blink green blink* over
+two seconds rather than "the flash style".
+
+**What was already built.** [sequencer.py](aibutton/sequencer.py) (item 19b,
+2026-08-19) is the step sequencer: ordered stops, per-stop `hold_s` and
+`fade_s`, `repeat`, and `repeat: false` meaning play once and fall back. The
+colour engine already edits them. So the ask is the four things below, not the
+whole thing.
+
+**The unification is real, with one correction.** sequencer.py's own docstring
+already draws the diagram — `ramp` is driven by progress 0→1, a stop list by
+the clock, a `ladder` by a counter — and these *are* one primitive with three
+clocks. The correction: the drive belongs to the **sequence**, not the stop
+(mixing beats and milliseconds in one list leaves `plan_at` with no single
+timeline, and it is currently total over its domain). The consequence worth
+deciding before code: a ramp and a ladder are parameterised by something
+*outside themselves* — a countdown owns its progress, a metronome owns its
+beat — while a stop list owns its own clock and is the only one of the three
+that can stand alone. So a percent-driven look is meaningless on IDLE. **One
+editor for all three is right; where you may bind the result depends on the
+drive**, which is `MODE_LED_STATES`-level logic, not editor logic.
+
+**Where "it replaces every other colour mode" stops being true.** The system
+palette ships to the device and renders **unattended**, which is why
+`_parse_palette` is effect-only. A sequence is a schedule only the host can
+walk. That constraint gets *more* important as the device gets more
+autonomous, not less. The resolution taken here is better than replacement:
+**the sequence is the authoring surface and `LedEffect` is the fallback
+form** — the same relationship `looks` and `led_palette` already have.
+
+**Asymmetric periodic styles are deliberately not a wire change.** Giving
+`breathe` a duty cycle and a phase skew would mean firmware, a protocol
+change and a reflash, against a v1 CLAUDE.md just froze with the bar at "a
+capability the device physically cannot express today". A host-walked stop
+list approximates any curve with no wire change at all, so the shape is
+available immediately as a sequence and only becomes a cheap device-rendered
+primitive if a v2 ever happens for other reasons. **Do not spend a style code
+on this.**
+
+**Bandwidth is the real limit, and it decides what sequences are for.**
+`_SEQUENCE_MIN_STEP_S` is 50 ms because feedback is fire-and-forget and
+`BLEDevice` drops rather than waits. A two-second exponential fade is ~40
+radio writes: fine for something that *happens* (a confirmation, a transition,
+an alarm), wrong for something that idles. Rich sequences are events. IDLE
+stays a device-rendered style until Stage 3 moves the walker onto the device.
+
+**Concept count is the other limit.** Item **30** already notes there are
+eleven concepts here and a novice holds about three. A node editor with curves
+and unit dropdowns is unambiguously **tinker-tier**; `LOOK_PRESETS` is the
+front door, and today it cannot offer a ramp or a stop list at all. Making the
+preset library carry sequences is what stops the power tool being the only
+door.
+
+#### a) Sequence presets, and a system state may name a look
+
+`LOOK_PRESETS` becomes effect-*or*-sequence, and the system states
+(IDLE/LISTENING/THINKING/SUCCESS/ERROR) may name a look from the pool the way
+a mode already may. **The precedent already exists**: `control` → `LISTENING`
+is a dual citizen in `MODE_LED_STATES`, a page naming a look that overrides
+the global colour while it is open. Generalising it is not a new concept.
+Resolution order becomes explicit effect → the active mode's look → the global
+state look → `None`, which is what `set_led` already means by "fall back to
+the palette". This is what unblocks the programmable confirmation, and it is
+the smallest of the four.
+
+#### b) A curve on each stop
+
+`Stop.curve`: linear (today's behaviour and the default), ease-in, ease-out,
+ease-in-out, exponential. Pure, ~30 lines, and it survives the Stage-3 move
+unchanged because `plan_at` still answers only "what colour now, and for how
+long". No firmware mirror: firmware/led.py does not walk sequences, so nothing
+drifts.
+
+#### c) A stop may carry a style, not only a colour
+
+What makes "75% flashing yellow" and the rainbow applause at the end
+expressible. `sequencer.py` is a leaf and must not import `config`, so a stop
+carries plain `style`/`period_s` fields and main.py assembles the `LedEffect`.
+**The style applies during the stop's hold; a fade is always plain solid
+interpolation** — a flashing target half-way through a crossfade is not a
+thing anyone means. Care needed at the flash floor: this must be `flash_safe`
+applied *inside* `sequence_safe`, not a second call site (CLAUDE.md).
+
+#### d) `drive` on the sequence — the actual unification
+
+`clock` (today), `progress` (what `ramp` does), `beats` (what `ladder` does).
+The biggest of the four and the one with a decision under it: which states and
+templates may bind which drive. **Not started** — (a) to (c) are useful on
+their own and none of them presumes the answer.
 
 ### 35. A freshly seeded scene fails its own Check
 
