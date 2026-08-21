@@ -658,9 +658,33 @@ webui.py mirroring main.py's driver.
 
 #### c) Reuse the ramp widget wherever a gradient makes sense
 
-The `ramp` widget exists and is only offered on the countdown. Pomodoro blocks,
-hold levels and any "how far through" surface want the same control. A
-descriptor change per template, not new code.
+**Checked 2026-08-20: "a descriptor change per template, not new code" is
+wrong, and the item as written is already half-done.** Two corrections.
+
+The widget is *not* only offered on the countdown - hot/cold and reaction both
+offer it already (`HOTCOLD_RAMP`, `REACTION_RAMP` in schema.js), and both walk
+it in their run loops. Those are the templates whose ramp is driven by *how
+well you did*; the countdown's is driven by time. Between them they are every
+template that currently has a `ramp` field at all.
+
+That leaves Pomodoro as the only real candidate, and it costs four files, not
+one:
+
+- `PomodoroBehavior` has no `ramp` field, so config.py needs the field, a
+  `_default_pomodoro_ramp()`, a `_parse_ramp` call in `_parse_pomodoro` and a
+  line in `as_dict` - the same four-place change any new template field costs.
+- **`run_pomodoro` has nowhere to walk it.** Its `show()` is called on phase
+  transitions and gestures only; it never repaints while a block runs. The
+  countdown's ramp works because `run_countdown` has a 1 s tick
+  (`_COUNTDOWN_TICK_S`) and a `paint(progress)` that pushes only when the
+  colour visibly moved (`_COUNTDOWN_COLOR_STEP`). Giving Pomodoro a ramp means
+  giving it that tick - new run-loop code, which is the one place CLAUDE.md
+  says logic should *not* go, and which Stage 3 will rewrite.
+
+So the honest cost is "a template field plus a repainting tick", and the
+tick is the part worth thinking about before it is written. **Not built.**
+Hold levels are not a candidate either way: `GESTURE_HOLD` is claimed and
+unimplemented, so there is no progress value to ramp over yet (item **29**).
 
 ---
 
