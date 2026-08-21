@@ -386,19 +386,23 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     sequence_task: asyncio.Task | None = None
 
     async def _drive_sequence(state: LEDState, seq: sequencer.Sequence) -> None:
-        """Walk `seq`'s planner, pushing each stepped colour as a plain solid
-        `LedEffect` - never a Sequence itself, since `device.set_led` duck-types
-        its `effect` on `.style`/`.color`/`.color2`/`.period_s` (device.py) and
-        a Sequence has none of those.
+        """Walk `seq`'s planner, pushing each frame as a plain `LedEffect` -
+        never a Sequence itself, since `device.set_led` duck-types its
+        `effect` on `.style`/`.color`/`.color2`/`.period_s` (device.py) and a
+        Sequence has none of those.
+
+        A frame is solid mid-fade and wears the stop's own style during its
+        hold (TODO 36c), so a stop list can hold "flashing yellow" as one of
+        its nodes without the fade into it flashing on the way.
 
         Pushes go straight through `device.set_led`, *not* through the
         `set_led` closure above: that closure cancels this very task on every
         call, and calling it from inside its own task would cancel itself one
-        step in. `flash_safe` is skipped for the same reason `ladder_paint`'s
-        solid ticks skip it - every pushed style here is "solid", which
-        `device.STYLE_STROBES` never floors anyway; the floor for a sequence
-        is `sequence_safe`, already applied once to `seq` before this task
-        started, over the stop *dwells* rather than over each tiny push.
+        step in. `flash_safe` is skipped here because `sequence_safe` has
+        already floored *both* axes of this sequence before the task started -
+        the stop dwells and each stop's own style period - so there is nothing
+        left for a per-push clamp to catch, and adding one would be the second
+        call site CLAUDE.md forbids.
 
         **Assumes the host is awake and connected**, like every run_* loop in
         this file (CLAUDE.md) - the sleeps below are wall-clock, and a host
@@ -409,8 +413,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         loop = asyncio.get_running_loop()
         start = loop.time()
         while True:
-            color, wait = sequencer.plan_at(seq, loop.time() - start, _SEQUENCE_MIN_STEP_S)
-            if color is None:
+            frame, wait = sequencer.plan_at(seq, loop.time() - start, _SEQUENCE_MIN_STEP_S)
+            if frame is None:
                 # A one-shot finished. `None` is what `set_led` (and the
                 # device) already mean by "no override" - falling back to the
                 # palette entry, not to whatever `active_mode` still names for
@@ -419,7 +423,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 status.led_state = state.value
                 status.led_effect = None
                 return
-            effect = LedEffect(style="solid", color=color)
+            effect = LedEffect(
+                style=frame.style, color=frame.color, period_s=frame.period_s
+            )
             device.set_led(state, effect)
             status.led_state = state.value
             status.led_effect = effect
@@ -452,7 +458,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
         if effect is None:
             effect = look_for(cm.config, active_mode, state)
-        if standby and state is LEDState.IDLE and effect is None:
+        if standby and state is LEDState.IDLE:
             # Standby dims the *resting* light and only that. It is the ambient
             # layer that is asleep, so IDLE is the one state that should look
             # different, and a scheduled alarm ringing through a standby must
@@ -461,6 +467,13 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             # that drop back to IDLE - those would drift, and one of them
             # already does the drop after a takeover the ambient layer never
             # saw start.
+            #
+            # It wins over whatever IDLE would otherwise wear, a named look
+            # included (TODO 36a): the one thing this light has to say is
+            # "asleep", and a configured IDLE look is exactly what would hide
+            # it. Nothing reachable pushes an explicit IDLE effect while
+            # asleep - the readout is ambient, so the gate in `handle` has
+            # already turned it away.
             effect = LedEffect(style="solid", color=_STANDBY_COLOR)
 
         if isinstance(effect, sequencer.Sequence):

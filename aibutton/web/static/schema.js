@@ -1499,6 +1499,24 @@ export function levelHex(percent) {
   return `#${pair}${pair}${pair}`;
 }
 
+// How a stop's fade is shaped between its two colours (TODO 36b). Mirrors
+// `sequencer.CURVES`; a curve the parser does not know falls back to linear
+// rather than erroring, so drift here costs a shape and never a look.
+//
+// The synth reading is the useful one, and it is what these are *for*: a fade
+// is a segment of an envelope, so "hold red a while then run fast up to
+// yellow" is a long hold, a short fade, and `ease_in`. Asymmetric *periodic*
+// motion - a breathe whose peak is narrower than its valley - is deliberately
+// not a style here: that would be a firmware change against a frozen protocol,
+// and a stop list approximates it with no wire cost at all.
+export const CURVES = [
+  { value: 'linear', label: 'Linear', hint: 'Even the whole way.' },
+  { value: 'ease_in', label: 'Slow start', hint: 'Lingers, then runs - a build.' },
+  { value: 'ease_out', label: 'Slow finish', hint: 'Moves at once, then settles - a landing.' },
+  { value: 'ease_in_out', label: 'Slow both ends', hint: 'Eases out and back in - the gentlest.' },
+  { value: 'exponential', label: 'Exponential', hint: 'Barely moves, then rushes. The steepest one.' },
+];
+
 export const LED_STYLES = [
   { type: 'solid', label: 'Solid', uses: ['color'],
     describe: () => 'held' },
@@ -1562,6 +1580,14 @@ export const LED_STATE_BY_KEY = Object.fromEntries(LED_STATES.map((s) => [s.key,
 
 // Built-in looks, offered wherever a colour is chosen.
 //
+// **An entry carries an `effect` or a `sequence`, never both** (TODO 36a). The
+// second kind is a stop list, so it is only offered where sequences are
+// allowed (`allowSequence`) - the system palette rows refuse them, because a
+// palette entry ships to the device and renders unattended while a sequence
+// is a schedule only the host can walk. That is the same rule
+// `_parse_palette` enforces on the Python side, applied one step earlier so
+// the picker never shows you something the Save would drop.
+//
 // **A starting point, never a stored thing.** Picking one copies its effect
 // into whatever you are editing; nothing here lands in config.json unless you
 // save it as a named look. That is why there can be forty of them without
@@ -1579,7 +1605,11 @@ export const LED_STATE_BY_KEY = Object.fromEntries(LED_STATES.map((s) => [s.key,
 //   - Only `flash` and `alternate` strobe, and those are floored at 3 Hz
 //     (WCAG 2.3.1). Every strobing preset below sits at 0.45 s or slower, so
 //     the floor never has to rewrite one - test_look_presets.py fails if that
-//     stops being true.
+//     stops being true. **A sequence preset has to clear two floors, not
+//     one**: a stop that strobes obeys the rule above, and every stop's dwell
+//     (hold + fade) clears half the floor once the sequence repeats or runs
+//     past three stops (`config.sequence_safe`). 0.2 s is the shortest dwell
+//     used below, which leaves room at the default 3 Hz setting.
 //
 // The array is deliberately **strict JSON**: test_look_presets.py slices it
 // out and feeds every effect through the real Python parser, so a preset
@@ -1666,8 +1696,55 @@ export const LOOK_PRESETS = [
   { "id": "cyberpunk", "label": "Cyberpunk", "group": "Play",
     "effect": { "style": "alternate", "color": "#ff00ff", "color2": "#00ffff", "period_s": 0.7 } },
   { "id": "firefly", "label": "Firefly", "group": "Play",
-    "effect": { "style": "breathe", "color": "#b6ff00", "color2": "#000000", "period_s": 2.2 } }
+    "effect": { "style": "breathe", "color": "#b6ff00", "color2": "#000000", "period_s": 2.2 } },
+
+  { "id": "three-cheers", "label": "Three Cheers", "group": "Patterns",
+    "sequence": { "repeat": false, "stops": [
+      { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 },
+      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+      { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 },
+      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+      { "color": "#00ff2a", "hold_s": 0.9, "fade_s": 0, "style": "flash", "period_s": 0.45 }
+    ] } },
+  { "id": "sunrise-run", "label": "Sunrise Run", "group": "Patterns",
+    "sequence": { "repeat": false, "stops": [
+      { "color": "#ff1a00", "hold_s": 1.1, "fade_s": 0 },
+      { "color": "#ffd400", "hold_s": 0.4, "fade_s": 0.7, "curve": "exponential" },
+      { "color": "#00ff2a", "hold_s": 0.6, "fade_s": 0.9, "curve": "linear" }
+    ] } },
+  { "id": "heartbeat", "label": "Heartbeat", "group": "Patterns",
+    "sequence": { "repeat": true, "stops": [
+      { "color": "#ff0033", "hold_s": 0.17, "fade_s": 0 },
+      { "color": "#2a0008", "hold_s": 0.17, "fade_s": 0.17, "curve": "ease_out" },
+      { "color": "#ff0033", "hold_s": 0.17, "fade_s": 0 },
+      { "color": "#0a0002", "hold_s": 0.75, "fade_s": 0.34, "curve": "ease_out" }
+    ] } },
+  { "id": "nope", "label": "Nope", "group": "Patterns",
+    "sequence": { "repeat": false, "stops": [
+      { "color": "#ff0000", "hold_s": 0.2, "fade_s": 0 },
+      { "color": "#200000", "hold_s": 0.18, "fade_s": 0 },
+      { "color": "#ff0000", "hold_s": 0.55, "fade_s": 0 }
+    ] } },
+  { "id": "wake-up", "label": "Wake Up", "group": "Patterns",
+    "sequence": { "repeat": true, "stops": [
+      { "color": "#100800", "hold_s": 0.4, "fade_s": 1.8, "curve": "ease_in" },
+      { "color": "#ffb400", "hold_s": 0.6, "fade_s": 1.2, "curve": "ease_in_out" },
+      { "color": "#100800", "hold_s": 0.4, "fade_s": 1.6, "curve": "ease_out" }
+    ] } }
 ];
+
+/** True if `preset` is a stop list rather than a device-rendered effect. */
+export function presetIsSequence(preset) {
+  return Boolean(preset && preset.sequence);
+}
+
+/** The look a preset drops in, whichever shape it is. Copied, never shared -
+ *  a preset is a starting point and editing what you picked must not edit the
+ *  library you picked it from. */
+export function presetLook(preset) {
+  const source = preset.sequence || preset.effect;
+  return JSON.parse(JSON.stringify(source));
+}
 
 /** The preset groups, in the order they should be offered. */
 export const LOOK_PRESET_GROUPS = [...new Set(LOOK_PRESETS.map((p) => p.group))];

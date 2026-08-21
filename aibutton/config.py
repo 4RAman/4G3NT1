@@ -1243,7 +1243,37 @@ def _parse_stop(raw, where: str) -> sequencer.Stop | None:
         log.error("config: %s.fade_s must be a number >= 0 - using 0.0", where)
         fade_s = 0.0
 
-    return sequencer.Stop(color=color, hold_s=float(hold_s), fade_s=float(fade_s))
+    # How the fade is shaped (TODO 36b). Linear is both the default and what
+    # every stop written before this existed meant, so an old config parses to
+    # exactly the sequence it always did.
+    curve = raw.get("curve", "linear")
+    if curve not in sequencer.CURVES:
+        log.error(
+            "config: %s.curve must be one of %s - using 'linear'",
+            where, "/".join(sequencer.CURVES),
+        )
+        curve = "linear"
+
+    # What the *hold* does (TODO 36c) - solid unless asked otherwise, which is
+    # again what every stop meant before this field existed.
+    style = raw.get("style", "solid")
+    if not (isinstance(style, str) and style in LED_STYLES):
+        log.error(
+            "config: %s.style must be one of %s - using 'solid'",
+            where, "/".join(LED_STYLES),
+        )
+        style = "solid"
+
+    period_s = raw.get("period_s", 1.0)
+    if not (isinstance(period_s, (int, float)) and not isinstance(period_s, bool)
+            and period_s > 0):
+        log.error("config: %s.period_s must be a number > 0 - using 1.0", where)
+        period_s = 1.0
+
+    return sequencer.Stop(
+        color=color, hold_s=float(hold_s), fade_s=float(fade_s),
+        curve=curve, style=style, period_s=float(period_s),
+    )
 
 
 def _parse_sequence(raw: dict, where: str, default: LedEffect) -> LedEffect | sequencer.Sequence:
@@ -1349,6 +1379,58 @@ def _parse_looks(raw) -> dict[str, LedEffect | sequencer.Sequence]:
     return looks
 
 
+def _parse_state_looks(raw, known: set[str]) -> dict[str, str]:
+    """The system states' own look names: `{"SUCCESS": "three-blinks"}`.
+
+    **The generalisation of a thing that already existed.** A control page can
+    already name a look for LISTENING (`MODE_LED_STATES["control"]`, TODO 26),
+    overriding the global colour while the page is open. This is that, one
+    scope up: the button's own vocabulary - IDLE/LISTENING/THINKING/SUCCESS/
+    ERROR - may name a pool look instead of being limited to what the palette
+    can hold.
+
+    Which matters because the palette **cannot hold a sequence**. Its entries
+    ship to the device and render unattended, so they are one style the
+    firmware can draw alone; a stop list is a schedule only the host can walk
+    (`_parse_palette`). Naming a look is what lets SUCCESS be "green, pause,
+    green, pause, green, blink blink" rather than "the flash style", while
+    the palette entry stays underneath as the colour a host-less button still
+    shows. Authoring surface over fallback form - the same relation `looks`
+    and `led_palette` already have, not a replacement for either.
+
+    Resolution order ends up: an explicit effect, then the active mode's look,
+    then this, then None - which is what `set_led` already means by "use the
+    palette". See `look_for`.
+
+    Fail-soft per key like `_parse_mode_looks`, and for a stronger reason: a
+    misnamed look on SUCCESS must cost you a colour, never the button's
+    ability to tell you something worked.
+    """
+    entry = raw.get("state_looks")
+    if entry is None:
+        return {}
+    if not isinstance(entry, dict):
+        log.error("config: 'state_looks' must be an object - ignored")
+        return {}
+    chosen: dict[str, str] = {}
+    for state, look in entry.items():
+        if state not in SYSTEM_LED_STATES:
+            log.warning(
+                "config: state_looks names %r, which is not one of the button's "
+                "own states (%s) - ignored; a mode's own states are named on the "
+                "mode", state, "/".join(SYSTEM_LED_STATES),
+            )
+            continue
+        if not (isinstance(look, str) and look in known):
+            log.warning(
+                "config: state_looks[%r] is %r, which is not in 'looks' - using "
+                "the palette colour for %s", state, look, state,
+            )
+            continue
+        chosen[state] = look
+    return chosen
+
+
 def _parse_action_pool(raw) -> dict[str, Action]:
     """The named-action pool: `{"smoke": {"action": "log", "event": "cig"}}`.
 
@@ -1443,6 +1525,12 @@ class AppConfig:
     # they all were before this existed. Naming is optional by design: this is
     # for the action used in three places, not for the one used once.
     actions: dict[str, Action] = field(default_factory=dict)
+    # A look the button's own states wear instead of their palette entry (see
+    # `_parse_state_looks`). Empty means every system state renders straight
+    # from the palette, which is what they all did before this existed - and
+    # the palette stays underneath either way, as what a host-less button
+    # shows.
+    state_looks: dict[str, str] = field(default_factory=dict)
     # Where the swappable scene files live and which one is active. The scene
     # itself is merged in before parsing (see load_config_full), so nothing
     # downstream of here knows a scene was involved.
@@ -2621,7 +2709,7 @@ def parse_config(raw: dict) -> AppConfig:
         "ble_device_name", "sounds_enabled", "database_path",
         "web_enabled", "web_host", "web_port",
         "modes", "rules", "commands", "led_palette", "looks", "actions",
-        "scenes", "min_flash_period_s",
+        "state_looks", "scenes", "min_flash_period_s",
     }
     for key in raw:
         if key not in known:
@@ -2644,6 +2732,7 @@ def parse_config(raw: dict) -> AppConfig:
         led_palette=_parse_palette(raw),
         looks=looks,
         actions=action_pool,
+        state_looks=_parse_state_looks(raw, set(looks)),
         scenes=scenes.parse_settings(raw.get("scenes")),
         min_flash_period_s=_parse_min_flash_period(raw),
     )
@@ -2722,22 +2811,48 @@ def sequence_safe(seq: sequencer.Sequence, min_period_s: float) -> sequencer.Seq
     long as something keeps it running, which is exactly the strobing-style
     case `flash_safe` already floors.
 
+    **A stop's own style is floored unconditionally, and that exemption does
+    not reach it** (TODO 36c). The exemption is an argument about
+    *transitions between stops*: play three of them once and nothing is
+    sustained. A stop that is itself `flash` sustains inside a single stop -
+    a 0.05 s flash held for two seconds is forty of them, one-shot or not -
+    so the reasoning simply does not apply, and pretending it did would put a
+    hole in the floor exactly where someone reaching for a confirmation
+    pattern would find it.
+
     Pure, like `flash_safe`, and enforced at the same single point: `main.
     set_led`'s Sequence branch, mirroring where `flash_safe` runs for a plain
     effect. Nothing else calls this - a second call site would be a second
-    floor with its own chance to drift from this one.
+    floor with its own chance to drift from this one. `flash_safe` is reused
+    below rather than reimplemented for stops, so "which styles strobe and how
+    slow is slow enough" stays one answer in one place.
     """
-    if not (seq.repeat or len(seq.stops) > 3):
-        return seq
-    floor = min_period_s / 2
-    stops = tuple(
-        stop if stop.hold_s + stop.fade_s >= floor
-        else replace(stop, hold_s=floor - stop.fade_s)
-        for stop in seq.stops
-    )
+    stops = tuple(_stop_style_safe(stop, min_period_s) for stop in seq.stops)
+    if seq.repeat or len(seq.stops) > 3:
+        floor = min_period_s / 2
+        stops = tuple(
+            stop if stop.hold_s + stop.fade_s >= floor
+            else replace(stop, hold_s=floor - stop.fade_s)
+            for stop in stops
+        )
     if stops == seq.stops:
         return seq
     return replace(seq, stops=stops)
+
+
+def _stop_style_safe(stop: sequencer.Stop, min_period_s: float) -> sequencer.Stop:
+    """One stop with its *style's* period floored - `flash_safe`'s rule,
+    applied to the effect a stop's hold renders.
+
+    Routed through `flash_safe` on a throwaway `LedEffect` rather than
+    re-deriving the test: a `Stop` is not an effect (it lives in a leaf module
+    that must not import this one), but what it means by `style` and
+    `period_s` is exactly what an effect means, so the decision belongs to the
+    function that already owns it."""
+    floored = flash_safe(LedEffect(style=stop.style, period_s=stop.period_s), min_period_s)
+    if floored.period_s == stop.period_s:
+        return stop
+    return replace(stop, period_s=floored.period_s)
 
 
 def look_for(
@@ -2750,9 +2865,14 @@ def look_for(
     nothing - no effect write, no borrowed palette entry, and a device that
     predates ephemeral effects behaves exactly as it did.
     """
-    if mode is None:
-        return None
-    name = mode.looks.get(state.value)
+    if mode is not None and (name := mode.looks.get(state.value)):
+        return config.looks.get(name)
+    # No mode look: the button's own states may still name one globally, which
+    # is what lets SUCCESS be a whole confirmation pattern rather than one
+    # style the palette can hold (see `_parse_state_looks`). Checked second on
+    # purpose - a mode that has chosen a look for a state it owns is the more
+    # specific answer, and must win.
+    name = config.state_looks.get(state.value)
     return config.looks.get(name) if name else None
 
 
@@ -2999,7 +3119,10 @@ def _look_to_dict(look: LedEffect | sequencer.Sequence) -> dict:
     if isinstance(look, sequencer.Sequence):
         return {
             "stops": [
-                {"color": stop.color, "hold_s": stop.hold_s, "fade_s": stop.fade_s}
+                {
+                    "color": stop.color, "hold_s": stop.hold_s, "fade_s": stop.fade_s,
+                    "curve": stop.curve, "style": stop.style, "period_s": stop.period_s,
+                }
                 for stop in look.stops
             ],
             "repeat": look.repeat,
@@ -3144,6 +3267,7 @@ def as_dict(cfg: AppConfig) -> dict:
         "actions": {
             name: _action_to_dict(action) for name, action in cfg.actions.items()
         },
+        "state_looks": dict(cfg.state_looks),
     }
 
 

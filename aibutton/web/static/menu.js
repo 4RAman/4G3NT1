@@ -362,6 +362,10 @@ export class ConfigMenu {
     if (!this.model.led_palette) this.model.led_palette = {};
     if (!this.model.looks) this.model.looks = {};
     this.paletteValidators = [];
+    // Reset with the section, not appended to: these close over `pick`
+    // elements that are about to be thrown away, and keeping the old ones
+    // would leak a refresh per re-render onto detached nodes.
+    this.stateLookRefreshers = [];
 
     const group = (states) => {
       const wrap = el('div', { className: 'palette-wrap' });
@@ -373,6 +377,7 @@ export class ConfigMenu {
           meaning: state.meaning,
           previewState: state.key,
         }));
+        wrap.append(this._renderStateLookRow(state));
       }
       return wrap;
     };
@@ -425,6 +430,10 @@ export class ConfigMenu {
   }
 
   _renderLooks() {
+    // The system states' look pickers list this pool, so adding, renaming or
+    // deleting an entry has to reach them - they are rendered in a different
+    // section and would otherwise keep offering a list that is one edit old.
+    for (const refresh of this.stateLookRefreshers || []) refresh();
     clear(this.looksWrap);
     const names = Object.keys(this.model.looks).sort();
     if (!names.length) {
@@ -453,6 +462,13 @@ export class ConfigMenu {
               if (look === name) mode.looks[state] = next;
             }
           }
+          // The button's own states name looks too (TODO 36a), and they are
+          // the half that is easy to forget: they live on the config root
+          // rather than on a mode, so a rename that only walked the modes
+          // would leave the Lights tab pointing at a name nothing answers to.
+          for (const [state, look] of Object.entries(this.model.state_looks || {})) {
+            if (look === name) this.model.state_looks[state] = next;
+          }
           return true;
         },
         remove: () => {
@@ -465,6 +481,62 @@ export class ConfigMenu {
         },
       }));
     }
+  }
+
+  /**
+   * "or wear a named look instead", under one system state's colour row.
+   *
+   * **The palette entry above it does not go away, and that is the design**
+   * (TODO 36a). A palette entry ships to the device and renders unattended;
+   * a named look may be a stop list, which only the host can walk. So the
+   * palette stays as what a host-less button shows and the look is what it
+   * wears while something is driving it - authoring surface over fallback
+   * form, the same relation `looks` and `led_palette` have everywhere else.
+   *
+   * Tinker-tier: naming a look for SUCCESS is the second thing anybody does
+   * to SUCCESS, and the row above is the first.
+   */
+  _renderStateLookRow(state) {
+    const pick = el('select', { className: 'inp' });
+    const hint = el('span', { className: 'menu-hint', 'data-help': true });
+
+    const refresh = () => {
+      const names = Object.keys(this.model.looks || {}).sort();
+      const current = (this.model.state_looks || {})[state.key] || '';
+      clear(pick);
+      pick.append(el('option', { value: '', textContent: '- use the colour above -' }));
+      // A look deleted from the pool stays selected and marked, for the reason
+      // a dangling action name does: silently falling back would change what
+      // the button does without saying so.
+      if (current && !names.includes(current)) {
+        pick.append(el('option', { value: current, textContent: `${current} (missing)` }));
+      }
+      for (const n of names) pick.append(el('option', { value: n, textContent: n }));
+      pick.value = current;
+      hint.textContent = names.length
+        ? 'Overrides the colour above while the service is running. A look may be a '
+          + 'whole pattern, which is how a confirmation becomes "blink, blink, hold" '
+          + 'rather than one style. The colour above stays as what the button shows '
+          + 'with nothing connected.'
+        : 'No named looks yet - make one under Named looks below, then pick it here.';
+    };
+
+    if (!this.stateLookRefreshers) this.stateLookRefreshers = [];
+    this.stateLookRefreshers.push(refresh);
+    refresh();
+
+    pick.addEventListener('change', () => {
+      if (!this.model.state_looks) this.model.state_looks = {};
+      if (pick.value) this.model.state_looks[state.key] = pick.value;
+      else delete this.model.state_looks[state.key];
+      this._markDirty();
+    });
+
+    return el('div', { className: 'scope-row', 'data-tier': 'tinker' }, [
+      el('span', { className: 'scope-lbl', textContent: `${state.label}: named look` }),
+      pick,
+      hint,
+    ]);
   }
 
   /**

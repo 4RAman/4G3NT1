@@ -298,6 +298,30 @@ Three consequences for code written today:
   modular. Their palette entries **stay in config** as the invisible fallback a
   mode with no named look renders (`base_look` reads them) — only the editor
   group went away. Deleting the entries would leave such a mode with nothing.
+- **A stop list is the rich form; a palette entry is the fallback form.**
+  A `sequencer.Sequence` may now shape each fade (`Stop.curve`) and animate
+  each hold (`Stop.style`/`period_s`), which makes it able to express nearly
+  every look in the system — *except* the one thing that matters most: a
+  palette entry ships to the device and renders with **no host attached**, and
+  a sequence is a schedule only the host can walk. So a sequence never goes in
+  `led_palette`. The system states name one instead (`AppConfig.state_looks`),
+  and resolution runs **explicit effect → the active mode's look → the global
+  state look → None**, where None still means "the device's palette entry".
+  Both layers stay populated on purpose. *Do not "simplify" this by moving
+  sequences into the palette — that is the button going dark when the host
+  does.*
+- **A stop's style belongs to its hold, never to its fade.** A fade is always
+  plain solid interpolation between two colours; the curve decides *which*
+  colour a step lands on and the style waits for the stop it belongs to. A
+  flashing target half-way through arriving at it is two clocks on one light,
+  which is the same call `ladder_paint` already makes.
+- **`sequence_safe` floors two axes, and the one-shot exemption covers only
+  one of them.** Stop *dwells* are exempt for a one-shot of ≤3 stops (a
+  handful of transitions played once sustains nothing — the confirmation-flash
+  rule). A stop's own *style period* is floored **unconditionally**, because a
+  0.05 s flash held for two seconds is forty flashes whether the sequence
+  repeats or not. Still one call site, still `main.set_led`; `_stop_style_safe`
+  routes through `flash_safe` rather than re-deriving which styles strobe.
 - **A gesture holds an action or names one, and the name is resolved at use
   time.** The pool is `AppConfig.actions`; a binding that is a **bare string**
   is a reference into it (`NamedAction`). One resolver,

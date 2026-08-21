@@ -19,8 +19,8 @@
 
 import { clear, el } from './dom.js';
 import {
-  LED_FIELDS, LED_STYLE_BY_TYPE, LOOK_PRESETS, LOOK_PRESET_GROUPS,
-  describeEffect,
+  CURVES, LED_FIELDS, LED_STYLES, LED_STYLE_BY_TYPE, LOOK_PRESETS,
+  LOOK_PRESET_GROUPS, describeEffect, presetIsSequence, presetLook,
 } from './schema.js';
 import { createField } from './widgets.js';
 import { paint as applySwatch } from './ledPreview.js';
@@ -83,6 +83,23 @@ const STOP_FIELDS = [
     hint: 'How long this colour stays once it has arrived.' },
   { key: 'fade_s', label: 'Fade (s)', kind: 'number', min: 0, step: 0.05,
     hint: "How long arriving here takes. 0 is a hard cut from the stop before it." },
+  // The shape of that fade (TODO 36b). Basic tier, not tinker: it is the
+  // difference between a colour changing and a colour *arriving*, which is
+  // the whole reason the field exists.
+  { key: 'curve', label: 'Fade shape', kind: 'select',
+    options: CURVES.map((c) => ({ value: c.value, label: c.label })),
+    hint: 'Only applies while fading. Slow start then a rush reads as a build; '
+      + 'slow finish reads as a landing.' },
+  // What the *hold* does (TODO 36c). A fade is always a plain crossfade, so
+  // this never applies mid-arrival - that would be two clocks on one light.
+  { key: 'style', label: 'Movement', kind: 'select',
+    options: LED_STYLES.map((st) => ({ value: st.type, label: st.label })),
+    hint: 'How this stop moves once it has arrived. Solid is a held colour; '
+      + 'anything else animates for as long as the stop lasts.' },
+  { key: 'period_s', label: 'Movement rate (s)', kind: 'number', min: 0.05, step: 0.05,
+    tier: 'tinker',
+    hint: 'Only used when Movement is not Solid. Floored the same way any '
+      + 'other flashing look is.' },
 ];
 
 /**
@@ -207,6 +224,18 @@ export function createLookEditor(o) {
     const seq = effect();
     if (!Array.isArray(seq.stops)) seq.stops = [];
     if (typeof seq.repeat !== 'boolean') seq.repeat = true;
+    // Fill in the keys a stop written before TODO 36 does not carry. The
+    // parser defaults all three anyway, so this changes no behaviour - but a
+    // `select` whose value is absent from its options renders *blank*, which
+    // would show every existing sequence (and every preset that leaves a
+    // default implicit) as having no fade shape and no movement at all.
+    // Normalised here, at the one place a stop list is about to be edited,
+    // rather than asking each author to spell out the defaults.
+    for (const stop of seq.stops) {
+      if (typeof stop.curve !== 'string') stop.curve = 'linear';
+      if (typeof stop.style !== 'string') stop.style = 'solid';
+      if (typeof stop.period_s !== 'number') stop.period_s = 1;
+    }
 
     // Adding, removing or reordering a stop changes which rows and which up
     // /down buttons exist, so - like a style switch above - that gets a full
@@ -268,7 +297,10 @@ export function createLookEditor(o) {
     const add = el('button', { type: 'button', className: 'mini', textContent: '+ Stop' });
     add.addEventListener('click', () => {
       const last = seq.stops[seq.stops.length - 1];
-      seq.stops.push({ color: last ? last.color : '#ffffff', hold_s: 0.5, fade_s: 0 });
+      seq.stops.push({
+        color: last ? last.color : '#ffffff', hold_s: 0.5, fade_s: 0,
+        curve: 'linear', style: 'solid', period_s: 1,
+      });
       commitStructure();
     });
 
@@ -306,15 +338,30 @@ export function createLookEditor(o) {
     if (isSequence()) renderSequenceFields();
     else renderEffectFields();
     if (modeToggle) modeToggle.sync();
-    if (presetDrawerEl) presetDrawerEl.hidden = isSequence();
+    // The drawer used to hide for a sequence, because every preset was a
+    // plain effect and none of them could be dropped into one. Some are stop
+    // lists now (TODO 36a), so it stays open and filters instead.
+    if (presetDrawerEl) presetDrawerEl.hidden = false;
   };
 
   // --- the library ----------------------------------------------------
 
   const applyPreset = (preset) => {
+    const target = effect();
     // Assigned key by key rather than replaced, because callers hold a
     // reference to this object - the whole point of editing in place.
-    Object.assign(effect(), preset.effect);
+    //
+    // A sequence preset and an effect preset are different *shapes*, so the
+    // keys of whichever one is being replaced have to go first - leaving
+    // `stops` behind after picking a plain effect would make the result read
+    // as a sequence that happens to carry a style, and `isSequence()` keys
+    // off exactly that.
+    if (presetIsSequence(preset)) {
+      for (const key of ['style', 'color', 'color2', 'period_s']) delete target[key];
+    } else {
+      for (const key of ['stops', 'repeat']) delete target[key];
+    }
+    Object.assign(target, presetLook(preset));
     renderFields();
     refresh();
     o.onChange?.();
@@ -325,16 +372,26 @@ export function createLookEditor(o) {
     const body = el('div', { className: 'preset-groups' });
     for (const group of LOOK_PRESET_GROUPS) {
       const dots = el('div', { className: 'preset-dots' });
-      for (const preset of LOOK_PRESETS.filter((p) => p.group === group)) {
+      // A sequence preset is only offered where a sequence is allowed - the
+      // system palette rows opt out, because a palette entry ships to the
+      // device and a stop list is a schedule only the host can walk. Filtered
+      // here rather than disabled, so the drawer never shows you a look the
+      // Save would drop.
+      const offered = LOOK_PRESETS.filter(
+        (pr) => pr.group === group && (o.allowSequence || !presetIsSequence(pr)),
+      );
+      if (!offered.length) continue;
+      for (const preset of offered) {
+        const look = preset.sequence || preset.effect;
         // The colour goes on an inner swatch rather than the button, so the
         // label stays readable against the page instead of against whatever
         // the preset happens to be.
         const chip = el('span', { className: 'preset-dot-swatch' });
-        applySwatch(chip, preset.effect);  // animates exactly as the LED does
+        applySwatch(chip, look);  // animates exactly as the LED does
         const dot = el('button', {
           type: 'button',
           className: 'preset-dot',
-          title: `${preset.label} - ${describeEffect(preset.effect)}`,
+          title: `${preset.label} - ${describeEffect(look)}`,
         }, [chip, el('span', { className: 'preset-dot-label', textContent: preset.label })]);
         dot.addEventListener('click', () => applyPreset(preset));
         dots.append(dot);
@@ -426,7 +483,10 @@ export function createLookEditor(o) {
       // Starts from the one colour already chosen rather than blank: a
       // single-stop sequence *is* the plain effect it replaces, minus the
       // animation, so nothing about the current pick needs re-deciding.
-      cur.stops = [{ color: carryColor, hold_s: 0.5, fade_s: 0 }];
+      cur.stops = [{
+        color: carryColor, hold_s: 0.5, fade_s: 0,
+        curve: 'linear', style: 'solid', period_s: 1,
+      }];
       cur.repeat = true;
     } else {
       Object.assign(cur, { style: 'solid', color: carryColor, color2: '#000000', period_s: 1 });

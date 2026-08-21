@@ -426,7 +426,7 @@ front door, and today it cannot offer a ramp or a stop list at all. Making the
 preset library carry sequences is what stops the power tool being the only
 door.
 
-#### a) Sequence presets, and a system state may name a look
+#### a) Sequence presets, and a system state may name a look — **built 2026-08-21**
 
 `LOOK_PRESETS` becomes effect-*or*-sequence, and the system states
 (IDLE/LISTENING/THINKING/SUCCESS/ERROR) may name a look from the pool the way
@@ -438,7 +438,7 @@ state look → `None`, which is what `set_led` already means by "fall back to
 the palette". This is what unblocks the programmable confirmation, and it is
 the smallest of the four.
 
-#### b) A curve on each stop
+#### b) A curve on each stop — **built 2026-08-21**
 
 `Stop.curve`: linear (today's behaviour and the default), ease-in, ease-out,
 ease-in-out, exponential. Pure, ~30 lines, and it survives the Stage-3 move
@@ -446,7 +446,7 @@ unchanged because `plan_at` still answers only "what colour now, and for how
 long". No firmware mirror: firmware/led.py does not walk sequences, so nothing
 drifts.
 
-#### c) A stop may carry a style, not only a colour
+#### c) A stop may carry a style, not only a colour — **built 2026-08-21**
 
 What makes "75% flashing yellow" and the rainbow applause at the end
 expressible. `sequencer.py` is a leaf and must not import `config`, so a stop
@@ -460,8 +460,21 @@ applied *inside* `sequence_safe`, not a second call site (CLAUDE.md).
 
 `clock` (today), `progress` (what `ramp` does), `beats` (what `ladder` does).
 The biggest of the four and the one with a decision under it: which states and
-templates may bind which drive. **Not started** — (a) to (c) are useful on
-their own and none of them presumes the answer.
+templates may bind which drive. **Not started** — (a) to (c) shipped without
+presuming the answer, and are useful as they stand.
+
+**Tests for (a)–(c) are owed.** They were skipped deliberately at the end of
+the 2026-08-21 session and are the first thing to write next. What needs
+covering, in rough order of how much it would hurt to get wrong: `shape()` at
+the ends and the middle of every curve; `plan_at` returning a solid mid-fade
+and the stop's own style during its hold; `sequence_safe` flooring a stop's
+style period *even for a one-shot of three stops* (the exemption asymmetry
+above); `look_for`'s four-step resolution order, including a mode look beating
+a state look; the round-trip of the three new stop keys; and
+`test_look_presets.py`, which slices `LOOK_PRESETS` and currently assumes
+every entry has an `effect` — five of them now have a `sequence` instead, and
+both floors need checking, not just `flash_safe`. A hand-run of that last
+check passed at the time of writing (all 42 presets clear both floors).
 
 ### 35. A freshly seeded scene fails its own Check
 

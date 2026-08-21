@@ -49,6 +49,25 @@ function hexToRgb(hex) {
 const css = ([r, g, b]) =>
   `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
 
+/** `level` 0..1 through a fade curve. The browser twin of `sequencer.shape`;
+ *  an unknown curve is linear there and here, for the same reason - a look
+ *  that renders plainly beats one that throws. */
+function shape(curve, level) {
+  if (level <= 0) return 0;
+  if (level >= 1) return 1;
+  switch (curve) {
+    case 'ease_in': return level * level;
+    case 'ease_out': return 1 - (1 - level) ** 2;
+    case 'ease_in_out':
+      return level < 0.5 ? 2 * level * level : 1 - 2 * (1 - level) ** 2;
+    // _EXP_K in sequencer.py. Kept as the literal it is on both sides: the
+    // number is the shape, and naming it here would not make the two any
+    // harder to change apart.
+    case 'exponential': return Math.expm1(4 * level) / Math.expm1(4);
+    default: return level;
+  }
+}
+
 /** The colour an effect shows at time `t` seconds. Mirrors firmware/led.py. */
 export function colorAt(effect, t) {
   // A stop list (TODO 19b) - the browser twin of sequencer.plan_at, and it
@@ -70,12 +89,28 @@ export function colorAt(effect, t) {
     for (let i = 0; i < stops.length; i += 1) {
       const [fade, hold] = spans[i];
       if (tt < fade) {
-        const level = Math.min(Math.floor(tt / 0.05) * 0.05 / fade, 1);
+        const stepped = Math.min(Math.floor(tt / 0.05) * 0.05 / fade, 1);
+        const level = shape(stops[i].curve, stepped);
         const from = hexToRgb(prev);
         const to = hexToRgb(stops[i].color);
         return from.map((c, j) => c + (to[j] - c) * level);
       }
-      if (tt < fade + hold) return hexToRgb(stops[i].color);
+      // A stop may animate during its hold (TODO 36c). Recursing into the
+      // plain-effect half below is what keeps "flashing yellow" look identical
+      // whether it is a stop in a list or a look on its own - and the phase is
+      // measured from the stop's own start, so the movement begins when the
+      // stop does rather than wherever the sequence's clock happens to be.
+      if (tt < fade + hold) {
+        const stop = stops[i];
+        if (stop.style && stop.style !== 'solid') {
+          return colorAt(
+            { style: stop.style, color: stop.color, color2: '#000000',
+              period_s: stop.period_s },
+            tt - fade,
+          );
+        }
+        return hexToRgb(stop.color);
+      }
       tt -= fade + hold;
       prev = stops[i].color;
     }
