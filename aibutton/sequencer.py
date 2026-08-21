@@ -126,6 +126,28 @@ class Stop:
     period_s: float = 1.0   # that style's period, when it has one
 
 
+# What moves a sequence along (TODO 36d). The three answers this module's
+# docstring already named as three separate modules, now one field:
+#
+#   clock      seconds; walked by `plan_at`, which sleeps between frames
+#   progress   0..1; sampled by `sample_at` from whatever the app is doing
+#   beats      a count; sampled by `sample_at` from a tempo
+#
+# **Walked versus sampled is the real distinction**, not the unit. A
+# clock-driven sequence owns its own position and a caller only has to keep
+# asking; the other two are *parameterised from outside themselves* - a
+# countdown owns its progress, a metronome owns its beat - so nothing can
+# render one without an app underneath supplying the number. That is why a
+# progress-driven look is meaningless on IDLE, and why `config` decides where
+# each drive may be bound rather than this module.
+#
+# For `progress` and `beats` a stop's `hold_s`/`fade_s` are read as *weights*
+# in that unit rather than as seconds; the names keep the `_s` because they
+# are the same fields, and renaming them would be a config break for the one
+# drive that has always been in seconds.
+DRIVES = ("clock", "progress", "beats")
+
+
 @dataclass(frozen=True)
 class Sequence:
     """An ordered stop list. `repeat=True` loops forever (until the next
@@ -141,6 +163,7 @@ class Sequence:
 
     stops: tuple[Stop, ...]
     repeat: bool = True
+    drive: str = "clock"  # what moves it along - see DRIVES
 
 
 def mix(first: str, second: str, level: float) -> str:
@@ -303,6 +326,72 @@ def plan_at(
     # call is what advances it.
     last = spans[-1]
     return Frame(last.to_color, last.style, last.period_s), 0.0
+
+
+def span_total(seq: Sequence) -> float:
+    """One cycle's length in the sequence's own unit - seconds for `clock`,
+    fractions for `progress`, beats for `beats`.
+
+    Exposed because a *sampled* sequence needs it and a walked one does not:
+    `sample_at` has to turn "40% of the way through" into a position on a
+    timeline whose length only this module knows.
+    """
+    return _spans(seq)[1]
+
+
+def sample_at(seq: Sequence, position: float) -> Frame | None:
+    """The frame at `position`, a *fraction* 0..1 rather than an elapsed time.
+    The sampled counterpart of `plan_at` (TODO 36d).
+
+    `plan_at` answers "what now, and how long may I sleep" - the question a
+    caller with a clock asks. This answers only "what at this point", which is
+    the question a caller with a *progress bar* asks: a countdown 40% through
+    has no business sleeping on the stop list's schedule, it already has its
+    own tick and simply wants the colour that belongs to 40%.
+
+    That is also why no wait comes back. Nothing here can say when the next
+    frame is due, because that depends on how fast the app's own number moves,
+    which is the app's business and not this module's.
+
+    **Fades interpolate continuously here, and that is the one place this
+    disagrees with `plan_at` on purpose.** The 50 ms stepping exists because a
+    walked sequence pushes every frame over a radio, so promising motion finer
+    than the radio can carry would be dishonest. A sampled sequence pushes
+    only when the app ticks - the app's rate *is* the rate - and it is the
+    caller that decides whether a frame is worth sending (`main.sampled_paint`
+    drops one that has not visibly moved). Quantising on top of that would
+    lose gradient for nothing: a 1 s countdown tick against a 0.05 s step is
+    already twenty times coarser than the floor it would be obeying.
+
+    Out-of-range positions are handled rather than rejected, and how depends on
+    `repeat`: a repeating sequence wraps (which is what makes `beats` useful -
+    a four-beat pattern over an eight-beat bar), a one-shot clamps to its ends.
+    Clamping rather than returning `None` is the other difference from
+    `plan_at`: a progress bar that reaches 1.0 should show the last stop, not
+    go dark, because "finished" is a state a countdown *holds* rather than
+    passes through.
+    """
+    if not seq.stops:
+        return None
+    spans, total = _spans(seq)
+    if total <= 0:
+        last = seq.stops[-1]
+        return Frame(last.color, last.style, last.period_s)
+
+    position = position % 1.0 if seq.repeat else min(max(position, 0.0), 1.0)
+    t = position * total
+
+    for span in spans:
+        if span.fade_s > 0 and t < span.fade_at + span.fade_s:
+            level = shape(span.curve, (t - span.fade_at) / span.fade_s)
+            # Solid through a fade, exactly as `plan_at` renders one: the curve
+            # decides which colour, and the stop's own style waits for its hold.
+            return Frame(mix(span.from_color, span.to_color, level))
+        if t < span.hold_at + span.hold_s:
+            return Frame(span.to_color, span.style, span.period_s)
+
+    last = spans[-1]
+    return Frame(last.to_color, last.style, last.period_s)
 
 
 # --- readout: a value played as blinks (TODO 15 and 17) --------------------

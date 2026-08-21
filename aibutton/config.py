@@ -1215,6 +1215,24 @@ def _parse_ramp(raw, where: str, default: tuple[ramp.Stop, ...]) -> tuple[ramp.S
     return tuple(stops)
 
 
+# Which templates can supply each drive's number (TODO 36d). `clock` is absent
+# because it needs nothing: a stop list walked by the clock owns its own
+# position and renders anywhere. The other two are parameterised from outside
+# themselves, so they are only meaningful under an app that has the number -
+# a countdown knows how far through it is, a metronome knows what beat it is
+# on, and IDLE knows neither.
+#
+# **Keyed by template, not by state, and that is forced rather than chosen.**
+# `TIMING` belongs to both the countdown and the stopwatch, and only one of
+# them has an end to be a fraction of. The number's owner is the app.
+#
+# Mirrored as `drives` on each template descriptor in schema.js.
+DRIVE_TEMPLATES: dict[str, tuple[str, ...]] = {
+    "progress": ("countdown",),
+    "beats": ("metronome",),
+}
+
+
 def _parse_stop(raw, where: str) -> sequencer.Stop | None:
     """One stop in a sequence: a bare colour, or an object with `color` plus
     optional `hold_s` / `fade_s`.
@@ -1309,7 +1327,15 @@ def _parse_sequence(raw: dict, where: str, default: LedEffect) -> LedEffect | se
     if not stops:
         log.error("config: %s.stops has no usable stops - using the default look", where)
         return default
-    return sequencer.Sequence(stops=tuple(stops), repeat=repeat)
+    drive = raw.get("drive", "clock")
+    if drive not in sequencer.DRIVES:
+        log.error(
+            "config: %s.drive must be one of %s - using 'clock'",
+            where, "/".join(sequencer.DRIVES),
+        )
+        drive = "clock"
+
+    return sequencer.Sequence(stops=tuple(stops), repeat=repeat, drive=drive)
 
 
 def _parse_look(raw, where: str, default: LedEffect) -> LedEffect | sequencer.Sequence:
@@ -1379,7 +1405,7 @@ def _parse_looks(raw) -> dict[str, LedEffect | sequencer.Sequence]:
     return looks
 
 
-def _parse_state_looks(raw, known: set[str]) -> dict[str, str]:
+def _parse_state_looks(raw, known: dict[str, object]) -> dict[str, str]:
     """The system states' own look names: `{"SUCCESS": "three-blinks"}`.
 
     **The generalisation of a thing that already existed.** A control page can
@@ -1427,6 +1453,17 @@ def _parse_state_looks(raw, known: set[str]) -> dict[str, str]:
                 "the palette colour for %s", state, look, state,
             )
             continue
+        entry = known[look]
+        if isinstance(entry, sequencer.Sequence) and entry.drive != "clock":
+            # No app underneath at all here - these are the button's own
+            # states, worn by the ambient layer between modes - so there is
+            # nothing that could ever supply a progress or a beat. Warned about
+            # once and kept, on the clock, like every other stranded drive.
+            log.warning(
+                "config: state_looks[%r] names a %r-driven look, and the "
+                "button's own states have no app to supply that - it will play "
+                "on the clock instead", state, entry.drive,
+            )
         chosen[state] = look
     return chosen
 
@@ -1467,13 +1504,43 @@ def _parse_action_pool(raw) -> dict[str, Action]:
     return pool
 
 
-def _parse_mode_looks(raw, where: str, template: str, known: set[str]) -> dict[str, str]:
+def _drive_warning(look, where: str, template: str) -> str | None:
+    """Why `look`'s drive cannot be honoured under `template`, or None.
+
+    A `clock` sequence (and any plain effect) is always fine - it owns its own
+    position. The other drives need an app to supply the number, and
+    `DRIVE_TEMPLATES` says which apps have it.
+
+    Reported, never enforced: the binding is kept and `main.set_led` walks a
+    stranded sequence by the clock instead (see its Sequence branch). Dropping
+    it would leave the state with no look at all, which is a bigger change to
+    what the button does than rendering the same colours on the wrong axis.
+    """
+    if not isinstance(look, sequencer.Sequence) or look.drive == "clock":
+        return None
+    allowed = DRIVE_TEMPLATES.get(look.drive, ())
+    if template in allowed:
+        return None
+    return (
+        f"config: {where} names a {look.drive!r}-driven look, which only "
+        f"{'/'.join(allowed) or 'nothing here'} can supply - it will play on "
+        f"the clock instead"
+    )
+
+
+def _parse_mode_looks(
+    raw, where: str, template: str, known: dict[str, object],
+) -> dict[str, str]:
     """One mode's state -> look-name map, dropping anything unusable.
 
     Never fatal: a mode whose look is misspelled should light up in its
     default colour and say so, not vanish. That is the same fail-soft rule
     every other key follows, and it matters more here because a look is
     cosmetic - losing the mode over it would be wildly disproportionate.
+
+    `known` is the whole pool rather than only its names, because a look's
+    *drive* decides whether this template can render it (`_drive_warning`) -
+    which is a fact about the look, not about the reference to it.
     """
     entry = raw.get("looks")
     if entry is None:
@@ -1498,6 +1565,8 @@ def _parse_mode_looks(raw, where: str, template: str, known: set[str]) -> dict[s
                 where, state, look, state,
             )
             continue
+        if (complaint := _drive_warning(known[look], f"{where}.looks[{state!r}]", template)):
+            log.warning("%s", complaint)
         chosen[state] = look
     return chosen
 
@@ -2501,7 +2570,7 @@ def _parse_reaction_body(raw: dict, where: str) -> ReactionBehavior:
 
 
 def _parse_mode(
-    raw, idx: int, looks: set[str] | None = None, actions: set[str] | None = None,
+    raw, idx: int, looks: dict | None = None, actions: set[str] | None = None,
 ) -> Mode | None:
     """Parse one mode. A mode with a broken activation, a template<->
     activation nature mismatch, or no usable body is skipped entirely
@@ -2567,7 +2636,7 @@ def _parse_mode(
         name=name,
         behavior=behavior,
         activation=activation,
-        looks=_parse_mode_looks(raw, where, template, looks or set()),
+        looks=_parse_mode_looks(raw, where, template, looks or {}),
     )
 
 
@@ -2639,7 +2708,7 @@ def _migrate_rule(raw, idx: int) -> Mode | None:
 
 
 def _parse_modes(
-    raw: dict, looks: set[str] | None = None, actions: set[str] | None = None,
+    raw: dict, looks: dict | None = None, actions: set[str] | None = None,
 ) -> tuple[Mode, ...]:
     """Resolve the modes list, then guarantee it can actually answer a
     gesture: `_ensure_ambient_always` is the last step so nothing upstream
@@ -2649,7 +2718,7 @@ def _parse_modes(
 
 
 def _resolve_mode_list(
-    raw: dict, looks: set[str] | None, actions: set[str] | None = None,
+    raw: dict, looks: dict | None, actions: set[str] | None = None,
 ) -> tuple[Mode, ...]:
     """The migration ladder itself: modes (v0.3) -> rules (v0.2) -> commands
     (v0.1) -> built-in defaults.
@@ -2728,11 +2797,11 @@ def parse_config(raw: dict) -> AppConfig:
         web_enabled=_take(raw, "web_enabled", bool, defaults.web_enabled),
         web_host=_take(raw, "web_host", str, defaults.web_host),
         web_port=_take(raw, "web_port", int, defaults.web_port),
-        modes=_parse_modes(raw, set(looks), set(action_pool)),
+        modes=_parse_modes(raw, looks, set(action_pool)),
         led_palette=_parse_palette(raw),
         looks=looks,
         actions=action_pool,
-        state_looks=_parse_state_looks(raw, set(looks)),
+        state_looks=_parse_state_looks(raw, looks),
         scenes=scenes.parse_settings(raw.get("scenes")),
         min_flash_period_s=_parse_min_flash_period(raw),
     )
@@ -3126,6 +3195,7 @@ def _look_to_dict(look: LedEffect | sequencer.Sequence) -> dict:
                 for stop in look.stops
             ],
             "repeat": look.repeat,
+            "drive": look.drive,
         }
     return _effect_to_dict(look)
 

@@ -536,6 +536,60 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             look = None
         return look or cm.config.led_palette.get(state.value)
 
+    def driven_look(state: LEDState, drive: str):
+        """The active mode's look for `state`, if it is a stop list this app
+        can drive (TODO 36d). None otherwise, including for a plain effect.
+
+        The counterpart of `base_look`: that one asks "what do I animate on top
+        of", which a schedule cannot answer, and this one asks "did someone
+        hand me a schedule to sample". A run loop that owns a number - a
+        countdown's progress, a metronome's beat - asks this first, and only
+        falls back to its own ramp or ladder when nothing was named.
+        """
+        look = look_for(cm.config, active_mode, state)
+        if isinstance(look, sequencer.Sequence) and look.drive == drive:
+            return look
+        return None
+
+    def sampled_paint(state: LEDState, seq: sequencer.Sequence):
+        """A `paint(fraction)` that shows `seq` sampled at 0..1.
+
+        The sampled twin of `ladder_paint`, and it makes the same two moves for
+        the same reasons: pushes go through the central `set_led` (so the flash
+        floor runs on every one of them, once, where it always has), and a
+        frame identical to the last is not pushed at all - a radio whose
+        contract is fire-and-forget should not carry a colour that has not
+        moved (`ramp.differs`, as `run_countdown`'s own ramp already does).
+
+        `sequence_safe` is deliberately *not* applied here, and the reason is
+        that it would be measuring the wrong thing. Its dwell floor asks how
+        fast one stop follows another, which for a sampled sequence is decided
+        by how fast the app's number moves and not by the stops at all - a
+        countdown steps once a second whatever its stop list says. The half of
+        it that still applies, a stop's own strobing style, is `flash_safe`'s
+        job and runs inside `set_led` on every push below.
+        """
+        shown: sequencer.Frame | None = None
+
+        def paint(fraction: float) -> None:
+            nonlocal shown
+            frame = sequencer.sample_at(seq, fraction)
+            if frame is None:
+                return
+            if (
+                shown is not None
+                and shown.style == frame.style
+                and shown.period_s == frame.period_s
+                and not ramp.differs(shown.color, frame.color, _COUNTDOWN_COLOR_STEP)
+            ):
+                return
+            shown = frame
+            set_led(state, LedEffect(
+                style=frame.style, color=frame.color, period_s=frame.period_s,
+            ))
+
+        return paint
+
     def ladder_paint(spec, state: LEDState):
         """A `paint(seconds)` that shows `spec`'s colour for a moment in time.
 
@@ -1121,17 +1175,42 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         set_status("METRONOME")
         status.last_mode = mode_name
 
-        # A ladder here counts *beats*, not seconds - the tempo already decides
-        # the timing, so what a colour adds is an accent ("every 4th beat"). It
-        # also changes who drives the light: normally the device animates the
-        # pulse and the host only sends a period, but a colour per beat has to
-        # come from the host, so the loop grows a beat clock below.
-        laddered = behavior.ladder.enabled
+        # Two ways to put a colour on a beat, and the same precedence the
+        # countdown uses: **a named beats-driven stop list wins over a ladder**,
+        # because you had to build it, name it and point this mode at it, while
+        # a ladder is a checkbox on the mode itself (TODO 36d).
+        #
+        # Both count *beats*, not seconds - the tempo already decides the
+        # timing, so what a colour adds is an accent ("every 4th beat"), and a
+        # seconds-based version would drift against the tempo the moment you
+        # tapped a new one. Both also change who drives the light: normally the
+        # device animates the pulse and the host only sends a period, but a
+        # colour per beat has to come from the host, so the loop grows a beat
+        # clock below whenever either is in play.
+        beat_seq = driven_look(LEDState.METRONOME, "beats")
+        beat_cycle = sequencer.span_total(beat_seq) if beat_seq is not None else 0.0
+        if beat_seq is not None and beat_cycle <= 0:
+            # Every stop zero-width: there is no cycle to spread over beats, so
+            # there is nothing to sample. Fall through to the ladder (or to
+            # nothing) rather than dividing by it.
+            log.warning(
+                "metronome %r: its beats look has no length - ignoring it", mode_name,
+            )
+            beat_seq = None
+        sampling_beats = sampled_paint(LEDState.METRONOME, beat_seq) if beat_seq else None
+        laddered = behavior.ladder.enabled and sampling_beats is None
+        beat_driven = laddered or sampling_beats is not None
         shown_beat: str | None = None
 
         def paint_beat(beat: int) -> None:
-            """Show the ladder's colour for beat number `beat`."""
+            """Show whatever owns the colour of beat number `beat`."""
             nonlocal shown_beat
+            if sampling_beats is not None:
+                # `sample_at` wraps a repeating sequence itself, so the beat
+                # number goes in unreduced and a four-beat pattern lands the
+                # same way on beat 4, 8 and 12.
+                sampling_beats(beat / beat_cycle)
+                return
             colour = ladder.color_at(behavior.ladder.rungs, beat, behavior.ladder.base)
             if colour == shown_beat:
                 return
@@ -1146,16 +1225,17 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             palette entry) supplies the colour and style; only the period is
             the session's business.
 
-            With a ladder running, the period is *not* pushed: the beat clock
-            is painting a colour per beat, and asking the device to also pulse
-            underneath would be two clocks on one light. `per_flash` is still
-            returned, because it is the number of beats the light may mark
-            without crossing the flash floor - and the ladder obeys the same
-            grouping rather than inventing a second safety rule.
+            With anything painting per beat - a ladder or a beats-driven stop
+            list - the period is *not* pushed: the beat clock already owns the
+            light, and asking the device to also pulse underneath would be two
+            clocks on one light. `per_flash` is still returned, because it is
+            the number of beats the light may mark without crossing the flash
+            floor, and both painters obey that same grouping rather than
+            inventing a second safety rule.
             """
             base = base_look(LEDState.METRONOME)
             period, per_flash = metronome_flash(tempo, cm.config.min_flash_period_s)
-            if base is not None and not laddered:
+            if base is not None and not beat_driven:
                 set_led(LEDState.METRONOME, replace(base, period_s=period))
             return per_flash
 
@@ -1194,8 +1274,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         # light should already be keeping time before the first tap lands.
         beat_no = 0
         beat_step = 60.0 / behavior.start_bpm * per_flash
-        next_beat = loop.time() + beat_step if laddered else None
-        if laddered:
+        next_beat = loop.time() + beat_step if beat_driven else None
+        if beat_driven:
             paint_beat(0)
 
         def take_tempo(tempo: float, now: float) -> None:
@@ -1395,14 +1475,24 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         def left() -> float:
             return max(0.0, deadline - loop.time())
 
-        # The ladder and the ramp both decide *which colour*, so they cannot
-        # both run - and the ladder wins, because it is off by default and
-        # turning it on is an explicit "make this light a clock". Driven by the
-        # time *remaining*, which is what a countdown is about: the ten-second
-        # colour lands on ten seconds left, not ten seconds in.
+        # Three things can decide TIMING's colour and only one may run. The
+        # order is **named stop list > ladder > ramp**, and it is the rule this
+        # loop already used, extended rather than replaced: the more explicit
+        # thing wins. The ramp is the template's own default and every
+        # countdown has one; the ladder is off until you turn it on; a
+        # progress-driven look you had to build, name and then point this mode
+        # at is the most deliberate of the three, so it takes precedence over
+        # both (TODO 36d).
+        #
+        # All three are driven by the same number, and it is *remaining* time
+        # rather than elapsed - which is what a countdown is about: the
+        # ten-second colour lands on ten seconds left, not ten seconds in.
+        progress_seq = driven_look(LEDState.TIMING, "progress")
+        sampling = sampled_paint(LEDState.TIMING, progress_seq) if progress_seq else None
         ticking, tick_s = (
             ladder_paint(behavior.ladder, LEDState.TIMING)
-            if behavior.ladder.enabled else (None, _COUNTDOWN_TICK_S)
+            if behavior.ladder.enabled and sampling is None
+            else (None, _COUNTDOWN_TICK_S)
         )
 
         set_led(LEDState.TIMING)
@@ -1410,9 +1500,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         status.last_mode = mode_name
 
         if args.demo:
-            # --demo is unattended: show the ramp's opening colour briefly
-            # rather than sitting here for the whole countdown.
-            paint(0.0)
+            # --demo is unattended: show the opening colour briefly rather than
+            # sitting here for the whole countdown.
+            (sampling or paint)(0.0)
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             return ActionResult(True, f"{label} (demo: {behavior.minutes:g} min)")
 
@@ -1420,7 +1510,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             remaining = deadline - loop.time()
             if remaining <= 0:
                 break
-            if ticking is not None:
+            if sampling is not None:
+                sampling(1.0 - remaining / total)
+            elif ticking is not None:
                 ticking(remaining)
             else:
                 paint(1.0 - remaining / total)

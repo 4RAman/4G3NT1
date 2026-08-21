@@ -310,6 +310,23 @@ Three consequences for code written today:
   Both layers stay populated on purpose. *Do not "simplify" this by moving
   sequences into the palette — that is the button going dark when the host
   does.*
+- **A stop list is walked or sampled, and that decides which function reads
+  it.** `Sequence.drive` is `clock` (walked by `plan_at`, which returns a
+  wait), `progress` or `beats` (sampled by `sample_at`, which returns none —
+  only the app knows when its number moves next). **Sampled fades interpolate
+  continuously; walked ones keep the 50 ms quantisation**, because that
+  stepping models what a radio carries when the host is pushing every frame,
+  and nothing is pushing a sampled one. Which apps can supply which drive is
+  `DRIVE_TEMPLATES` — **keyed by template, not by state**, because `TIMING`
+  belongs to both the countdown and the stopwatch and only one of them has an
+  end to be a fraction of. A drive bound where nothing supplies it is warned
+  about and played on the clock, never dropped.
+- **When more than one thing can colour a state, the more explicit one wins.**
+  Named stop list > ladder > ramp, in `run_countdown` and `run_metronome`
+  alike: a ramp is the template's own default, a ladder is a checkbox you tick,
+  and a look you had to build, name and point a mode at is the most deliberate
+  of the three. *A fourth colour source obeys the same ordering or explains
+  why not.*
 - **A stop's style belongs to its hold, never to its fade.** A fade is always
   plain solid interpolation between two colours; the curve decides *which*
   colour a step lands on and the style waits for the stop it belongs to. A

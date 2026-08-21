@@ -49,6 +49,10 @@ function hexToRgb(hex) {
 const css = ([r, g, b]) =>
   `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
 
+// How long one sweep of a sampled (progress/beats) sequence takes in a
+// preview swatch. Not a property of the look - see the note in `colorAt`.
+const PREVIEW_SWEEP_S = 4;
+
 /** `level` 0..1 through a fade curve. The browser twin of `sequencer.shape`;
  *  an unknown curve is linear there and here, for the same reason - a look
  *  that renders plainly beats one that throws. */
@@ -85,11 +89,25 @@ export function colorAt(effect, t) {
     const total = spans.reduce((sum, [fade, hold]) => sum + fade + hold, 0);
     let prev = stops[stops.length - 1].color;
     if (total <= 0) return hexToRgb(prev);
-    let tt = t % total;
+    // A progress- or beats-driven list has no clock of its own: the app it is
+    // bound to supplies the position, and a swatch has no app. So the preview
+    // sweeps it at a fixed rate - the shape is what you are here to look at,
+    // and how fast a real countdown walks it is a property of the countdown,
+    // not of the look. Deliberately the same deliberate lie as previewing a
+    // one-shot as looping.
+    const sampled = effect.drive && effect.drive !== 'clock';
+    let tt = sampled
+      ? ((t % PREVIEW_SWEEP_S) / PREVIEW_SWEEP_S) * total
+      : t % total;
     for (let i = 0; i < stops.length; i += 1) {
       const [fade, hold] = spans[i];
       if (tt < fade) {
-        const stepped = Math.min(Math.floor(tt / 0.05) * 0.05 / fade, 1);
+        // Quantised for a clock drive, continuous for a sampled one - the same
+        // split `sequencer.sample_at` makes, and for the same reason: the 50 ms
+        // steps model what a radio actually carries when the *host* is walking
+        // the list, and nothing is walking a sampled one.
+        const raw = Math.min(tt / fade, 1);
+        const stepped = sampled ? raw : Math.min(Math.floor(tt / 0.05) * 0.05 / fade, 1);
         const level = shape(stops[i].curve, stepped);
         const from = hexToRgb(prev);
         const to = hexToRgb(stops[i].color);

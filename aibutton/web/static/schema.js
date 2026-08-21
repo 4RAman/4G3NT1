@@ -832,6 +832,10 @@ export const TEMPLATES = [
   {
     type: 'metronome',
     ledStates: ['METRONOME'],
+    // Which stop-list drives this app can supply a number for. Mirrors
+    // `config.DRIVE_TEMPLATES`; the clock drive is bindable everywhere and so
+    // is never listed. See DRIVES.
+    drives: ['beats'],
     label: 'Metronome',
     nature: 'takeover',
     allowedActivations: ['manual'], // started by an enter_mode gesture only
@@ -882,6 +886,10 @@ export const TEMPLATES = [
 TEMPLATES.push({
   type: 'countdown',
   ledStates: ['TIMING'],
+  // The only app here that knows how far through it is - a stopwatch shares
+  // TIMING but has no end to be a fraction of, which is why this list is keyed
+  // by template and not by state. See DRIVES.
+  drives: ['progress'],
   label: 'Countdown',
   nature: 'takeover',
   allowedActivations: ['manual'], // a countdown that starts itself is an alarm
@@ -1509,6 +1517,29 @@ export function levelHex(percent) {
 // motion - a breathe whose peak is narrower than its valley - is deliberately
 // not a style here: that would be a firmware change against a frozen protocol,
 // and a stop list approximates it with no wire cost at all.
+// What moves a stop list along (TODO 36d). Mirrors `sequencer.DRIVES`, and
+// `templates` mirrors `config.DRIVE_TEMPLATES` - which templates can supply
+// each drive's number. An empty `templates` means "needs nothing", which is
+// what makes `clock` bindable anywhere.
+//
+// The distinction is walked versus sampled, not the unit. A clock-driven list
+// owns its own position; the other two are parameterised from outside
+// themselves - a countdown owns its progress, a metronome owns its beat - so
+// nothing can render one without an app underneath supplying the number.
+// Binding one where nothing does is warned about, not refused: it plays on
+// the clock instead, which is the same fail-soft rule a dangling look follows.
+export const DRIVES = [
+  { value: 'clock', label: 'Seconds', templates: [],
+    hint: 'Plays on its own clock. Holds and fades are seconds.' },
+  { value: 'progress', label: 'How far through', templates: ['countdown'],
+    hint: 'Spread across the whole run, so the last stop lands as it finishes. '
+      + 'Holds and fades are relative weights, not seconds. Countdown only - '
+      + 'nothing else here knows how far through it is.' },
+  { value: 'beats', label: 'Beats', templates: ['metronome'],
+    hint: 'One cycle spread over that many beats, so it accents rather than '
+      + 'drifts against the tempo. Metronome only.' },
+];
+
 export const CURVES = [
   { value: 'linear', label: 'Linear', hint: 'Even the whole way.' },
   { value: 'ease_in', label: 'Slow start', hint: 'Lingers, then runs - a build.' },
@@ -1775,7 +1806,12 @@ export function describeEffect(effect) {
   // before the style table gets a say.
   if (effect && Array.isArray(effect.stops)) {
     const n = effect.stops.length;
-    return `Sequence, ${n} stop${n === 1 ? '' : 's'}, `
+    const drive = DRIVES.find((d) => d.value === (effect.drive || 'clock'));
+    // The drive is named before the repeat, because it changes what "looping"
+    // *means* - wrapping across a run is a different thing from replaying on
+    // a clock, and a summary that omitted it would read identically for both.
+    const by = drive && drive.value !== 'clock' ? `by ${drive.label.toLowerCase()}, ` : '';
+    return `Sequence, ${n} stop${n === 1 ? '' : 's'}, ${by}`
       + (effect.repeat === false ? 'plays once' : 'looping');
   }
   const style = effect && LED_STYLE_BY_TYPE[effect.style];

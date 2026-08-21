@@ -491,12 +491,47 @@ interpolation** — a flashing target half-way through a crossfade is not a
 thing anyone means. Care needed at the flash floor: this must be `flash_safe`
 applied *inside* `sequence_safe`, not a second call site (CLAUDE.md).
 
-#### d) `drive` on the sequence — the actual unification
+#### d) `drive` on the sequence — the actual unification — **built 2026-08-21**
 
 `clock` (today), `progress` (what `ramp` does), `beats` (what `ladder` does).
-The biggest of the four and the one with a decision under it: which states and
-templates may bind which drive. **Not started** — (a) to (c) shipped without
-presuming the answer, and are useful as they stand.
+
+**Walked versus sampled turned out to be the real distinction, not the unit.**
+A clock-driven list owns its position and `plan_at` walks it, sleeping between
+frames. The other two are parameterised from *outside themselves*, so they are
+sampled: `sample_at(seq, 0..1)` answers "what colour at this point" and
+returns no wait, because only the app knows when its own number will move
+next. That is one new pure function, not a second driver.
+
+Two consequences that were not obvious until it was written:
+
+- **Sampled fades interpolate continuously; walked ones stay quantised.** The
+  50 ms stepping exists because a walked sequence pushes every frame over a
+  radio. A sampled one pushes only when the app ticks — a countdown steps once
+  a second, already twenty times coarser — so quantising on top loses the
+  gradient for nothing. Getting this wrong the first time produced a stop list
+  with no gradient at all: `min_step_s = 0` collapses a fade to a single hard
+  cut, which is `_fade_step`'s documented degenerate case and exactly the wrong
+  default for sampling.
+- **The binding table is keyed by template, not by state, and that is forced.**
+  `TIMING` belongs to both the countdown and the stopwatch, and only one of
+  them has an end to be a fraction of. `DRIVE_TEMPLATES` in config.py, mirrored
+  as `drives` on the descriptors in schema.js.
+
+**Precedence, derived rather than invented:** named stop list > ladder > ramp,
+in both `run_countdown` and `run_metronome`. It is the rule `run_countdown`
+already used between the ladder and the ramp — the more explicit thing wins —
+extended by one step, because a look you had to build, name and point a mode at
+is more deliberate than a checkbox on the mode.
+
+**A stranded drive is warned about, not refused.** Binding a progress look
+where nothing supplies progress keeps the binding and plays it on the clock;
+dropping it would leave the state with no look at all, a bigger change to what
+the button does than rendering the same colours on the wrong axis.
+
+**Pomodoro is still not wired, and for 19c's reason.** `run_pomodoro`'s
+`show()` fires on phase transitions only — it has no repainting tick, so there
+is no place to sample from. Giving it one is the same piece of work **19c**
+describes, and it should be done once, for both.
 
 **Tests for (a)–(c) are owed.** They were skipped deliberately at the end of
 the 2026-08-21 session and are the first thing to write next. What needs

@@ -19,7 +19,7 @@
 
 import { clear, el } from './dom.js';
 import {
-  CURVES, LED_FIELDS, LED_STYLES, LED_STYLE_BY_TYPE, LOOK_PRESETS,
+  CURVES, DRIVES, LED_FIELDS, LED_STYLES, LED_STYLE_BY_TYPE, LOOK_PRESETS,
   LOOK_PRESET_GROUPS, describeEffect, presetIsSequence, presetLook,
 } from './schema.js';
 import { createField } from './widgets.js';
@@ -101,6 +101,27 @@ const STOP_FIELDS = [
     hint: 'Only used when Movement is not Solid. Floored the same way any '
       + 'other flashing look is.' },
 ];
+
+/** `STOP_FIELDS` with the Hold and Fade labels saying what their numbers
+ *  actually mean under `drive`. The values are the same two keys either way -
+ *  `hold_s`/`fade_s` keep the `_s` because renaming them would break every
+ *  config written before drives existed - so this is a label change, and the
+ *  label is the only place the unit is ever stated. */
+function stopFieldsFor(drive) {
+  if (drive === 'beats') {
+    return STOP_FIELDS.map((spec) => (
+      spec.key === 'hold_s' ? { ...spec, label: 'Hold (beats)', step: 1 }
+        : spec.key === 'fade_s' ? { ...spec, label: 'Fade (beats)', step: 1 }
+          : spec));
+  }
+  if (drive === 'progress') {
+    return STOP_FIELDS.map((spec) => (
+      spec.key === 'hold_s' ? { ...spec, label: 'Hold (share)' }
+        : spec.key === 'fade_s' ? { ...spec, label: 'Fade (share)' }
+          : spec));
+  }
+  return STOP_FIELDS;
+}
 
 /**
  * The floor `config.sequence_safe` applies to a stop's dwell (hold_s +
@@ -224,6 +245,7 @@ export function createLookEditor(o) {
     const seq = effect();
     if (!Array.isArray(seq.stops)) seq.stops = [];
     if (typeof seq.repeat !== 'boolean') seq.repeat = true;
+    if (typeof seq.drive !== 'string') seq.drive = 'clock';
     // Fill in the keys a stop written before TODO 36 does not carry. The
     // parser defaults all three anyway, so this changes no behaviour - but a
     // `select` whose value is absent from its options renders *blank*, which
@@ -251,7 +273,7 @@ export function createLookEditor(o) {
     const rows = el('div', { className: 'sequence-rows' });
     seq.stops.forEach((stop, index) => {
       const rowFields = el('div', { className: 'sequence-row-fields' });
-      for (const spec of STOP_FIELDS) {
+      for (const spec of stopFieldsFor(seq.drive)) {
         const field = createField(spec, stop, () => { refresh(); o.onChange?.(); });
         validators.push(field.validate);
         rowFields.append(field.el);
@@ -304,11 +326,30 @@ export function createLookEditor(o) {
       commitStructure();
     });
 
+    // What moves the list along (TODO 36d). A full rebuild on change, because
+    // the unit words on every row's Hold and Fade labels depend on it - the
+    // same numbers mean seconds, weights or beats depending on what is
+    // driving, and a row saying "(s)" under a beats drive would be a lie.
+    const driveField = createField(
+      {
+        key: 'drive', label: 'Driven by', kind: 'select',
+        options: DRIVES.map((d) => ({ value: d.value, label: d.label })),
+        hint: DRIVES.map((d) => `${d.label}: ${d.hint}`).join(' '),
+      },
+      seq,
+      () => { commitStructure(); },
+    );
+    validators.push(driveField.validate);
+
     const repeatField = createField(
       {
         key: 'repeat', label: 'Repeat', kind: 'checkbox',
-        hint: 'On loops until the light is told to show something else. Off '
-          + 'plays the list once, then the light falls back to its configured colour.',
+        hint: seq.drive === 'clock'
+          ? 'On loops until the light is told to show something else. Off '
+            + 'plays the list once, then the light falls back to its configured colour.'
+          : 'On wraps the list, so a short pattern repeats across a long run. '
+            + 'Off spreads it once across the whole thing and holds the last stop '
+            + 'at the end.',
       },
       seq,
       () => { refresh(); o.onChange?.(); },
@@ -317,10 +358,19 @@ export function createLookEditor(o) {
 
     const floorHint = el('span', {
       className: 'menu-hint', 'data-help': true,
-      textContent: 'A repeating sequence, or one longer than 3 stops, cannot move faster '
-        + `than the flash safety limit: each stop's hold + fade together is floored to at `
-        + `least ${sequenceFloor(o.floor).toFixed(2)}s, the same way a fast flash or `
-        + 'alternate is slowed down. A one-shot of 3 stops or fewer is exempt.',
+      // Only the clock drive is floored on dwell, and saying so matters: under
+      // the other two the app's own rate decides how fast stops go by, so a
+      // number of seconds here would describe a limit that is not being
+      // applied. A stop's *movement* is floored under every drive, because
+      // that one is `flash_safe` and runs on every push.
+      textContent: seq.drive === 'clock'
+        ? 'A repeating sequence, or one longer than 3 stops, cannot move faster '
+          + `than the flash safety limit: each stop's hold + fade together is floored to at `
+          + `least ${sequenceFloor(o.floor).toFixed(2)}s, the same way a fast flash or `
+          + 'alternate is slowed down. A one-shot of 3 stops or fewer is exempt.'
+        : 'How fast stops go by is set by whatever is driving this, not by the '
+          + 'numbers here - so the usual dwell limit does not apply. A stop whose '
+          + 'Movement flashes is still slowed to the flash safety limit.',
     });
 
     // Caught here rather than left to `_parse_sequence`'s own fallback: that
@@ -329,7 +379,9 @@ export function createLookEditor(o) {
     // ever gets there, the same way every other required field does.
     validators.push(() => (seq.stops.length ? null : 'A sequence needs at least one stop'));
 
-    fields.append(el('div', { className: 'sequence-edit' }, [rows, add, repeatField.el, floorHint]));
+    fields.append(el('div', { className: 'sequence-edit' }, [
+      rows, add, driveField.el, repeatField.el, floorHint,
+    ]));
   };
 
   const renderFields = () => {
