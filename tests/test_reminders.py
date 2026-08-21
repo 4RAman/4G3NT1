@@ -230,12 +230,17 @@ def test_it_round_trips_through_the_editor():
 
 
 def test_a_reminder_may_name_a_look_for_the_state_it_owns():
+    # A schedule activation is not an ambient Always one, so the config needs
+    # its own floor mode for "no warnings" to mean "the look parsed clean".
     cfg, warnings = parse_with_warnings({
         "looks": {"soft-amber": {"style": "breathe", "color": "#ffaa00"}},
         "modes": [{
             "name": "Stretch", "template": "reminders",
             "activation": {"type": "schedule", "at": AT},
             "looks": {"ALERT": "soft-amber"},
+        }, {
+            "name": "Base", "template": "actions", "activation": {"type": "always"},
+            "short_press": {"action": "log", "event": "x"},
         }],
     })
     assert cfg.modes[0].looks == {"ALERT": "soft-amber"}

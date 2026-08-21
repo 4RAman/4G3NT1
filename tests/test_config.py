@@ -806,6 +806,7 @@ def test_metronome_roundtrips(tmp_path):
         "name": "Tempo", "template": "metronome", "activation": {"type": "manual"},
         "start_bpm": 120.0, "max_bpm": 300.0, "tap_history": 8,
         "reset_gap_s": 2.0, "sound_on_tap": True, "log_as": "metronome",
+        "clock_port": "",  # tap-only, the tempo source this mode always had
     }
     assert dumped["modes"][0]["ladder"]["enabled"] is False  # opt-in
     assert parse_config(dumped) == cfg  # exact round-trip

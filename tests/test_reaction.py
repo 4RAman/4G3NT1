@@ -145,10 +145,16 @@ def test_leaving_reports_what_happened():
 
 
 def test_a_broken_field_costs_that_field_and_not_the_mode():
+    # Same reason as the hot/cold twin of this test: an ambient Always mode
+    # keeps _ensure_ambient_always from seeding "Home" and adding a fourth
+    # warning that has nothing to do with the broken fields.
     cfg, warnings = parse_with_warnings({
         "modes": [{
             "name": "Sharp", "template": "reaction", "activation": {"type": "manual"},
             "min_delay_s": 0, "rounds": -2, "log_as": "",
+        }, {
+            "name": "Base", "template": "actions", "activation": {"type": "always"},
+            "short_press": {"action": "log", "event": "x"},
         }],
     })
     mode = next(m for m in cfg.modes if m.name == "Sharp")

@@ -180,10 +180,16 @@ def test_an_event_the_game_does_not_know_changes_nothing():
 def test_a_broken_field_costs_that_field_and_not_the_mode():
     """The standing rule: a bad config never crashes the service, and every
     key falls back on its own."""
+    # The ambient Always mode is here only to keep the count honest: without
+    # one, _ensure_ambient_always seeds "Home" and adds a warning of its own,
+    # which says nothing about whether a broken field cost the mode.
     cfg, warnings = parse_with_warnings({
         "modes": [{
             "name": "Game", "template": "hotcold", "activation": {"type": "manual"},
             "sweep_s": -3, "rounds": "lots", "tolerance": 9, "log_as": "",
+        }, {
+            "name": "Base", "template": "actions", "activation": {"type": "always"},
+            "short_press": {"action": "log", "event": "x"},
         }],
     })
     mode = next(m for m in cfg.modes if m.name == "Game")
