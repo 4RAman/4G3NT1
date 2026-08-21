@@ -17,6 +17,7 @@ import json
 import pytest
 
 import aibutton.main as main
+from aibutton import sequencer
 from aibutton.config import (
     MODE_LED_STATES,
     SYSTEM_LED_STATES,
@@ -411,3 +412,102 @@ async def test_a_page_naming_no_look_costs_no_wire_traffic(tmp_path):
     await _run(tmp_path, _pages_config(modes=modes), script)
     assert seen["state"] is LEDState.LISTENING
     assert seen["effect"] is None
+
+
+# --- the four-step resolution order (TODO 36a) ------------------------------
+#
+# `set_led`'s explicit argument, then the active mode's look, then the global
+# state look, then None (meaning the palette). The middle two are the ones with
+# an order worth pinning: a mode that named a look for a state it owns is the
+# more specific answer and has to win, or a global default would quietly
+# override the per-mode colour that `looks` exists to make possible.
+
+_SEQ_LOOK = {"repeat": False, "stops": [
+    {"color": "#00ff2a", "hold_s": 0.2}, {"color": "#000000", "hold_s": 0.2},
+    {"color": "#00ff2a", "hold_s": 0.4},
+]}
+
+
+def _cfg_with_state_looks(**over):
+    raw = {
+        "looks": {"three-blinks": _SEQ_LOOK, "amber": {"style": "solid", "color": "#ffb400"}},
+        "modes": [{
+            "name": "Base", "template": "actions", "activation": {"type": "always"},
+            "short_press": {"action": "log", "event": "x"},
+        }],
+    }
+    raw.update(over)
+    return parse_config(raw)
+
+
+def test_a_system_state_may_name_a_look_the_palette_could_never_hold():
+    """The point of the whole feature: a palette entry ships to the device and
+    renders unattended, so it is one effect - a stop list is a schedule only
+    the host can walk. Naming one is how SUCCESS becomes a pattern."""
+    cfg = _cfg_with_state_looks(state_looks={"SUCCESS": "three-blinks"})
+    look = look_for(cfg, None, LEDState.SUCCESS)
+    assert isinstance(look, sequencer.Sequence)
+    assert len(look.stops) == 3
+
+
+def test_a_state_with_no_named_look_still_resolves_to_none():
+    """None is what `set_led` already means by "use the palette", so a state
+    nobody has named must cost no wire traffic at all."""
+    cfg = _cfg_with_state_looks(state_looks={"SUCCESS": "three-blinks"})
+    assert look_for(cfg, None, LEDState.ERROR) is None
+
+
+def test_a_modes_own_look_beats_the_global_state_look():
+    """The specific answer wins. LISTENING is the state where this is
+    reachable: a control page may name a look for it (MODE_LED_STATES) while
+    the button's own default for it lives on the Lights tab."""
+    cfg = parse_config({
+        "looks": {"amber": {"style": "solid", "color": "#ffb400"},
+                  "cyan": {"style": "solid", "color": "#00e5ff"}},
+        "state_looks": {"LISTENING": "amber"},
+        "modes": [
+            {"name": "Base", "template": "actions", "activation": {"type": "always"},
+             "short_press": {"action": "log", "event": "x"}},
+            {"name": "Desk", "template": "control", "activation": {"type": "manual"},
+             "short_press": {"action": "log", "event": "y"},
+             "looks": {"LISTENING": "cyan"}},
+        ],
+    })
+    desk = next(m for m in cfg.modes if m.name == "Desk")
+    # The page's own look while it is open...
+    assert look_for(cfg, desk, LEDState.LISTENING).color == "#00e5ff"
+    # ...and the global one everywhere else.
+    assert look_for(cfg, None, LEDState.LISTENING).color == "#ffb400"
+
+
+def test_a_state_look_naming_something_absent_falls_back_and_warns():
+    cfg, warnings = parse_with_warnings({
+        "looks": {"amber": {"style": "solid", "color": "#ffb400"}},
+        "state_looks": {"SUCCESS": "ghost"},
+        "modes": [{"name": "Base", "template": "actions",
+                   "activation": {"type": "always"},
+                   "short_press": {"action": "log", "event": "x"}}],
+    })
+    assert cfg.state_looks == {}
+    assert look_for(cfg, None, LEDState.SUCCESS) is None
+    assert any("not in 'looks'" in w for w in warnings), warnings
+
+
+def test_a_mode_owned_state_cannot_be_named_globally():
+    """ALERT belongs to the alarm, so naming it on the Lights tab would be
+    editing a mode's colour in the wrong place - the split CLAUDE.md draws."""
+    cfg, warnings = parse_with_warnings({
+        "looks": {"amber": {"style": "solid", "color": "#ffb400"}},
+        "state_looks": {"ALERT": "amber"},
+        "modes": [{"name": "Base", "template": "actions",
+                   "activation": {"type": "always"},
+                   "short_press": {"action": "log", "event": "x"}}],
+    })
+    assert cfg.state_looks == {}
+    assert any("not one of the button's own states" in w for w in warnings), warnings
+
+
+def test_state_looks_round_trip():
+    cfg = _cfg_with_state_looks(state_looks={"SUCCESS": "three-blinks", "IDLE": "amber"})
+    assert parse_config(as_dict(cfg)) == cfg
+    assert as_dict(cfg)["state_looks"] == {"SUCCESS": "three-blinks", "IDLE": "amber"}

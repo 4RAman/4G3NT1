@@ -256,3 +256,63 @@ def test_which_styles_strobe_has_not_drifted_from_the_editor():
 
 def test_every_strobing_style_is_a_real_style():
     assert STYLE_STROBES <= set(LED_STYLES)
+
+
+# --- the second axis, and the asymmetry in the exemption (TODO 36c) ---------
+#
+# `sequence_safe` floors two different things now. A stop's *dwell* is how fast
+# one stop follows another; a stop's *style* is how fast that stop flashes on
+# its own. The one-shot exemption covers the first and deliberately not the
+# second, and these tests exist because that is the kind of asymmetry a later
+# tidy-up would "simplify" away.
+
+def test_a_stops_own_style_is_floored_like_any_other_flashing_look():
+    seq = Sequence(
+        stops=(Stop("#ff0000", hold_s=2.0, style="flash", period_s=0.05),),
+        repeat=True,
+    )
+    floored = sequence_safe(seq, 1 / 3)
+    assert floored.stops[0].period_s == pytest.approx(1 / 3)
+
+
+def test_the_one_shot_exemption_does_not_reach_a_stops_style():
+    """A one-shot of three stops or fewer is exempt from the *dwell* floor -
+    three quick confirmation flashes sustain nothing. A stop that is itself
+    `flash` sustains inside a single stop: 0.05s held for two seconds is forty
+    flashes, one-shot or not, so the exemption's reasoning simply does not
+    apply to it."""
+    seq = Sequence(
+        stops=(Stop("#ff0000", hold_s=2.0, style="flash", period_s=0.05),),
+        repeat=False,
+    )
+    floored = sequence_safe(seq, 1 / 3)
+    # The dwell is left alone (exempt)...
+    assert floored.stops[0].hold_s == pytest.approx(2.0)
+    # ...and the style is not.
+    assert floored.stops[0].period_s == pytest.approx(1 / 3)
+
+
+def test_a_non_strobing_stop_style_is_left_alone():
+    """`breathe` travels the same distance smoothly, so a fast one reads as
+    shimmer rather than as a strobe - the same call `flash_safe` makes."""
+    seq = Sequence(
+        stops=(Stop("#ff0000", hold_s=2.0, style="breathe", period_s=0.05),),
+        repeat=True,
+    )
+    assert sequence_safe(seq, 1 / 3).stops[0].period_s == pytest.approx(0.05)
+
+
+def test_both_axes_are_floored_in_the_same_pass():
+    """One call, both properties - not two passes that could disagree about
+    which stops they touched."""
+    seq = Sequence(
+        stops=(
+            Stop("#ff0000", hold_s=0.01, style="flash", period_s=0.05),
+            Stop("#00ff00", hold_s=0.01),
+        ),
+        repeat=True,
+    )
+    floored = sequence_safe(seq, 1 / 3)
+    assert floored.stops[0].hold_s == pytest.approx(1 / 6)
+    assert floored.stops[0].period_s == pytest.approx(1 / 3)
+    assert floored.stops[1].hold_s == pytest.approx(1 / 6)

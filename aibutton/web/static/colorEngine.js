@@ -379,8 +379,12 @@ export function createLookEditor(o) {
     // ever gets there, the same way every other required field does.
     validators.push(() => (seq.stops.length ? null : 'A sequence needs at least one stop'));
 
+    // Drive and Repeat go *above* the stops, not below them. They are
+    // properties of the whole list, and the drive decides what the Hold and
+    // Fade columns even mean - reading eighteen rows of "Hold" before finding
+    // out whether they are seconds, shares or beats is the wrong way round.
     fields.append(el('div', { className: 'sequence-edit' }, [
-      rows, add, driveField.el, repeatField.el, floorHint,
+      driveField.el, repeatField.el, rows, add, floorHint,
     ]));
   };
 
@@ -575,13 +579,18 @@ export function createLookEditor(o) {
 
   renderFields();
   refresh();
-  row.append(
+  // Filtered, because this is a raw `append` rather than `el()` - and only
+  // `el()` skips nullish children. `modeToggle?.el` is undefined on every row
+  // that did not opt into sequences (the system palette's five), and
+  // `Element.append(undefined)` inserts the *string* "undefined", which is
+  // exactly what it was doing on the Lights tab.
+  row.append(...[
     el('div', { className: 'palette-head' }, head),
     presetDrawerEl,
     modeToggle?.el,
     fields,
     actions,
-  );
+  ].filter((node) => node != null));
 
   return {
     el: row,

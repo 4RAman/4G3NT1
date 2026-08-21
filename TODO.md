@@ -543,18 +543,28 @@ data and validated against the real parser, both floors and the drive table
 before being emitted as JS, which caught two that the dwell floor would have
 rewritten and five whose labels collided with the existing library.
 
-**Tests for (a)–(c) are owed.** They were skipped deliberately at the end of
-the 2026-08-21 session and are the first thing to write next. What needs
-covering, in rough order of how much it would hurt to get wrong: `shape()` at
-the ends and the middle of every curve; `plan_at` returning a solid mid-fade
-and the stop's own style during its hold; `sequence_safe` flooring a stop's
-style period *even for a one-shot of three stops* (the exemption asymmetry
-above); `look_for`'s four-step resolution order, including a mode look beating
-a state look; the round-trip of the three new stop keys; and
-`test_look_presets.py`, which slices `LOOK_PRESETS` and currently assumes
-every entry has an `effect` — five of them now have a `sequence` instead, and
-both floors need checking, not just `flash_safe`. A hand-run of that last
-check passed at the time of writing (all 42 presets clear both floors).
+**Tests caught up 2026-08-21**, suite at 1796 passing. Written: every curve's
+endpoints, monotonicity, mutual distinctness and its linear fallback for an
+unknown name; `plan_at` rendering solid mid-fade and the stop's own style
+during its hold; `sample_at`'s clamp, wrap and continuous interpolation, with
+the no-gradient bug pinned as a regression test; `sequence_safe`'s two axes and
+**the asymmetry in the one-shot exemption** — a stop's style period is floored
+even for a one-shot of three; `look_for`'s four-step resolution order,
+including a mode look beating a global state look; and `test_look_presets.py`
+rebuilt around the two preset shapes, checking every sequence against both
+floors and its drive, and — for the sampled ones — that it actually produces a
+gradient rather than one flat colour that would pass every other check.
+
+Two of those tests were wrong before the code was: `ease_in_out` passes through
+exactly 0.5 at the midpoint (it is symmetric), so curve distinctness has to be
+compared over the whole range rather than at one point.
+
+**Still owed**, none of it safety-critical: a direct round-trip of the drive
+and the three new stop keys through `as_dict` (covered incidentally by the
+preset and state-look tests, not head-on); the `_drive_warning` binding
+messages; and the named-look > ladder > ramp precedence inside `run_countdown`
+and `run_metronome`, which needs the async harness `test_main_takeover.py`
+uses.
 
 ### 35. A freshly seeded scene fails its own Check
 
