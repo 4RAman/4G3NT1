@@ -504,12 +504,29 @@ export const ACTIONS = [
     defaults: () => ({ action: 'enter_mode', target: '' }),
     describe: (a) => `Enter “${a.target || '…'}”`,
   },
+  {
+    type: 'standby',
+    label: 'Sleep / wake the button',
+    // No fields, and that is the whole design: which way it goes is session
+    // state the running service holds, not a setting, so there is nothing
+    // here to configure. Bind it to the five-tap and you have an off switch.
+    fields: [],
+    defaults: () => ({ action: 'standby' }),
+    describe: () => 'Sleep or wake the everyday gestures',
+  },
 ];
 
 export const ACTION_BY_TYPE = Object.fromEntries(ACTIONS.map((a) => [a.type, a]));
 
-/** One-line human summary of an action object, used by the mode editor. */
+/** One-line human summary of an action, used by the mode editor.
+ *
+ *  A binding may be a bare string naming one in the pool (config.py's
+ *  `NamedAction`) rather than an action object - summarised as the name,
+ *  because chasing the pool to render what it currently does would make the
+ *  summary of two gestures naming the same action differ from each other for
+ *  no reason a reader could see. */
 export function describeAction(action) {
+  if (typeof action === 'string') return `Named action “${action}”`;
   const descriptor = action && ACTION_BY_TYPE[action.action];
   return descriptor ? descriptor.describe(action) : JSON.stringify(action);
 }
@@ -672,7 +689,10 @@ export const TEMPLATES = [
       const parts = [];
       for (const g of GESTURES) {
         const action = mode[g.key];
-        if (action && action.action) parts.push(`${g.label} → ${describeAction(action)}`);
+        // A string binding is a pool reference and has no `.action` - see
+        // describeAction. Testing the binding itself rather than its shape is
+        // what keeps a named gesture from summarising as "nothing bound".
+        if (action) parts.push(`${g.label} → ${describeAction(action)}`);
       }
       let summary = parts.length ? parts.join(' · ') : 'nothing bound to any press yet';
       if (mode.unless_logged_today) summary += ` (skipped once ${mode.unless_logged_today} is logged today)`;
@@ -1183,7 +1203,7 @@ TEMPLATES.push({
     for (const g of GESTURES) {
       if (g.key === 'long_press') continue;
       const action = mode[g.key];
-      if (action && action.action) parts.push(`${g.label} → ${describeAction(action)}`);
+      if (action) parts.push(`${g.label} → ${describeAction(action)}`);
     }
     return parts.length
       ? `Control surface - ${parts.join(' · ')}`

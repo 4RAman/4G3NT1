@@ -415,27 +415,11 @@ view.
 
 **D9 is decided (2026-08-19)** — ARCHITECTURE.md "Apps own data" is the
 design, ROADMAP 3d the taxonomy (System / Custom / App-bound). The build
-halves are numbered: (b) the `SequenceAction` is item **33**, (c) app
-documents and app-bound actions are item **34**. What remains *here* is (a):
+halves are numbered: **(a) the named action pool shipped 2026-08-20 — see
+Done**; (b) the `SequenceAction` is item **33**; (c) app documents and
+app-bound actions are item **34**.
 
-**a) A named action pool.** `AppConfig.actions`, referenced by name from a
-gesture — precisely the move `looks` already made, and for the same reason
-(a thing edited in two places is not modular). **Naming stays optional**: most
-actions are used once, and forcing those through a library is indirection for
-nothing. A gesture holds an inline action *or* a name, exactly as a mode holds
-an inline look or a name. Nothing else depends on this; it can go first.
-
-**On the UI, which is what was originally asked.** A prominent Actions area is
-right for tinkerers and wrong as a default for novices: a novice never thinks
-*"I want to make an action"*, they think *"I want it to count cigarettes"*, and
-starting from an action then hunting for where to attach it is backwards. The
-Actions surface is a **tinker-tier** thing (TODO **14**) that *powers* a
-recipe-shaped novice path without appearing in it. Concept count is the enemy —
-there are already eleven concepts here and a novice holds about three.
-
-**Definition of done.** A pool of named actions in config, referenced by name
-from any gesture, edited in one place; inline actions unchanged; a binding
-naming a missing action falls back with a warning, never a crash.
+Nothing is left open under this number itself.
 
 ### 25. A transport app that knows what the DAW is doing
 
@@ -698,11 +682,6 @@ unimplemented, so there is no progress value to ramp over yet (item **29**).
   (Obsidian) and replace the placeholder tone tables carried over from the Pi
   build. A matching sound palette, pushed the way the LED palette is, is the
   obvious shape.
-- **The on/off toggle's action.** The 5-tap *gesture* shipped; there is no
-  "toggle the button off" action to bind it to. That is an `actions.py` +
-  `ACTIONS` + `config.py` change, and it needs a decision first: does "off"
-  mean the ambient layer stops matching, the device goes dark, or both?
-  **Ambient-only is the cheap and honest one.**
 - **The service is not always under the tray.** Started from a terminal it
   works identically (the panel polls `/api/status`, not the process table), but
   the panel's Start/Stop won't own it. Worth knowing when debugging.
@@ -755,6 +734,32 @@ unimplemented, so there is no progress value to ramp over yet (item **29**).
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**30a. A named action pool**~~ — shipped 2026-08-20. `AppConfig.actions`,
+  referenced from any gesture by a **bare string** (`"short_press": "smoke"`),
+  which is free by construction: every binding ever written is an object, so a
+  string can only mean this. Internally `config.NamedAction`, resolved at *use*
+  time by `config.resolve_action` at the three dispatch sites that bind an
+  action (main.py's ambient `handle`, `run_control`, `run_signal`).
+  Naming stays optional and inline actions are untouched. The parser warns
+  about a name with nothing behind it and **keeps the reference**; a pool entry
+  may not itself be a name, which is where the one-level guarantee is made
+  instead of a cycle check. UI: a tinker-tier **Named actions** section on the
+  Modes tab (rename rewrites every reference, delete deliberately does not) and
+  a "Use a named action" option on the mode editor's gesture picker.
+  The rule this leaves behind is in [CLAUDE.md](CLAUDE.md).
+
+- ~~**The on/off toggle's action**~~ (Smaller, worth doing) — shipped
+  2026-08-20 as the `standby` action, which is what the 5-tap gesture had been
+  waiting for. **Ambient-only**, which was the open decision: it toggles a
+  session flag, and while it is set the ambient layer answers nothing and logs
+  nothing except the gesture that undoes it. Takeovers are untouched — a
+  scheduled alarm still rings — because an alarm you set is not a thing a
+  stray five-tap should cancel. Not persisted: an "off" surviving a restart is
+  a button that comes back dead with nothing on it saying why. IDLE wears a dim
+  solid `#101010` while asleep, substituted inside `main.set_led` at the same
+  point a mode's own look is (so every path back to IDLE stays dim, and the
+  flash floor is still applied exactly once).
 
 - ~~**17. A number you can read off one light**~~ — shipped 2026-08-19 as
   `sequencer.readout(value, tens_color, units_color)`: tens as slow pulses

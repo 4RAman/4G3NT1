@@ -197,9 +197,56 @@ class EnterModeAction:
     target: str
 
 
+@dataclass(frozen=True)
+class StandbyAction:
+    """Put the ambient layer to sleep, or wake it - one gesture, both ways.
+
+    **Ambient-only, and session-only**, both decided rather than fallen into.
+    Ambient, because the other two readings of "off" cost more than they buy:
+    a button that goes dark cannot show you it is off, and a service that
+    stops has to be restarted by something that is not the button. What this
+    turns off is the layer that answers everyday gestures - a takeover already
+    running, and a scheduled one about to start, are untouched, because an
+    alarm you set is not a thing a stray five-tap should be able to cancel.
+
+    Session, because an "off" that survived a restart would be a button that
+    comes back dead with nothing on it to say why. The flag lives in main.py's
+    run loop and nowhere on disk.
+
+    Handled by main.py's `handle()` rather than by `execute()`, for the reason
+    `EnterModeAction` and `ReadoutAction` are: it changes what the loop does
+    with the *next* gesture, and that is state only the loop owns.
+    """
+
+
+@dataclass(frozen=True)
+class NamedAction:
+    """A reference into `AppConfig.actions` - the pool - by name.
+
+    The move `looks` already made, for the same reason: a thing edited in two
+    places is not modular, and an action bound to three gestures should be one
+    action. **Naming stays optional** - most actions are used once, and
+    forcing those through a library is indirection for nothing. A gesture
+    holds an inline action *or* a name, exactly as a mode holds an inline look
+    or a name.
+
+    In JSON it is a bare string, and that is what makes it free: every binding
+    ever written is an object, so a string can only mean this, and no existing
+    config can be misread as one.
+
+    **Resolved at use time** (`resolve_action`), not at parse time - the
+    reason `EnterModeAction` already gives about its target. Deleting a pool
+    entry leaves the references dangling *on purpose*: the parser warns and
+    the runtime fails clearly, which is more honest than quietly rewriting
+    what several gestures do.
+    """
+
+    name: str
+
+
 Action = (
     LogAction | ReadoutAction | TimerToggleAction | WebhookAction | OscAction
-    | MidiAction | EnterModeAction
+    | MidiAction | EnterModeAction | NamedAction | StandbyAction
 )
 
 
@@ -1302,6 +1349,42 @@ def _parse_looks(raw) -> dict[str, LedEffect | sequencer.Sequence]:
     return looks
 
 
+def _parse_action_pool(raw) -> dict[str, Action]:
+    """The named-action pool: `{"smoke": {"action": "log", "event": "cig"}}`.
+
+    `_parse_looks` again, key for key: empty by default (a pool of invented
+    names would be noise), per-entry fallback (one broken action costs that
+    entry, not the pool), an unusable name dropped with a complaint.
+
+    One rule of its own: **a pool entry may not itself be a name.** Chains
+    would need cycle detection to be safe and buy nothing that a second
+    binding to the same name does not already give you, so the one-level
+    guarantee is made here, where it is cheap, rather than in
+    `resolve_action`, where it would be a loop with a counter.
+    """
+    pool: dict[str, Action] = {}
+    if "actions" not in raw:
+        return pool
+    entries = raw["actions"]
+    if not isinstance(entries, dict):
+        log.error("config: 'actions' must be an object - ignored")
+        return pool
+    for name, entry in entries.items():
+        if not (isinstance(name, str) and name.strip()):
+            log.error("config: actions has an unusable name %r - ignored", name)
+            continue
+        if isinstance(entry, str):
+            log.error(
+                "config: actions[%r] is a name rather than an action - a pool "
+                "entry cannot reference another one; ignored", name,
+            )
+            continue
+        action = _parse_action(entry, f"actions.{name}")
+        if action is not None:
+            pool[name] = action
+    return pool
+
+
 def _parse_mode_looks(raw, where: str, template: str, known: set[str]) -> dict[str, str]:
     """One mode's state -> look-name map, dropping anything unusable.
 
@@ -1355,6 +1438,11 @@ class AppConfig:
     # which is what they all did before this existed. A look is a plain
     # effect or a stop list (sequencer.Sequence) - see `_parse_looks`.
     looks: dict[str, LedEffect | sequencer.Sequence] = field(default_factory=dict)
+    # Named actions a gesture can reference instead of holding one inline (see
+    # `resolve_action`). Empty means every binding is inline, which is what
+    # they all were before this existed. Naming is optional by design: this is
+    # for the action used in three places, not for the one used once.
+    actions: dict[str, Action] = field(default_factory=dict)
     # Where the swappable scene files live and which one is active. The scene
     # itself is merged in before parsing (see load_config_full), so nothing
     # downstream of here knows a scene was involved.
@@ -1401,9 +1489,30 @@ def _is_int_in(value, low: int, high: int) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
 
 
-def _parse_action(raw, where: str) -> Action | None:
+def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | None:
+    """One gesture's action: an inline object, or a bare string naming one in
+    the pool (`AppConfig.actions`).
+
+    `known` is the pool's names, passed at every call site that has one in
+    scope, so a misspelled reference is reported at load - beside every other
+    config complaint the editor already shows - instead of at the moment the
+    gesture failed to do anything. It is only ever a warning: the reference is
+    kept either way (see `NamedAction`). The legacy migration ladders pass
+    nothing, because a v0.1 config predates the pool and cannot contain a
+    reference into it - the same reason they never produce a named look.
+    """
+    if isinstance(raw, str):
+        if not raw.strip():
+            log.error("config: %s is an empty action name - ignored", where)
+            return None
+        if known is not None and raw not in known:
+            log.warning(
+                "config: %s names action %r, which is not in 'actions' - the "
+                "gesture does nothing until one exists", where, raw,
+            )
+        return NamedAction(name=raw)
     if not isinstance(raw, dict):
-        log.error("config: %s must be an object - ignored", where)
+        log.error("config: %s must be an object or an action name - ignored", where)
         return None
     # Legacy v0.1 command entries have no "action" key, just prompt/label.
     kind = raw.get("action", "prompt" if "prompt" in raw else None)
@@ -1428,6 +1537,10 @@ def _parse_action(raw, where: str) -> Action | None:
                     f"{where}.units_color", defaults.units_color,
                 ),
             )
+    elif kind == "standby":
+        # No fields: it is a toggle, and which way it goes is session state
+        # the run loop holds rather than anything a config can say.
+        return StandbyAction()
     elif kind == "timer_toggle":
         log_as = raw.get("log_as")
         if isinstance(log_as, str) and log_as:
@@ -1593,9 +1706,16 @@ def _parse_activation(raw, where: str) -> Activation | None:
     return None
 
 
-def _parse_actions_body(raw: dict, where: str, name: str) -> ActionsBehavior | None:
+def _parse_actions_body(
+    raw: dict, where: str, name: str, known: set[str] | None = None,
+) -> ActionsBehavior | None:
     """Parse the flat actions-template fields. An invalid action is dropped
-    individually; a mode left with zero valid gesture actions is skipped."""
+    individually; a mode left with zero valid gesture actions is skipped.
+
+    A binding that merely *names* a missing action is not invalid and does not
+    count against that rule: it is a reference the pool has yet to fill, and
+    losing the mode over one would be exactly the silent rewrite
+    `NamedAction` exists to avoid."""
     unless_logged_today = None
     if "unless_logged_today" in raw:
         value = raw["unless_logged_today"]
@@ -1611,7 +1731,7 @@ def _parse_actions_body(raw: dict, where: str, name: str) -> ActionsBehavior | N
     actions: dict[str, Action] = {}
     for trigger in TRIGGER_TYPES:
         if trigger in raw:
-            action = _parse_action(raw[trigger], f"{where}.{trigger}")
+            action = _parse_action(raw[trigger], f"{where}.{trigger}", known)
             if action is not None:
                 actions[trigger] = action
     if not actions:
@@ -1620,7 +1740,9 @@ def _parse_actions_body(raw: dict, where: str, name: str) -> ActionsBehavior | N
     return ActionsBehavior(actions=actions, unless_logged_today=unless_logged_today)
 
 
-def _parse_control_body(raw: dict, where: str, name: str) -> ControlBehavior | None:
+def _parse_control_body(
+    raw: dict, where: str, name: str, known: set[str] | None = None,
+) -> ControlBehavior | None:
     """Parse a control surface: the same gesture map as an actions mode, minus
     the long press.
 
@@ -1640,7 +1762,7 @@ def _parse_control_body(raw: dict, where: str, name: str) -> ControlBehavior | N
                 "cannot be bound - ignored", where,
             )
             continue
-        action = _parse_action(raw[trigger], f"{where}.{trigger}")
+        action = _parse_action(raw[trigger], f"{where}.{trigger}", known)
         if action is not None:
             actions[trigger] = action
     if not actions:
@@ -2159,7 +2281,9 @@ def _parse_hotcold_body(raw: dict, where: str) -> HotColdBehavior:
     )
 
 
-def _parse_signal_body(raw: dict, where: str) -> SignalBehavior:
+def _parse_signal_body(
+    raw: dict, where: str, known: set[str] | None = None,
+) -> SignalBehavior:
     """Parse the Signal template, falling back per key and per position.
 
     A broken position costs that position, not the mode - and a mode left with
@@ -2197,7 +2321,7 @@ def _parse_signal_body(raw: dict, where: str) -> SignalBehavior:
             if entry.get("action") is not None:
                 # A broken message costs the message, not the position: a
                 # status light whose webhook has a typo should still light up.
-                action = _parse_action(entry["action"], f"{spot}.action")
+                action = _parse_action(entry["action"], f"{spot}.action", known)
             states.append(SignalState(
                 name=name,
                 color=_parse_color(entry.get("color"), f"{spot}.color", "#ffffff"),
@@ -2288,10 +2412,15 @@ def _parse_reaction_body(raw: dict, where: str) -> ReactionBehavior:
     )
 
 
-def _parse_mode(raw, idx: int, looks: set[str] | None = None) -> Mode | None:
+def _parse_mode(
+    raw, idx: int, looks: set[str] | None = None, actions: set[str] | None = None,
+) -> Mode | None:
     """Parse one mode. A mode with a broken activation, a template<->
     activation nature mismatch, or no usable body is skipped entirely
-    (logged) - the fail-soft floor is the built-in default modes."""
+    (logged) - the fail-soft floor is the built-in default modes.
+
+    `looks` and `actions` are the two pools' names, passed only so a mode
+    referencing something absent is *reported*; neither can cause a skip."""
     where = f"modes[{idx}]"
     if not isinstance(raw, dict):
         log.error("config: %s must be an object - skipped", where)
@@ -2315,7 +2444,7 @@ def _parse_mode(raw, idx: int, looks: set[str] | None = None) -> Mode | None:
         return None
 
     if template == "actions":
-        behavior = _parse_actions_body(raw, where, name)
+        behavior = _parse_actions_body(raw, where, name, actions)
     elif template == "alarm":
         behavior = _parse_alarm_body(raw, where)
     elif template == "reminders":
@@ -2337,9 +2466,9 @@ def _parse_mode(raw, idx: int, looks: set[str] | None = None) -> Mode | None:
     elif template == "reaction":
         behavior = _parse_reaction_body(raw, where)
     elif template == "signal":
-        behavior = _parse_signal_body(raw, where)
+        behavior = _parse_signal_body(raw, where, actions)
     elif template == "control":
-        behavior = _parse_control_body(raw, where, name)
+        behavior = _parse_control_body(raw, where, name, actions)
     else:  # pragma: no cover - allow-list keys and this dispatch stay in sync
         log.error("config: %s (%r) has unknown template %r - skipped", where, name, template)
         return None
@@ -2421,28 +2550,33 @@ def _migrate_rule(raw, idx: int) -> Mode | None:
     )
 
 
-def _parse_modes(raw: dict, looks: set[str] | None = None) -> tuple[Mode, ...]:
+def _parse_modes(
+    raw: dict, looks: set[str] | None = None, actions: set[str] | None = None,
+) -> tuple[Mode, ...]:
     """Resolve the modes list, then guarantee it can actually answer a
     gesture: `_ensure_ambient_always` is the last step so nothing upstream
     (the migration ladder, a hand-written "modes" list, a scene merged over
     either) has to re-derive the same fail-soft rule."""
-    return _ensure_ambient_always(_resolve_mode_list(raw, looks))
+    return _ensure_ambient_always(_resolve_mode_list(raw, looks, actions))
 
 
-def _resolve_mode_list(raw: dict, looks: set[str] | None) -> tuple[Mode, ...]:
+def _resolve_mode_list(
+    raw: dict, looks: set[str] | None, actions: set[str] | None = None,
+) -> tuple[Mode, ...]:
     """The migration ladder itself: modes (v0.3) -> rules (v0.2) -> commands
     (v0.1) -> built-in defaults.
 
-    `looks` is the pool of names a mode may reference; it is parsed first so a
-    dangling reference is caught here and reported, rather than discovered at
-    the moment the light should have changed colour. The legacy ladders below
-    predate looks entirely and never produce one.
+    `looks` and `actions` are the two pools of names a mode may reference;
+    both are parsed first so a dangling reference is caught here and reported,
+    rather than discovered at the moment the light should have changed colour
+    or the gesture should have done something. The legacy ladders below
+    predate both pools entirely and never produce a reference into either.
     """
     if isinstance(raw.get("modes"), list):
         modes = tuple(
             mode
             for idx, entry in enumerate(raw["modes"])
-            if (mode := _parse_mode(entry, idx, looks)) is not None
+            if (mode := _parse_mode(entry, idx, looks, actions)) is not None
         )
         if not modes:
             log.error("config: no valid modes - using defaults")
@@ -2486,17 +2620,18 @@ def parse_config(raw: dict) -> AppConfig:
     known = {
         "ble_device_name", "sounds_enabled", "database_path",
         "web_enabled", "web_host", "web_port",
-        "modes", "rules", "commands", "led_palette", "looks", "scenes",
-        "min_flash_period_s",
+        "modes", "rules", "commands", "led_palette", "looks", "actions",
+        "scenes", "min_flash_period_s",
     }
     for key in raw:
         if key not in known:
             log.warning("config: unknown key %r - ignored", key)
 
-    # The look pool is parsed before the modes so a mode naming a look that
+    # Both pools are parsed before the modes, so a mode naming something that
     # does not exist is reported here rather than at the moment the light
-    # should have changed colour.
+    # should have changed colour or the gesture should have done something.
     looks = _parse_looks(raw)
+    action_pool = _parse_action_pool(raw)
 
     return AppConfig(
         ble_device_name=_take(raw, "ble_device_name", str, defaults.ble_device_name),
@@ -2505,9 +2640,10 @@ def parse_config(raw: dict) -> AppConfig:
         web_enabled=_take(raw, "web_enabled", bool, defaults.web_enabled),
         web_host=_take(raw, "web_host", str, defaults.web_host),
         web_port=_take(raw, "web_port", int, defaults.web_port),
-        modes=_parse_modes(raw, set(looks)),
+        modes=_parse_modes(raw, set(looks), set(action_pool)),
         led_palette=_parse_palette(raw),
         looks=looks,
+        actions=action_pool,
         scenes=scenes.parse_settings(raw.get("scenes")),
         min_flash_period_s=_parse_min_flash_period(raw),
     )
@@ -2618,6 +2754,23 @@ def look_for(
         return None
     name = mode.looks.get(state.value)
     return config.looks.get(name) if name else None
+
+
+def resolve_action(config: AppConfig, action: Action | None) -> Action | None:
+    """The action to actually run: `action` itself, or whatever it names.
+
+    The single place a `NamedAction` becomes a real one, which is why it lives
+    here rather than inlined at the three dispatch sites that need it
+    (main.py's ambient `handle`, `run_control` and `run_signal`). A name with
+    nothing behind it returns None and the caller fails clearly - the same
+    contract `EnterModeAction`'s target has had since it was written.
+
+    One level, by construction: `_parse_action_pool` refuses an entry that is
+    itself a name, so there is no chain to walk here and no cycle to detect.
+    """
+    if not isinstance(action, NamedAction):
+        return action
+    return config.actions.get(action.name)
 
 
 @contextlib.contextmanager
@@ -2762,7 +2915,13 @@ def load_config(path: str) -> AppConfig:
     return load_config_full(path).config
 
 
-def _action_to_dict(action: Action) -> dict:
+def _action_to_dict(action: Action) -> dict | str:
+    """Round-trip one action. A `NamedAction` comes back as the bare string it
+    was written as, which is the whole reason a string was chosen for it."""
+    if isinstance(action, NamedAction):
+        return action.name
+    if isinstance(action, StandbyAction):
+        return {"action": "standby"}
     if isinstance(action, LogAction):
         return {"action": "log", "event": action.event}
     if isinstance(action, ReadoutAction):
@@ -2982,6 +3141,9 @@ def as_dict(cfg: AppConfig) -> dict:
             name: _effect_to_dict(effect) for name, effect in cfg.led_palette.items()
         },
         "looks": {name: _look_to_dict(look) for name, look in cfg.looks.items()},
+        "actions": {
+            name: _action_to_dict(action) for name, action in cfg.actions.items()
+        },
     }
 
 

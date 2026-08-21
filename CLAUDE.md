@@ -298,6 +298,20 @@ Three consequences for code written today:
   modular. Their palette entries **stay in config** as the invisible fallback a
   mode with no named look renders (`base_look` reads them) — only the editor
   group went away. Deleting the entries would leave such a mode with nothing.
+- **A gesture holds an action or names one, and the name is resolved at use
+  time.** The pool is `AppConfig.actions`; a binding that is a **bare string**
+  is a reference into it (`NamedAction`). One resolver,
+  `config.resolve_action`, called at each of the three places an action is
+  dispatched (`main.handle`, `run_control`, `run_signal`) — a fourth dispatch
+  site calls it too, or that surface silently cannot use the pool. Naming is
+  optional and inline actions are untouched, because most actions are used
+  once. **Deleting a pool entry leaves the references dangling on purpose**:
+  the parser warns, the editor shows "(missing)", and the runtime fails
+  clearly, all of which beat quietly repointing several gestures at something
+  nobody chose. Renaming in the editor rewrites references; a hand-edited file
+  can still dangle, which is why the parser warns at all. A pool entry may not
+  itself be a name — that is where one-level-only is guaranteed, so
+  `resolve_action` needs no cycle check.
 - **A mode names a look; it never owns one.** The pool is `AppConfig.looks`
   and a mode holds `{state: look-name}`. Which states a mode may colour is
   `MODE_LED_STATES` in [config.py](aibutton/config.py), mirrored as

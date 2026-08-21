@@ -53,6 +53,14 @@ export class ModeEditor {
     return { getModes: this.handlers.getModes || (() => []), api: this.handlers.api };
   }
 
+  /** The named-action pool, as `{name: action}`. Read through the handler for
+   *  the same reason `getModes` is: this editor does not know where the pool
+   *  lives, and an editor built off-screen to run validators (menu.js's
+   *  _collectErrors) may be handed none at all. */
+  _actionPool() {
+    return (this.handlers.getActions ? this.handlers.getActions() : null) || {};
+  }
+
   _build() {
     clear(this.el);
     this._validators = [];
@@ -572,11 +580,24 @@ export class ModeEditor {
   }
 
   _gesture(gesture) {
+    // A sentinel, not an action type: naming a pooled action is a different
+    // *way of holding* one, which is why it is absent from ACTIONS and from
+    // the parser's kind branches. The leading underscores keep it out of the
+    // namespace an action type could ever occupy.
+    const NAMED = '__named__';
     const select = el('select', { className: 'inp' }, [
       el('option', { value: '', textContent: '- do nothing -' }),
       ...ACTIONS.map((a) => el('option', { value: a.type, textContent: a.label })),
+      el('option', { value: NAMED, textContent: 'Use a named action' }),
     ]);
-    select.value = this.mode[gesture.key]?.action || '';
+    // A string binding is a pool reference (config.py's NamedAction). Reading
+    // it as `?.action` - which is what this line used to do - would show it as
+    // "do nothing" and then delete it on Save, so the string case is checked
+    // first everywhere the binding is inspected in this method.
+    const isNamed = (value) => typeof value === 'string';
+    select.value = isNamed(this.mode[gesture.key])
+      ? NAMED
+      : (this.mode[gesture.key]?.action || '');
 
     const fields = el('div', { className: 'gesture-fields' });
     // Held in a stable array so the registered validator below always reads
@@ -587,6 +608,12 @@ export class ModeEditor {
       clear(fields);
       fieldValidators.length = 0;
       const action = this.mode[gesture.key];
+      if (isNamed(action)) {
+        const picker = this._namedActionField(gesture);
+        fields.append(picker.el);
+        fieldValidators.push(picker.validate);
+        return;
+      }
       const descriptor = action && ACTION_BY_TYPE[action.action];
       if (!descriptor) return;
       for (const spec of descriptor.fields) {
@@ -603,6 +630,10 @@ export class ModeEditor {
 
     select.addEventListener('change', () => {
       if (!select.value) delete this.mode[gesture.key];
+      // An empty name rather than a guessed one: picking the pool's first
+      // entry for someone would bind a gesture to an action they never chose,
+      // and the validator below is what stops an empty one being saved.
+      else if (select.value === NAMED) this.mode[gesture.key] = '';
       else this.mode[gesture.key] = ACTION_BY_TYPE[select.value].defaults();
       buildFields();
       this._changed();
@@ -625,6 +656,52 @@ export class ModeEditor {
       gesture.hint ? el('span', { className: 'fld-hint', 'data-help': true, textContent: gesture.hint }) : null,
       fields,
     ]);
+  }
+
+  /**
+   * The body shown when a gesture is bound by name: a picker over the pool.
+   * Returns the widget contract (`{el, validate}`) so `buildFields` treats it
+   * exactly like any schema-driven field.
+   */
+  _namedActionField(gesture) {
+    const names = Object.keys(this._actionPool()).sort();
+    const current = this.mode[gesture.key];
+    const options = [el('option', { value: '', textContent: '- pick one -' })];
+    // A name whose pool entry has been deleted stays listed and stays
+    // selected, marked. The pool is edited elsewhere, and silently repointing
+    // this gesture at some other action is exactly the rewrite the dangling
+    // name is designed to prevent - the deletion should be visible here and
+    // fixed deliberately.
+    if (current && !names.includes(current)) {
+      options.push(el('option', { value: current, textContent: `${current} (missing)` }));
+    }
+    options.push(...names.map((n) => el('option', { value: n, textContent: n })));
+
+    const pick = el('select', { className: 'inp' }, options);
+    pick.value = current || '';
+    const err = el('span', { className: 'fld-err' });
+    pick.addEventListener('change', () => {
+      this.mode[gesture.key] = pick.value;
+      err.textContent = '';
+      this._changed();
+    });
+
+    const hint = names.length
+      ? 'Edited once in the Actions pool - every gesture naming it changes together.'
+      : 'No named actions yet. The Actions pool, under Tinker on the Modes tab, is where they are made.';
+    return {
+      el: el('label', { className: 'fld' }, [
+        el('span', { className: 'fld-label', textContent: 'Named action' }),
+        pick,
+        el('span', { className: 'fld-hint', 'data-help': true, textContent: hint }),
+        err,
+      ]),
+      validate: () => {
+        const message = pick.value ? null : 'pick a named action, or choose another action type';
+        err.textContent = message || '';
+        return message;
+      },
+    };
   }
 
   /** Run every field validator; returns an array of error strings (empty = ok). */

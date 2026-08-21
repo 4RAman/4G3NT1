@@ -8,8 +8,8 @@
 import { el, clear } from './dom.js';
 import { ConfigApi } from './api.js';
 import {
-  BUILTIN_MODES, GESTURES, SYSTEM_LED_STATES,
-  MODE_GROUPS, SETTINGS_GROUPS, TEMPLATE_BY_TYPE, describeTemplate,
+  ACTIONS, ACTION_BY_TYPE, BUILTIN_MODES, GESTURES, SYSTEM_LED_STATES,
+  MODE_GROUPS, SETTINGS_GROUPS, TEMPLATE_BY_TYPE, describeAction, describeTemplate,
 } from './schema.js';
 import { ModeEditor } from './modeEditor.js';
 import { SceneBar } from './scenes.js';
@@ -77,7 +77,9 @@ export class ConfigMenu {
     for (const mount of this._ownMounts()) clear(mount);
     if (this.selectedMode && !this.model.modes.includes(this.selectedMode)) this.selectedMode = null;
 
-    this.mounts.modes.append(this._renderPrimer(), this._renderModesLayout());
+    this.mounts.modes.append(
+      this._renderPrimer(), this._renderModesLayout(), this._renderActionPoolSection(),
+    );
     this.mounts.lights.append(this._renderPaletteSection());
     this.mounts.device.append(this._renderSettingsSection());
 
@@ -279,6 +281,9 @@ export class ConfigMenu {
       // gets made now that mode colour lives here - the Lights tab is where
       // they are *managed*, not where they have to be born.
       getLooks: () => this.model.looks || {},
+      // Same reasoning as getLooks: the action pool is config-wide, so a mode
+      // reads it rather than owning it.
+      getActions: () => this.model.actions || {},
       getFloor: () => this.model.min_flash_period_s,
       api: this.api,
       addLook: (name, effect) => this._addLook(name, effect),
@@ -462,6 +467,132 @@ export class ConfigMenu {
     }
   }
 
+  /**
+   * The named-action pool (TODO 30a) - `looks` again, for actions.
+   *
+   * **Tinker-tier by the whole item's design, not by timidity.** A novice does
+   * not think "I want to make an action", they think "I want it to count
+   * cigarettes", and starting from an action and then hunting for somewhere to
+   * attach it is backwards. So this powers the recipe-shaped path without
+   * appearing in it: everything here is reachable, and nothing here is in the
+   * way. `data-tier="tinker"` is all it takes - help.js's MutationObserver
+   * finds the node whenever this rerenders.
+   *
+   * On the Modes tab rather than a tab of its own, because concept count is
+   * the enemy and an action is a thing a *gesture* has.
+   */
+  _renderActionPoolSection() {
+    this.actionsWrap = el('div', { className: 'palette-wrap' });
+    this._renderActionPool();
+
+    const add = el('button', { type: 'button', textContent: '+ Add a named action' });
+    add.addEventListener('click', () => {
+      if (!this.model.actions) this.model.actions = {};
+      let name = 'action';
+      for (let n = 2; this.model.actions[name]; n += 1) name = `action ${n}`;
+      this.model.actions[name] = { action: 'log', event: '' };
+      this._renderActionPool();
+      this._markDirty();
+    });
+
+    return el('div', { className: 'action-pool', 'data-tier': 'tinker' }, [
+      el('h3', { className: 'palette-group', textContent: 'Named actions' }),
+      el('p', { className: 'menu-hint', 'data-help': true, textContent: 'A shared pool of actions. Name one here and any gesture can point at it by name, so the three gestures that all send the same webhook are one thing to edit rather than three. Naming is optional - an action used once is better written straight on the gesture.' }),
+      this.actionsWrap,
+      el('div', { className: 'add-row' }, [add]),
+    ]);
+  }
+
+  _renderActionPool() {
+    clear(this.actionsWrap);
+    const pool = this.model.actions || {};
+    const names = Object.keys(pool).sort();
+    if (!names.length) {
+      this.actionsWrap.append(el('p', { className: 'menu-hint', textContent: 'No named actions yet.' }));
+      return;
+    }
+    for (const name of names) this.actionsWrap.append(this._renderActionRow(name));
+  }
+
+  /** One pool entry: its name, what it is, and the two edits a pool needs. */
+  _renderActionRow(name) {
+    const nameInput = el('input', { type: 'text', className: 'inp', value: name });
+    // Renaming rewrites every gesture pointing here, so the pool and its
+    // references can never drift into a dangling name *from the UI*. The
+    // parser still warns about one, because a hand-edited config always can.
+    nameInput.addEventListener('change', () => {
+      const next = nameInput.value.trim();
+      if (!next || next === name || this.model.actions[next]) {
+        nameInput.value = name;  // refused: taken, empty, or unchanged
+        return;
+      }
+      this.model.actions[next] = this.model.actions[name];
+      delete this.model.actions[name];
+      for (const mode of this.model.modes || []) {
+        for (const gesture of GESTURES) {
+          if (mode[gesture.key] === name) mode[gesture.key] = next;
+        }
+        for (const state of mode.states || []) {
+          if (state && state.action === name) state.action = next;
+        }
+      }
+      this._renderActionPool();
+      this._renderModes();
+      this._markDirty();
+    });
+
+    const summary = el('span', {
+      className: 'menu-hint',
+      textContent: describeAction(this.model.actions[name]),
+    });
+
+    const edit = el('div', { className: 'gesture-fields' });
+    const buildFields = () => {
+      clear(edit);
+      const action = this.model.actions[name];
+      const descriptor = action && ACTION_BY_TYPE[action.action];
+      if (!descriptor) return;
+      for (const spec of descriptor.fields) {
+        const ctx = {
+          getModes: () => this.model.modes, api: this.api, rebuild: buildFields,
+        };
+        const field = createField(spec, action, () => {
+          summary.textContent = describeAction(action);
+          this._markDirty();
+        }, ctx);
+        edit.append(field.el);
+      }
+    };
+
+    const kind = el('select', { className: 'inp' },
+      ACTIONS.map((a) => el('option', { value: a.type, textContent: a.label })));
+    kind.value = this.model.actions[name].action || 'log';
+    kind.addEventListener('change', () => {
+      this.model.actions[name] = ACTION_BY_TYPE[kind.value].defaults();
+      buildFields();
+      summary.textContent = describeAction(this.model.actions[name]);
+      this._markDirty();
+    });
+
+    const remove = el('button', { type: 'button', textContent: 'Delete' });
+    remove.addEventListener('click', () => {
+      delete this.model.actions[name];
+      // Deliberately leaves the references, exactly as deleting a look does:
+      // the gesture picker shows "(missing)" and the parser warns, which is
+      // more honest than silently changing what several gestures do.
+      this._renderActionPool();
+      this._renderModes();
+      this._markDirty();
+    });
+
+    buildFields();
+    return el('div', { className: 'gesture-row' }, [
+      el('div', { className: 'gesture-head' }, [nameInput, kind, remove]),
+      summary,
+      edit,
+    ]);
+  }
+
   // One control for every colour in the app - see colorEngine.js. This is a
   // thin adapter: the Lights tab's own concerns are marking the config dirty
   // and collecting validators, and neither of those belongs in the engine.
@@ -518,6 +649,7 @@ export class ConfigMenu {
         : new ModeEditor(mode, {
           getModes: () => this.model.modes,
           getLooks: () => this.model.looks || {},
+          getActions: () => this.model.actions || {},
         });
       const label = mode.name || '(unnamed mode)';
       for (const err of editor.validate()) errors.push(`${label}: ${err}`);

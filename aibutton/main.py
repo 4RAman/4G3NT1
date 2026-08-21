@@ -68,6 +68,13 @@ _ERROR_DISPLAY_S = 1.5
 # SUCCESS hold time; the device's green window matches it.
 _SUCCESS_DISPLAY_S = 2.0
 
+# What IDLE looks like while the ambient layer is asleep (config.StandbyAction).
+# Solid rather than any animation, and dim rather than off: "off" and "the
+# button is unplugged" have to be different things to look at, and a light that
+# is not moving is the least attention this build can ask for while still
+# answering the only question standby raises - is it still on?
+_STANDBY_COLOR = "#101010"
+
 # How long a control surface holds its per-command confirmation. Much shorter
 # than _SUCCESS_DISPLAY_S on purpose: that one ends with a drop back to IDLE,
 # so two seconds is a pause between separate interactions. A control surface
@@ -314,10 +321,12 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         ReadoutAction,
         ReminderBehavior,
         SignalBehavior,
+        StandbyAction,
         StopwatchBehavior,
         bound_triggers,
         flash_safe,
         look_for,
+        resolve_action,
         sequence_safe,
     )
     from .rules import resolve
@@ -363,6 +372,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     # `set_led` can find the look it wears without every run_* loop having to
     # be handed its own Mode and pass it along on every call.
     active_mode = None
+
+    # Whether the ambient layer is asleep (config.StandbyAction). Session
+    # state on purpose and therefore a local: an "off" that outlived a restart
+    # would be a button that comes back dead with nothing on it to say why.
+    standby = False
 
     # The task walking a Sequence look's planner, if one is currently running
     # - see `_drive_sequence`. Cancelled by `set_led` before it does anything
@@ -438,6 +452,16 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
         if effect is None:
             effect = look_for(cm.config, active_mode, state)
+        if standby and state is LEDState.IDLE and effect is None:
+            # Standby dims the *resting* light and only that. It is the ambient
+            # layer that is asleep, so IDLE is the one state that should look
+            # different, and a scheduled alarm ringing through a standby must
+            # still look like an alarm. Substituted here, at the same point a
+            # mode's own look is, rather than at each of the several places
+            # that drop back to IDLE - those would drift, and one of them
+            # already does the drop after a takeover the ambient layer never
+            # saw start.
+            effect = LedEffect(style="solid", color=_STANDBY_COLOR)
 
         if isinstance(effect, sequencer.Sequence):
             # THE ONE GATE for a sequence's floor, mirroring flash_safe just
@@ -1686,11 +1710,22 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             status.last_message = f"{state.name} ({index + 1}/{len(states)})"
             if state.action is None:
                 return state.name
+            # A position may name a pooled action instead of carrying one
+            # (config.NamedAction); resolve_action is the one place that is
+            # undone, here as in handle() and run_control().
+            action = resolve_action(cm.config, state.action)
+            if action is None:
+                log.warning(
+                    "signal %r: %s names no action that exists",
+                    mode_name, state.name,
+                )
+                status.last_message = f"{state.name} - no action named {state.action.name!r}"
+                return state.name
             # Reusing execute() is the whole reason this template is cheap:
             # webhook, OSC and log all already work here, and so will the next
             # primitive anyone adds.
             result = await execute(
-                state.action, trigger="signal", mode_name=mode_name, store=store,
+                action, trigger="signal", mode_name=mode_name, store=store,
             )
             if not result.ok:
                 # A failed send must not strand the light on the old colour -
@@ -1778,11 +1813,19 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 ), None
             if trigger is TriggerType.LONG_PRESS:
                 return ActionResult(True, f"{mode_name} left ({fired} sent)"), None
-            action = behavior.actions.get(trigger.value)
-            if action is None:
+            bound = behavior.actions.get(trigger.value)
+            if bound is None:
                 # Nothing bound. Say so and stay open - dropping out of the app
                 # because you mistimed a tap would be the opposite of useful.
                 status.last_message = f"{mode_name}: nothing on {trigger.value}"
+                play_sound(Sound.ERROR)
+                continue
+            # A binding may be a name rather than an action - see
+            # resolve_action. A name with nothing behind it is treated exactly
+            # like nothing bound, for the same reason: the page stays open.
+            action = resolve_action(cm.config, bound)
+            if action is None:
+                status.last_message = f"{mode_name}: no action named {bound.name!r}"
                 play_sound(Sound.ERROR)
                 continue
             if isinstance(action, EnterModeAction):
@@ -2030,17 +2073,57 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         set_status("IDLE")
 
     async def handle(trigger: TriggerType) -> None:
+        nonlocal standby
+        resolved = resolve(
+            cm.config.modes, trigger.value, clock.now(), logged_today=store.logged_today
+        )
+        # A binding may name a pooled action rather than hold one
+        # (config.NamedAction). Undone here, once, before anything below asks
+        # what kind of action it is - which is why the isinstance chain reads
+        # exactly as it did before the pool existed.
+        action = resolve_action(cm.config, resolved[1]) if resolved is not None else None
+
+        if standby and not isinstance(action, StandbyAction):
+            # Asleep: the ambient layer answers nothing and does not let on
+            # that it was asked - no ack, no light, no event, no status line
+            # moving. The one gesture that still lands is the one that can undo
+            # this, because a standby only a restart could leave would be a
+            # button that looks broken.
+            log.debug("standby: %s ignored", trigger.value)
+            return
+
         play_sound(Sound.ACK)
         set_led(LEDState.LISTENING)
         set_status("THINKING")
         status.last_trigger = trigger.value
-        resolved = resolve(
-            cm.config.modes, trigger.value, clock.now(), logged_today=store.logged_today
-        )
         if resolved is None:
             status.last_mode = None
             await fail(f"no mode matches {trigger.value} right now")
-        elif isinstance((action := resolved[1]), EnterModeAction):
+        elif action is None:
+            # A binding naming a pool entry that is not there. The parser
+            # warned about this at load; this is the same fact at the moment it
+            # costs you something, and it fails the way a missing enter_mode
+            # target does rather than crashing.
+            status.last_mode = resolved[0].name
+            await fail(f"no action named {resolved[1].name!r}")
+        elif isinstance(action, StandbyAction):
+            # Handled here rather than in execute() for the reason enter_mode
+            # and readout are: what it changes is what the *loop* does with the
+            # next gesture, and that is state only the loop owns.
+            standby = not standby
+            status.last_mode = resolved[0].name
+            status.last_ok = True
+            status.last_message = (
+                "standby - the ambient layer is asleep"
+                if standby else "awake - the ambient layer is answering again"
+            )
+            log.info("standby %s", "on" if standby else "off")
+            # No explicit look either way: set_led already knows what IDLE
+            # means while asleep, so the same call dims it and undims it.
+            set_led(LEDState.IDLE)
+            set_status("STANDBY" if standby else "IDLE")
+            return
+        elif isinstance(action, EnterModeAction):
             # A gesture starting a takeover: look the target up by name and,
             # if it is a takeover mode (alarm/stopwatch/counter), hand off to
             # enter_takeover (which owns the LED/sound/status and the IDLE drop
@@ -2082,7 +2165,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             log.info("readout %s -> %d today", action.event, count)
             return
         else:
-            mode, action = resolved
+            mode = resolved[0]
             status.last_mode = mode.name
             log.info(
                 "trigger %s -> mode %r (%s)",
