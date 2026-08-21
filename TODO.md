@@ -533,6 +533,16 @@ the button does than rendering the same colours on the wrong axis.
 is no place to sample from. Giving it one is the same piece of work **19c**
 describes, and it should be done once, for both.
 
+**The preset library is now the front door it was supposed to be.** 100 stop-list
+presets landed 2026-08-21 in eleven groups — Confirm, Countdown, Tempo, Nature,
+Signals, Retro, Focus, Mood, Play, Ambient, Patterns — bringing `LOOK_PRESETS`
+to 142 entries (37 effects, 105 sequences; 84 clock, 11 progress, 10 beats).
+Countdown and Tempo are the drive-specific ones, so those two groups only mean
+anything under the app that supplies their number. They were designed as Python
+data and validated against the real parser, both floors and the drive table
+before being emitted as JS, which caught two that the dwell floor would have
+rewritten and five whose labels collided with the existing library.
+
 **Tests for (a)–(c) are owed.** They were skipped deliberately at the end of
 the 2026-08-21 session and are the first thing to write next. What needs
 covering, in rough order of how much it would hurt to get wrong: `shape()` at

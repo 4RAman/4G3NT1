@@ -408,10 +408,15 @@ export function createLookEditor(o) {
     // `stops` behind after picking a plain effect would make the result read
     // as a sequence that happens to carry a style, and `isSequence()` keys
     // off exactly that.
+    // Every key the incoming shape might *not* carry has to go first, not just
+    // the other shape's keys. A clock-driven sequence omits `drive` entirely
+    // (it is the default), so assigning one over a beats-driven preset would
+    // leave the old `drive` behind and silently mis-drive the new look - which
+    // is exactly what happened before this line listed it.
     if (presetIsSequence(preset)) {
-      for (const key of ['style', 'color', 'color2', 'period_s']) delete target[key];
+      for (const key of ['style', 'color', 'color2', 'period_s', 'drive']) delete target[key];
     } else {
-      for (const key of ['stops', 'repeat']) delete target[key];
+      for (const key of ['stops', 'repeat', 'drive']) delete target[key];
     }
     Object.assign(target, presetLook(preset));
     renderFields();
