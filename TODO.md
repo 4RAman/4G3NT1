@@ -31,9 +31,19 @@ came with it — holding the button through a reset is safe again.
   still reading whatever it was last flashed with. The web UI's simulate-press
   buttons and `POST /api/trigger` work either way, which is exactly what makes
   this easy to miss.
-- **The ring's colour question is still open** — see **0c**. Re-soldering
-  answered the "is it back on" half; whether its VDD moved to 5 V, and what
-  the three-level and load-ladder tests say, is not recorded yet.
+- **The ring is back on 3V3, deliberately, for now** (2026-08-21). So the
+  channel imbalance **0c** diagnoses is still live: R > G > B at roughly
+  `1.00 : 0.54 : 0.44`, which renders white as light orange, cyan green-tinted
+  and magenta red-tinted. Nothing is broken; the part is a 5 V device being
+  run under spec, and that trade was taken knowingly to keep the data line's
+  logic threshold safe.
+
+  **Read this before diagnosing any colour work as a bug.** Anything with a
+  gradient in it — a ramp, a fade, the stop-list curves in **36** — will look
+  warmer on the ring than it does in the web UI's preview, and blue-heavy
+  looks will read dim. The preview is correct and the ring is the thing that
+  is off. Judge new colour work on the *onboard* LED, which renders
+  accurately, or against the numbers rather than the ring.
 
 **Flashed to 0.6.1** (2026-08-19) — a press is dated at the edge rather than
 at the debounce, which took a ~50 ms systematic error out of every timestamp
@@ -182,10 +192,20 @@ one genuinely is a sequence.
 
 **The button went back on 2026-08-21** — switch to GPIO10, LED data to
 GPIO12 (see the state note at the top). That closes the first half of this
-item. **The second half, the channel imbalance below, is not known to be
-closed**: it was a supply problem rather than a wiring one, and nothing here
-records what the LED's VDD ended up connected to. Run the three-level test
-below before assuming either way.
+item.
+
+**The second half is explicitly deferred, not forgotten.** The LED went back
+onto **3V3**, the same rail it was on before, so the channel imbalance below
+is unchanged and still present. That is a decision rather than an oversight:
+3V3 keeps the data line's logic threshold met by construction, and the 5 V
+move below cannot be made without also handling the threshold (series diode
+or level shifter). Taking the colour fault over an intermittent-flicker fault
+is the right way round while the button is being used daily.
+
+What that leaves open is below, unchanged: the three-level and load-ladder
+tests still have not been run, so "headroom" remains a diagnosis rather than a
+measurement. Run them before buying parts - they cost a minute and decide
+whether 5 V is even the right fix.
 
 **What was found.** Pushing known colours at both LEDs from the Lights tab's
 test bench turned up two separate faults, not one:
@@ -255,11 +275,16 @@ not the cause.
 - ~~`BUTTON_PIN` off the BOOT-button stand-in~~ — it is 10 now, on a
   non-strapping pin, so a reset is no longer a coin-flip on download mode.
 - The three-level (`#ffffff`/`#808080`/`#202020`) and load-ladder
-  (`#0000ff`/`#ff00ff`/`#ffffff`) results written down here, and the LED's
-  supply and any level-shifting recorded in
-  [hardware.py](firmware/hardware.py)'s wiring block. **Still open.**
-- `#ffffff` reading as white on the ring, or an explicit note saying how far
-  off it still is and why that was accepted. **Still open.**
+  (`#0000ff`/`#ff00ff`/`#ffffff`) results written down here. **Still open** -
+  and now the *first* thing to do here, because everything below depends on
+  what they say.
+- The LED's supply recorded in [hardware.py](firmware/hardware.py)'s wiring
+  block. ~~Done~~: **3V3**, deliberately, as of 2026-08-21 - see above. No
+  level-shifting, because none is needed at 3V3; that is the whole point of
+  the trade.
+- `#ffffff` reading as white on the ring. **Still open, and knowingly so.**
+  The accepted position for now is the note above: the ring runs warm, the
+  onboard LED is the accurate one, and colour work is judged there.
 
 ### 8. Host the web UI on the user's server (docker / nginx / SSL)
 
