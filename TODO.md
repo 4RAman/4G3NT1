@@ -354,6 +354,39 @@ time-of-day patterns — a dashboard over `EventStore`), (b) *device* telemetry
 (BLE reconnect frequency, gesture-to-feedback latency, dropped presses), or
 (c) *hosting* metrics once item 8 exists. **Ask which.**
 
+### 35. A freshly seeded scene fails its own Check
+
+Found 2026-08-20 while driving the offline editor to verify **30a** — not
+caused by it, and present on the commit before. Click **New scene**, click
+**Check**, and the editor rejects the config it just wrote you:
+
+> • Pomodoro: Get-ready countdown must be more than zero
+> • Stopwatch: Timer name is required
+
+Two separate causes, each small and each worth fixing on its own terms:
+
+- **The `duration` widget ignores its own `min`.** Its `validate()` hard-codes
+  `seconds <= 0` as an error ([widgets.js](aibutton/web/static/widgets.js)),
+  while `lead_in_s` declares `min: 0` and defaults to `0.0` — zero is the
+  *documented* value there ("Zero for a Pomodoro — you started it
+  deliberately"). So a legal default is unsaveable through the editor. The fix
+  is for the widget to honour `spec.min` rather than assume every duration is
+  positive; check the other `duration` fields before changing the default, in
+  case any of them is relying on the accident.
+- **`StopwatchBehavior.log_as` defaults to `''` while schema.js marks it
+  `required: true`.** One of the two is wrong. A stopwatch that logs nothing is
+  a coherent thing to want, so the descriptor is the likelier offender — but
+  this is the mirrored-tables problem in its softest form (a Python default and
+  a JS `required` disagreeing), and neither side is currently tested against
+  the other.
+
+The general lesson is the testable one: **nothing checks that the modes the
+editor seeds pass the editor's own validators.** `test_schema_mirror.py`
+already deleted a "descriptor defaults must parse" test for a good reason
+(`defaults()` deliberately starts required fields blank), but *seeded whole
+modes* are the opposite case — `BUILTIN_MODES` and the from-scratch seed are
+meant to be complete. That is the test to add.
+
 ### 31. Lifecycle hooks — `on_enter` / `on_exit` on `Mode`
 
 **Split out of 23 (designed 2026-08-19). The design is ARCHITECTURE.md
@@ -682,6 +715,13 @@ unimplemented, so there is no progress value to ramp over yet (item **29**).
   (Obsidian) and replace the placeholder tone tables carried over from the Pi
   build. A matching sound palette, pushed the way the LED palette is, is the
   obvious shape.
+- **MANUAL.md's reference tables have fallen behind.** §5.1's "Available
+  actions" lists four of the nine that exist (no readout, OSC, MIDI, standby or
+  named actions) and §2's gesture table stops at the triple tap, three sprints
+  after four- and five-tap shipped. Noticed while adding `standby`; deliberately
+  not half-fixed, because a table that is 5/9 correct reads as audited and is
+  not. One sitting, against `ACTIONS` and `GESTURES` in schema.js.
+
 - **The service is not always under the tray.** Started from a terminal it
   works identically (the panel polls `/api/status`, not the process table), but
   the panel's Start/Stop won't own it. Worth knowing when debugging.
