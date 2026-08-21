@@ -17,22 +17,23 @@ and an app is becoming *data* rather than code
 but a new takeover loop written as a state machine over `(state, event, now)`
 will port; one that awaits the device directly will be rewritten.
 
-## Current hardware state — the button is off the board
+## Current hardware state — the button is back on, and needs a flash
 
-**The 19 mm button is de-soldered**, switch *and* LED, pending the rework in
-**0c**. Until it goes back on:
+**Re-soldered 2026-08-21** onto new pins: the switch's green wire to
+**GPIO10** (`BUTTON_PIN`) and the LED's red data wire to **GPIO12**
+(`NEOPIXEL_PIN`). Both are plain S3 GPIOs, clear of the strapping pins
+(0/3/45/46), the SPI flash (26-32), octal PSRAM (33-37) and USB (19/20). The
+BOOT-button stand-in on GPIO0 is gone, and so is the download-mode hazard that
+came with it — holding the button through a reset is safe again.
 
-- **Presses come from the board's BOOT button — once the firmware is
-  flashed.** `BUTTON_PIN` is temporarily **0** rather than 4 in the source so
-  there is something to press, but that is a firmware constant: until
-  `mpremote cp firmware/*.py : + reset` has run, the board is still reading
-  GPIO4 and nothing physical produces a gesture. The web UI's simulate-press
-  buttons and `POST /api/trigger` work either way. GPIO0 is a strapping pin,
-  so do not hold it through a reset or a replug — that is download mode, and
-  it looks exactly like a dead board. **0c** puts the pin back to 4.
-- **No ring.** The board's onboard WS2812 is the only light, and it is now the
-  *accurate* one — the byte-order fault that made both LEDs render red as
-  green is fixed and flashed.
+- **The pins are source, not state: nothing physical produces a gesture until
+  `mpremote cp firmware/*.py : + reset` has run.** Until then the board is
+  still reading whatever it was last flashed with. The web UI's simulate-press
+  buttons and `POST /api/trigger` work either way, which is exactly what makes
+  this easy to miss.
+- **The ring's colour question is still open** — see **0c**. Re-soldering
+  answered the "is it back on" half; whether its VDD moved to 5 V, and what
+  the three-level and load-ladder tests say, is not recorded yet.
 
 **Flashed to 0.6.1** (2026-08-19) — a press is dated at the edge rather than
 at the debounce, which took a ~50 ms systematic error out of every timestamp
@@ -137,7 +138,7 @@ view.
 | **Reaching other software** — OSC ✔, MIDI out ✔, clock in ✔, transport state | ✔ shipped with **7**, **22** ✔, **24** ✔, **25** | Sending and listening both work. **25** wants MCU's *return* feedback, which needs the DAW's Send To pointed back |
 | **One machine, many timers** — Pomodoro/HIIT/Tabata as presets | **20** ✔ | Done |
 | **Getting around** — launcher ✔, control surfaces ✔, colour-coded pages ✔ | **0a** ✔, **26** ✔, **27** ✔, **28** ✔ | Only **26b**, an eyeball test on real hardware |
-| **Power** — sleep, wake, deliberate off | **29** | Blocked on **0c** (the button is de-soldered) and on measuring what it draws |
+| **Power** — sleep, wake, deliberate off | **29** | The button is back on (**0c**, 2026-08-21); still blocked on measuring what it draws |
 
 Two things sit outside the table. **0c** is hardware (re-solder + the 5 V
 rework) and gates nothing but its own verification. **18** (Notion) is process
@@ -177,10 +178,14 @@ one genuinely is a sequence.
 
 ### 0c. Re-solder the button, and move its LED to 5 V while it is off
 
-**Do this before anything whose test is "look at the ring".** The button is
-currently de-soldered (see the state note at the top). This item puts it back —
-and the reason to read it before reaching for the iron is that soldering it
-back exactly as it was would preserve a known fault.
+**Do this before anything whose test is "look at the ring".**
+
+**The button went back on 2026-08-21** — switch to GPIO10, LED data to
+GPIO12 (see the state note at the top). That closes the first half of this
+item. **The second half, the channel imbalance below, is not known to be
+closed**: it was a supply problem rather than a wiring one, and nothing here
+records what the LED's VDD ended up connected to. Run the three-level test
+below before assuming either way.
 
 **What was found.** Pushing known colours at both LEDs from the Lights tab's
 test bench turned up two separate faults, not one:
@@ -242,14 +247,19 @@ channel can manage. 5 V buys correct colour *and* full brightness; calibration
 buys only the first. Do not add it before the three-level test says headroom is
 not the cause.
 
-**Definition of done.** Button re-soldered and pressing again (a real gesture
-reaching the host, not a simulated one); **`BUTTON_PIN` back to 4** — it is
-temporarily 0 so the board's BOOT button can stand in, and leaving it there
-makes every reset a coin-flip on entering download mode; the three-level and
-load-ladder results written down here; the LED's supply and any level-shifting
-recorded in [hardware.py](firmware/hardware.py)'s wiring block; and `#ffffff`
-reading as white on the ring, or an explicit note saying how far off it still
-is and why that was accepted.
+**Definition of done.** Four clauses, of which one and a half are now met:
+
+- ~~Button re-soldered~~ (2026-08-21, GPIO10/GPIO12) — but **pressing again is
+  unconfirmed**: a real gesture has to reach the host, not a simulated one, and
+  the board needs the reflash first.
+- ~~`BUTTON_PIN` off the BOOT-button stand-in~~ — it is 10 now, on a
+  non-strapping pin, so a reset is no longer a coin-flip on download mode.
+- The three-level (`#ffffff`/`#808080`/`#202020`) and load-ladder
+  (`#0000ff`/`#ff00ff`/`#ffffff`) results written down here, and the LED's
+  supply and any level-shifting recorded in
+  [hardware.py](firmware/hardware.py)'s wiring block. **Still open.**
+- `#ffffff` reading as white on the ring, or an explicit note saying how far
+  off it still is and why that was accepted. **Still open.**
 
 ### 8. Host the web UI on the user's server (docker / nginx / SSL)
 
@@ -682,9 +692,10 @@ GPIO wake is well-trodden. The problems are around it:
 
 **Split it.** This is at least three items - the hold-level gesture (cheap,
 useful alone), auto-sleep on the device, and the deliberate power-off. The
-first is worth doing on its own even if the rest is parked. **Do not start any
-of it before TODO 0c**: the button is still de-soldered and `BUTTON_PIN` is 0,
-so "wake on a button press" cannot be tested at all right now.
+first is worth doing on its own even if the rest is parked. The button went
+back on 2026-08-21 (**0c**), so "wake on a button press" is testable again -
+**once the board has been reflashed onto the new pins**, which is what makes a
+physical press reach the host at all.
 
 ### 21. WiFi as an alternative transport ⏸ parked, with a trigger
 

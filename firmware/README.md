@@ -21,13 +21,17 @@ Defaults target the build this project has: an **ESP32-S3 Mini** and a 19 mm
 illuminated momentary button (ChromaTek), whose switch and WS2812 come out as
 five wires:
 
+**⚠️ The button's wire colours are non-standard.** When soldering or re-soldering,
+verify against the specific colours below; do not assume standard conventions
+(black=ground, red=power) will match.
+
 | Wire | Goes to | Why |
 |---|---|---|
 | switch common (white) | any GND | the internal pull-up supplies the other side |
-| switch NO (green) | **GPIO4** (`BUTTON_PIN`) | pressed pulls it to GND |
+| switch NO (green) | **GPIO10** (`BUTTON_PIN`) | pressed pulls it to GND |
 | LED VDD (black) | **3V3** | not 5V — see below |
 | LED GND | any GND | |
-| LED data in (red) | **GPIO1** (`NEOPIXEL_PIN`) | |
+| LED data in (red) | **GPIO12** (`NEOPIXEL_PIN`) | |
 
 **The LED is on 3V3, and that is now known to be the wrong half of a
 trade — see TODO 0c.** A WS2812 wants its data line at ~0.7×VDD to read a 1;
@@ -56,7 +60,7 @@ Other hardware is a line in `hardware.py`:
 
 | Board | `hardware.py` |
 |---|---|
-| This build | defaults as shipped (`BUTTON_PIN = 4`, `NEOPIXEL_PIN = 1`) — but `BUTTON_PIN` is **temporarily 0** while the button is de-soldered (TODO 0c) |
+| This build | defaults as shipped (`BUTTON_PIN = 10`, `NEOPIXEL_PIN = 12`) — re-soldered onto the real button 2026-08-21 |
 | Onboard WS2812 instead | `NEOPIXEL_PIN` per the table below |
 | Onboard WS2812 *too*, mirroring the button's | `ONBOARD_NEOPIXEL_PIN` per the table below |
 | ESP32-C3 (onboard RGB) | `BUTTON_PIN = 9`, `NEOPIXEL_PIN = 8` |
@@ -146,7 +150,7 @@ is also a VS Code task (see *Editing in VS Code*).
    If that answers *without* resetting the board, it is stuck in the
    bootloader; replug and try again. If it still will not run afterwards,
    suspect GPIO0 being held low — a stuck BOOT button does exactly this.
-   (The project's button is on GPIO4 precisely so it can never cause that.)
+   (The project's button is on GPIO10 precisely so it can never cause that.)
 
 3. **aioble** — not in the base firmware; install it onto the device
    (`mip` downloads on the PC and copies over the serial link):
@@ -173,7 +177,7 @@ is also a VS Code task (see *Editing in VS Code*).
    Ctrl-D restarts it.
 
    It also prints the pin it believes each LED is on — `led: WS2812 on
-   GPIO1`, and `led: onboard WS2812 on GPIO48` if you configured one. Read
+   GPIO12`, and `led: onboard WS2812 on GPIO48` if you configured one. Read
    those first when an LED is dark: a WS2812 has no readback, so a *wrong*
    pin number raises nothing and logs nothing on its own. If the line is
    there and the LED isn't lit, the pin is wrong (or the wiring is) — the

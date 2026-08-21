@@ -6,6 +6,10 @@
 # an onboard WS2812 only changes NEOPIXEL_PIN, and a classic ESP32 with a
 # discrete common-cathode RGB LED is LED_KIND = "rgb_pwm".
 #
+# **IMPORTANT: The button's wire colours are non-standard.** Verify against
+# these specific colours when re-soldering; do not assume standard conventions
+# (black=ground, red=power) will match what you have.
+#
 #   button common (white)  -> GND        LED VDD (black) -> 3V3
 #   button NO     (green)  -> BUTTON_PIN LED GND         -> GND
 #                                        LED data (red)  -> NEOPIXEL_PIN
@@ -23,23 +27,22 @@ DEVICE_NAME = "AIButton"  # what the host scans for; match config.json's ble_dev
 # Any momentary switch between the pin and GND, using the internal pull-up:
 # the switch's normally-open contact here, its common to GND.
 #
-# GPIO4 is a plain S3 GPIO, clear of the strapping pins (0/3/45/46), so the
-# button cannot influence boot. (That is the reason not to reuse GPIO0/BOOT
-# once a real button exists: held low *at power-on* it enters download mode
-# instead of running.)
+# GPIO10 is a plain S3 GPIO, clear of the strapping pins (0/3/45/46), the SPI
+# flash (26-32), octal PSRAM (33-37) and USB (19/20), so the button cannot
+# influence boot. That last property is the requirement, not a nicety: a
+# button on a strapping pin held low *at power-on* enters download mode
+# instead of running, and the board then sits silent in the bootloader until
+# it is physically replugged - which looks exactly like a failed flash.
 #
-# **Temporarily 0, not 4** - the 19 mm button is de-soldered (TODO 0c), so
-# this borrows the board's own BOOT button to keep the button pressable in
-# the meantime. GPIO0 has a pull-up and a switch to GND already on the board,
-# so nothing else here changes.
+# **This is the green wire** (the switch's normally-open contact). The
+# button's wire colours are non-standard; see the warning at the top of this
+# file before assuming anything about which is which.
 #
-# The catch is the one the paragraph above describes, and it is live now
-# rather than hypothetical: GPIO0 is a strapping pin, so **holding this button
-# while the board resets or is plugged in enters download mode** - the board
-# then sits silent in the bootloader until it is physically replugged, which
-# looks exactly like a failed flash. Press it only while the board is already
-# running. Put this back to 4 when the button goes back on.
-BUTTON_PIN = 0
+# Re-soldered onto the real 19 mm button 2026-08-21 (TODO 0c). It previously
+# borrowed the board's own BOOT button on GPIO0 while the button was
+# de-soldered - that stand-in is gone, and with it the download-mode hazard
+# that came with it.
+BUTTON_PIN = 10
 BUTTON_PULL_UP = True   # False if you wire your own pull-down + button to 3V3
 BUTTON_ACTIVE_LOW = True  # pressed reads 0 (the pull-up case)
 
@@ -49,17 +52,20 @@ BUTTON_ACTIVE_LOW = True  # pressed reads 0 (the pull-up case)
 # "none"     - no LED; the firmware still runs and reports gestures
 LED_KIND = "neopixel"
 
-# GPIO1 for the button's LED: a plain GPIO on the S3, clear of the
+# GPIO12 for the button's LED: a plain GPIO on the S3, clear of the
 # strapping pins (0/3/45/46), the SPI flash (26-32), octal PSRAM (33-37) and
 # USB (19/20). Any free pin does - WS2812 data is an ordinary push-pull
-# output - so if your board routes something else to GPIO1, move this and
+# output - so if your board routes something else to GPIO12, move this and
 # nothing else changes.
+#
+# **This is the red wire** (WS2812 data in, *not* power - see the warning at
+# the top of this file). Re-soldered 2026-08-21; it was GPIO1 before.
 #
 # For an *onboard* WS2812 instead, boards sold as "ESP32-S3 Mini" disagree:
 # 48 on the common Super Mini clones and DevKitC-1 v1.0, 47 on the
 # LOLIN/Wemos S3 Mini, 21 on the Waveshare S3-Zero, 38 on DevKitC-1 v1.1.
 # README.md has a snippet that identifies it in ten seconds.
-NEOPIXEL_PIN = 1
+NEOPIXEL_PIN = 12
 
 # How many WS2812s are chained on that data line. All of them show the same
 # colour - the LED is one indicator, not a display - so this only has to be
