@@ -1,6 +1,8 @@
 import json
 from datetime import time
 
+import pytest
+
 from aibutton.config import (
     TRIGGER_TYPES,
     ActionsBehavior,
@@ -566,8 +568,8 @@ def test_stopwatch_counter_defaults_when_field_missing(tmp_path):
         ],
     }))
     sw, ct, _base = cfg.modes
-    assert sw.behavior == StopwatchBehavior(log_as="")
-    assert ct.behavior == CounterBehavior(event="")
+    assert sw.behavior == StopwatchBehavior()  # log_as -> "stopwatch"
+    assert ct.behavior == CounterBehavior()  # event -> "counter"
 
 
 def test_stopwatch_bad_field_falls_back_per_key(tmp_path):
@@ -579,7 +581,7 @@ def test_stopwatch_bad_field_falls_back_per_key(tmp_path):
              "activation": {"type": "manual"}, "log_as": 123},
         ],
     }))
-    assert cfg.modes[0].behavior == StopwatchBehavior(log_as="")
+    assert cfg.modes[0].behavior == StopwatchBehavior()  # log_as -> "stopwatch"
 
 
 def test_stopwatch_with_window_is_skipped(tmp_path):
@@ -1060,6 +1062,90 @@ def test_a_mixed_pool_round_trips_through_as_dict():
     })
     again = parse_config(as_dict(cfg))
     assert again.looks == cfg.looks
+
+
+# --- the drive and a stop's own shape, head-on (TODO 36b/c/d) --------------
+#
+# The two round-trips above cover `stops`/`repeat`. The four keys TODO 36
+# added - a sequence's `drive`, and a stop's `curve`, `style` and `period_s` -
+# were only ever carried incidentally by tests that happened to set one, which
+# is a round-trip nobody is actually asserting.
+#
+# The serialiser's convention is that a look is written out **in full**:
+# `_look_to_dict` names every key the way `_effect_to_dict` does and the way a
+# countdown's ramp positions are, so a stop that took the defaults still says
+# so on the way out. "The round-trip has to be exact, not merely equivalent" -
+# so that is what is pinned below, rather than a tidier-looking output that
+# omitted whatever happened to match a default.
+
+_SEQUENCE_LOOKS = {
+    "plain": {"stops": ["#ff0000", "#0000ff"]},
+    "curved": {"stops": [
+        {"color": "#ff0000", "hold_s": 0.25, "fade_s": 0.75, "curve": "ease_in_out"},
+        {"color": "#0000ff", "hold_s": 0.5, "fade_s": 0.5, "curve": "exponential"},
+    ]},
+    "animated": {"stops": [
+        {"color": "#00ff00", "hold_s": 2.0, "style": "flash", "period_s": 0.45},
+        {"color": "#000000", "hold_s": 1.0, "style": "breathe", "period_s": 3.0},
+    ]},
+    "sampled": {"drive": "progress", "repeat": False, "stops": [
+        {"color": "#ff0000", "hold_s": 1.0, "fade_s": 1.0, "curve": "ease_out"},
+        {"color": "#00ff00", "hold_s": 1.0},
+    ]},
+    "beaten": {"drive": "beats", "stops": [
+        {"color": "#ffffff", "hold_s": 1.0, "style": "flash", "period_s": 0.5},
+        {"color": "#333333", "hold_s": 3.0},
+    ]},
+}
+
+
+@pytest.mark.parametrize("name", sorted(_SEQUENCE_LOOKS))
+def test_a_sequences_drive_and_stop_shape_survive_the_editor(name):
+    """Serialise, parse, serialise: the second dump has to equal the first, or
+    a look would drift a little every time the editor saved it."""
+    cfg = parse_config({"looks": dict(_SEQUENCE_LOOKS)})
+    dumped = as_dict(cfg)
+    again = parse_config(dumped)
+    assert again.looks[name] == cfg.looks[name]
+    assert as_dict(again)["looks"][name] == dumped["looks"][name]
+
+
+def test_the_four_new_keys_are_carried_rather_than_defaulted_away():
+    """The failure a round-trip alone cannot see: a serialiser that dropped
+    `drive`, `curve`, `style` or `period_s` would still round-trip *something*
+    - just not the look that was asked for."""
+    cfg = parse_config({"looks": {"arc": {
+        "drive": "progress", "repeat": False,
+        "stops": [{"color": "#ff0000", "hold_s": 0.25, "fade_s": 0.75,
+                   "curve": "ease_in", "style": "flash", "period_s": 0.45}],
+    }}})
+    assert cfg.looks["arc"] == Sequence(
+        stops=(Stop("#ff0000", hold_s=0.25, fade_s=0.75,
+                    curve="ease_in", style="flash", period_s=0.45),),
+        repeat=False, drive="progress",
+    )
+    assert as_dict(cfg)["looks"]["arc"] == {
+        "stops": [{"color": "#ff0000", "hold_s": 0.25, "fade_s": 0.75,
+                   "curve": "ease_in", "style": "flash", "period_s": 0.45}],
+        "repeat": False,
+        "drive": "progress",
+    }
+
+
+def test_a_stop_that_took_every_default_is_still_written_out_in_full():
+    """The convention, stated once: every key, every time. A stop written as a
+    bare colour comes back as the object form, and `clock` is named rather than
+    left to be inferred - a reader should not have to know the defaults to see
+    what a look does."""
+    cfg = parse_config({"looks": {"pulse": {"stops": ["#ff0000"]}}})
+    assert as_dict(cfg)["looks"]["pulse"] == {
+        "stops": [{
+            "color": "#ff0000", "hold_s": 0.5, "fade_s": 0.0,
+            "curve": "linear", "style": "solid", "period_s": 1.0,
+        }],
+        "repeat": True,
+        "drive": "clock",
+    }
 
 
 # --- the readout action (TODO 15/17) --------------------------------------

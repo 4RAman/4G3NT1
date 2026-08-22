@@ -771,7 +771,11 @@ export const TEMPLATES = [
         placeholder: 'focus',
         hint: 'Logs elapsed time under this name. Short press laps, long press stops.' },
     ],
-    defaults: () => ({ log_as: '', ladder: defaultLadder() }),
+    // Named, like the countdown's and the metronome's: this field is
+    // `required` and StopwatchBehavior now defaults to the same word, so a
+    // stopwatch added here and one a scene file leaves out agree on what the
+    // timer is called instead of one of them being unsaveable.
+    defaults: () => ({ log_as: 'stopwatch', ladder: defaultLadder() }),
     startedBy: 'gesture',
     exits: () => 'long press (short/double = lap)',
     describe: (mode) => `Stopwatch “${mode.log_as || '…'}”`,
@@ -788,7 +792,10 @@ export const TEMPLATES = [
         placeholder: 'water',
         hint: 'Logged per increment (short press / double tap). Long press exits.' },
     ],
-    defaults: () => ({ event: '' }),
+    // Named for the same reason the stopwatch's is: `event` is `required` and
+    // run_counter uses it unguarded, so an empty default writes rows called ""
+    // and sums every unnamed counter into one bucket.
+    defaults: () => ({ event: 'counter' }),
     startedBy: 'gesture',
     exits: () => 'long press (short/double = +1)',
     describe: (mode) => `Counter “${mode.event || '…'}”`,

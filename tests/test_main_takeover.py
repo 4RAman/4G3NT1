@@ -324,6 +324,157 @@ async def test_a_sequence_look_on_a_ramp_driven_state_does_not_crash(tmp_path):
     await _run_sequence(tmp_path, COUNTDOWN_SEQUENCE_CONFIG, script)
 
 
+# --- named look > ladder > ramp: who owns the colour (TODO 36d) ------------
+#
+# Three things can decide TIMING's colour and two can decide METRONOME's, and
+# only one of each may run. The order is the general rule CLAUDE.md states -
+# the more explicit thing wins: a ramp is the template's own default and every
+# countdown has one, a ladder is a checkbox you tick, and a driven stop list is
+# something you had to build, name and then point this mode at.
+#
+# It has to be asserted through the run loop rather than through config: the
+# precedence lives in `run_countdown` and `run_metronome`, which await a device
+# and so exist only inside an event loop. The three sources are given disjoint
+# palettes below, so *which* colour arrives is the whole answer - a membership
+# check rather than an exact frame, because a ladder deliberately changes
+# colour while it runs and a ramp deliberately does not.
+
+_SEQ_COLORS = {"#0000ff", "#ffffff"}
+# A ten-minute countdown is a fraction of a percent through after a second, so
+# a progress-sampled list has to still be sitting on its *first* stop. Pinning
+# that rather than the whole palette is what separates "sampled on progress"
+# from "walked on the clock", which would have moved on within one hold.
+_SEQ_START = {"#0000ff"}
+_LADDER_COLORS = {"#00ff00", "#004400"}
+_RAMP_COLORS = {"#ff0000"}
+# What the METRONOME palette entry ships as: the colour that survives when
+# nothing at all claims the beat, and the light is just the tempo.
+_TEMPO_COLORS = {"#ffaa00"}
+
+_COUNTDOWN_LADDER = {
+    "enabled": True, "tick_s": 0.5, "base": "#004400",
+    "rungs": [{"every_s": 1, "color": "#00ff00"}],
+}
+
+
+def _countdown_config(*, named_look: bool, ladder: bool) -> dict:
+    """A ten-minute countdown that always has a ramp, optionally a ladder, and
+    optionally a progress-driven look pointed at TIMING."""
+    tea = {
+        "name": "Tea", "template": "countdown", "activation": {"type": "manual"},
+        "minutes": 10, "ring_on_finish": False, "ramp": ["#ff0000", "#ffff00"],
+    }
+    if ladder:
+        tea["ladder"] = dict(_COUNTDOWN_LADDER)
+    if named_look:
+        tea["looks"] = {"TIMING": "arc"}
+    return {
+        "sounds_enabled": False, "web_enabled": False,
+        "looks": {"arc": {
+            "drive": "progress", "repeat": False,
+            "stops": [{"color": "#0000ff", "hold_s": 1.0},
+                      {"color": "#ffffff", "hold_s": 1.0}],
+        }},
+        "modes": [
+            {"name": "Home", "template": "actions", "activation": {"type": "always"},
+             "short_press": {"action": "enter_mode", "target": "Tea"}},
+            tea,
+        ],
+    }
+
+
+def _metronome_config(*, named_look: bool, ladder: bool) -> dict:
+    beat = {
+        "name": "Beat", "template": "metronome", "activation": {"type": "manual"},
+        "start_bpm": 120, "sound_on_tap": False,
+    }
+    if ladder:
+        beat["ladder"] = {"enabled": True, "base": "#004400",
+                          "rungs": [{"every_s": 2, "color": "#00ff00"}]}
+    if named_look:
+        beat["looks"] = {"METRONOME": "accent"}
+    return {
+        "sounds_enabled": False, "web_enabled": False,
+        "looks": {"accent": {
+            "drive": "beats", "repeat": True,
+            "stops": [{"color": "#0000ff", "hold_s": 1.0},
+                      {"color": "#ffffff", "hold_s": 1.0}],
+        }},
+        "modes": [
+            {"name": "Home", "template": "actions", "activation": {"type": "always"},
+             "short_press": {"action": "enter_mode", "target": "Beat"}},
+            beat,
+        ],
+    }
+
+
+async def _colors_while(tmp_path, raw, state, frames=8):
+    """Every colour the light wears while `state` owns it, over ~`frames`
+    tenths of a second."""
+    seen = set()
+
+    async def script(device, task):
+        await _press(device, TriggerType.SHORT_PRESS)  # Home -> the takeover
+        for _ in range(frames):
+            if device.led_state is state and device.led_effect is not None:
+                seen.add(device.led_effect.color)
+            await asyncio.sleep(0.1)
+
+    await _run_sequence(tmp_path, raw, script)
+    return seen
+
+
+@pytest.mark.parametrize(
+    "named_look, ladder, owner",
+    [
+        (True, True, _SEQ_START),
+        (False, True, _LADDER_COLORS),
+        (False, False, _RAMP_COLORS),
+    ],
+    ids=[
+        "a named progress list beats the ladder and the ramp",
+        "a ladder beats the ramp",
+        "the ramp paints when nothing more explicit claims TIMING",
+    ],
+)
+async def test_a_countdown_hands_timing_to_the_most_deliberate_colour_source(
+    tmp_path, named_look, ladder, owner
+):
+    seen = await _colors_while(
+        tmp_path, _countdown_config(named_look=named_look, ladder=ladder),
+        LEDState.TIMING,
+    )
+    assert seen, "the countdown never coloured TIMING at all"
+    assert seen <= owner, seen
+
+
+@pytest.mark.parametrize(
+    "named_look, ladder, owner",
+    [
+        (True, True, _SEQ_COLORS),
+        (False, True, _LADDER_COLORS),
+        (False, False, _TEMPO_COLORS),
+    ],
+    ids=[
+        "a named beats list beats the ladder and the plain pulse",
+        "a ladder beats the plain pulse",
+        "the tempo pulse paints when nothing claims the beat",
+    ],
+)
+async def test_a_metronome_hands_the_beat_to_the_most_deliberate_colour_source(
+    tmp_path, named_look, ladder, owner
+):
+    """The same ordering one app along. The third tier is not a ramp here - a
+    metronome has none - it is the device-rendered pulse the mode has always
+    had, wearing the palette's own METRONOME colour."""
+    seen = await _colors_while(
+        tmp_path, _metronome_config(named_look=named_look, ladder=ladder),
+        LEDState.METRONOME, frames=14,  # 120 BPM: ~1.4s covers several beats
+    )
+    assert seen, "the metronome never coloured METRONOME at all"
+    assert seen <= owner, seen
+
+
 # --- the readout action, and the Counter agreeing with the store -----------
 #
 # TODO 15/17: a `readout` action's display is its own feedback, so it must

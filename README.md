@@ -1,20 +1,22 @@
 # AI Button
 
-One physical button, five gestures (short press / long press / double tap /
-triple tap / five taps), routed through a **mode machine** — the button is
-always in exactly one mode, and the mode decides what each gesture means. An
-RGB LED and feedback sounds show device state.
+One physical button, six gestures (short press / long press / double tap /
+triple tap / four taps / five taps), routed through a **mode machine** — the
+button is always in exactly one mode, and the mode decides what each gesture
+means. An RGB LED and feedback sounds show device state.
 
 Modes come in two kinds. **Ambient** modes answer each gesture and hand the
 button straight back (the everyday one, plus time-windowed overrides).
-**Takeover** modes own the button until you leave: alarm, reminder,
-stopwatch, counter, intervals (Pomodoro, Tabata or HIIT — one template, three
-presets), metronome, countdown, two games (Hot/Cold and a
-reaction timer), a signal light that doubles as an OSC or MIDI footswitch, a
-control surface that fires a different command per gesture (the DAW remote),
-and an app launcher that reaches all of them. **Long press always means "up one level"** —
-out of an app, then out of the menu — so there is one escape gesture to learn
-and it works everywhere.
+**Takeover** modes own the button until you leave — eleven apps: alarm,
+reminder, stopwatch, counter, intervals (Pomodoro, Tabata or HIIT — one
+template, three presets), metronome, countdown, two games (Hot/Cold and a
+reaction timer), a signal light that doubles as an OSC or MIDI footswitch,
+and a control surface that fires a different command per gesture (the DAW
+remote). Nine of those are started by a gesture and there are only six
+gestures, so an **app launcher** reaches every one of them from a single
+binding. **Long press always means "up one level"** — out of an app,
+then out of the menu — so there is one escape gesture to learn and it works
+everywhere.
 
 The hardware is an **ESP32** — it detects gestures and shows feedback; this
 Python app is the brain on the PC, connected over BLE. It replaces an
@@ -26,20 +28,22 @@ transition and its rationale are in [DESIGN-ESP32.md](DESIGN-ESP32.md).
 > and buzzer back. With no ESP32 attached the app runs on a `MockDevice`
 > instead, fully drivable from the web UI — no hardware needed to develop.
 
-Ambient modes resolve first-match-wins against six action primitives:
+Ambient modes resolve first-match-wins against eight action primitives:
 
 | Action | What it does |
 |---|---|
 | `log` | record a timestamped event in SQLite (meds, habits) |
+| `readout` | blink today's count for an event back at you — tens as slow pulses, units as quick ones; reads only, never adds a count |
 | `timer_toggle` | start/stop a named stopwatch, durations logged |
 | `webhook` | POST to any URL — the IFTTT / Make / n8n / Home Assistant hook |
 | `osc` | fire an OSC message over UDP — Reaper, QLab, Resolume, TouchOSC |
 | `midi` | send a MIDI note or CC to a port — for a DAW that has no OSC |
 | `enter_mode` | open a takeover mode — an app, or the launcher that lists them |
+| `standby` | put the everyday layer to sleep; the same gesture wakes it |
 
 Example: between 05:00 and 07:00, a double tap logs `meds_taken`;
-any other time it falls through to the Default mode. See the `modes`
-section of [config.json](config.json).
+any other time it falls through to **Home**, the always-on floor. See the
+`modes` section of [config.json](config.json).
 
 Modes are built from **behaviour templates** — actions, alarm, reminders,
 stopwatch, counter, pomodoro, metronome, countdown, hot/cold, reaction,
@@ -72,7 +76,7 @@ that a future phone app can reuse.
 
 | Path | What |
 |---|---|
-| `aibutton/` | the application package (config, rules, actions, store, device, audio, button, webui, main) |
+| `aibutton/` | the application package (config, rules, scheduler, actions, store, device, audio, webui, main) plus the pure light helpers the apps paint through — `sequencer.py` (stop lists), `ramp.py`, `ladder.py` |
 | `aibutton/device.py` | the hardware seam: `ButtonDevice` + the wire protocol (gestures, LED states, sound commands, palette, UUIDs) |
 | `aibutton/ble_device.py` | the bleak central: scan, connect, subscribe, auto-reconnect |
 | `aibutton/button.py` | `TriggerDetector` — no longer runtime code, kept as the spec the firmware port follows |
@@ -338,8 +342,8 @@ in JavaScript that nothing tests.
 With `MockDevice` behind the seam, the browser *is* the button — you drive
 everything from the page:
 
-- **Simulate buttons** fire every gesture through the real rules →
-  actions → status pipeline.
+- **Simulate buttons** fire short press, long press, double tap and
+  triple tap through the real rules → actions → status pipeline.
 - **Virtual device panel** mirrors the LED (same animations: blue
   breathe, white pulse, …) and plays the device's actual feedback
   tones in the browser.

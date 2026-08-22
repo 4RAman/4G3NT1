@@ -511,3 +511,120 @@ def test_state_looks_round_trip():
     cfg = _cfg_with_state_looks(state_looks={"SUCCESS": "three-blinks", "IDLE": "amber"})
     assert parse_config(as_dict(cfg)) == cfg
     assert as_dict(cfg)["state_looks"] == {"SUCCESS": "three-blinks", "IDLE": "amber"}
+
+
+# --- a stranded drive: warned about, never enforced (TODO 36d) --------------
+#
+# `progress` and `beats` are parameterised from outside themselves, so they
+# only mean anything under an app that owns the number. Which apps those are is
+# `DRIVE_TEMPLATES`, **keyed by template rather than by state** - and the
+# stopwatch is the case that forces it: TIMING belongs to both the countdown
+# and the stopwatch, and only one of them has an end to be a fraction of. So a
+# rule written over states could not tell those two apart at all.
+#
+# Binding one where nothing supplies it is a *warning and nothing more*. The
+# binding is kept and main.set_led walks the stop list on the clock, because
+# dropping it would leave the state with no look at all - a bigger change to
+# what the button does than playing the same colours on the wrong axis.
+
+_PROGRESS_LOOK = {"drive": "progress", "stops": ["#ff0000", "#0000ff"]}
+_BEATS_LOOK = {"drive": "beats", "stops": ["#ff0000", "#0000ff"]}
+_CLOCK_LOOK = {"stops": ["#ff0000", "#0000ff"]}
+
+
+def _bound(template, state, look, extra):
+    """Parse one `template` mode wearing `look` on `state`, with its warnings.
+
+    Always mode index 1, so the `where` in a complaint is `modes[1]` - which is
+    half of what makes the message useful: it says *which binding*, not just
+    that some binding somewhere is stranded.
+    """
+    cfg, warnings = parse_with_warnings({
+        "looks": {"named": dict(look)},
+        "modes": [
+            {"name": "Home", "template": "actions", "activation": {"type": "always"},
+             "short_press": {"action": "log", "event": "x"}},
+            {"name": "App", "template": template, "activation": {"type": "manual"},
+             "looks": {state: "named"}, **extra},
+        ],
+    })
+    return cfg, next(m for m in cfg.modes if m.name == "App"), warnings
+
+
+_STRANDED = [
+    ("stopwatch", "TIMING", _PROGRESS_LOOK, {"log_as": "focus"}, "countdown"),
+    ("pomodoro", "WORKING", _PROGRESS_LOOK, {}, "countdown"),
+    ("metronome", "METRONOME", _PROGRESS_LOOK, {}, "countdown"),
+    ("countdown", "TIMING", _BEATS_LOOK, {"minutes": 5}, "metronome"),
+    ("pomodoro", "RESTING", _BEATS_LOOK, {}, "metronome"),
+    ("control", "LISTENING", _BEATS_LOOK,
+     {"short_press": {"action": "log", "event": "y"}}, "metronome"),
+]
+
+
+@pytest.mark.parametrize(
+    "template, state, look, extra, supplier", _STRANDED,
+    ids=[f"{t}.{s} cannot supply {look['drive']}" for t, s, look, _, _ in _STRANDED],
+)
+def test_a_drive_nothing_here_supplies_is_named_and_kept(
+    template, state, look, extra, supplier
+):
+    """The message has to be actionable on its own: which binding, which drive,
+    who could have supplied it, and what happens instead."""
+    cfg, app, warnings = _bound(template, state, look, extra)
+
+    complaint = next((w for w in warnings if "-driven look" in w), None)
+    assert complaint is not None, warnings
+    assert f"modes[1].looks[{state!r}]" in complaint
+    assert f"{look['drive']!r}-driven look" in complaint
+    assert f"only {supplier} can supply" in complaint
+    assert "play on the clock instead" in complaint
+
+    # Kept, not dropped: the state still resolves to the look that was named.
+    assert app.looks == {state: "named"}
+    assert look_for(cfg, app, LEDState[state]) is cfg.looks["named"]
+
+
+@pytest.mark.parametrize(
+    "template, state, look, extra",
+    [
+        ("countdown", "TIMING", _PROGRESS_LOOK, {"minutes": 5}),
+        ("metronome", "METRONOME", _BEATS_LOOK, {}),
+        # A clock sequence owns its own position, so it is legal everywhere -
+        # including on the two states above, where a driven look would not be.
+        ("stopwatch", "TIMING", _CLOCK_LOOK, {"log_as": "focus"}),
+        ("pomodoro", "WORKING", _CLOCK_LOOK, {}),
+    ],
+    ids=[
+        "a countdown supplies progress",
+        "a metronome supplies beats",
+        "a clock list needs nothing supplied",
+        "...anywhere at all",
+    ],
+)
+def test_a_binding_something_can_drive_passes_without_complaint(
+    template, state, look, extra
+):
+    cfg, app, warnings = _bound(template, state, look, extra)
+    assert not [w for w in warnings if "-driven look" in w], warnings
+    assert look_for(cfg, app, LEDState[state]) is cfg.looks["named"]
+
+
+def test_the_buttons_own_states_have_no_app_to_supply_a_drive_at_all():
+    """The third binding site, and the only one where the answer never depends
+    on a template: the ambient layer wears these with no mode involved, so
+    nothing could ever supply a progress or a beat. Same law, same outcome -
+    said once, kept, and played on the clock."""
+    cfg, warnings = parse_with_warnings({
+        "looks": {"arc": dict(_PROGRESS_LOOK)},
+        "state_looks": {"SUCCESS": "arc"},
+        "modes": [{"name": "Home", "template": "actions",
+                   "activation": {"type": "always"},
+                   "short_press": {"action": "log", "event": "x"}}],
+    })
+    assert cfg.state_looks == {"SUCCESS": "arc"}
+    assert look_for(cfg, None, LEDState.SUCCESS) is cfg.looks["arc"]
+    complaint = next((w for w in warnings if "'progress'-driven look" in w), None)
+    assert complaint is not None, warnings
+    assert "state_looks['SUCCESS']" in complaint
+    assert "on the clock instead" in complaint

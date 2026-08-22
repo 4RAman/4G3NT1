@@ -418,7 +418,15 @@ class StopwatchBehavior:
     Handled by main.py's run_stopwatch loop, not actions.execute(), since it
     owns the LED/sound/button-event loop while running."""
 
-    log_as: str = ""
+    # A real name, not "": `run_stopwatch` logs unconditionally, so an empty
+    # one is not "log nothing" - it files every unnamed stopwatch into one
+    # nameless bucket that `total_today("")` then adds up together. Where a
+    # blank genuinely means "log nothing" the loop says so (`if
+    # behavior.log_as:` in run_signal / run_control / run_launcher) and the
+    # editor leaves the field optional; this one is `required: true` there,
+    # and a default the editor refuses to save is a default that only ever
+    # reaches you as an error message.
+    log_as: str = "stopwatch"
     # Optional: turn the light into a clock while it runs. Defined here rather
     # than on the palette entry because it is what this *mode* is doing, and
     # because a ladder is not an effect - it says which colour, not how the
@@ -437,7 +445,10 @@ class CounterBehavior:
     work) and bumps the count; long_press exits. Handled by main.py's
     run_counter loop, not actions.execute()."""
 
-    event: str = ""
+    # Named for the same reason the stopwatch's is: `event` is `required` in
+    # the editor and run_counter uses it unguarded, so "" writes rows called
+    # "" and sums every unnamed counter into one bucket.
+    event: str = "counter"
 
     @property
     def template(self) -> str:
@@ -653,14 +664,20 @@ class ReminderBehavior:
 
 @dataclass(frozen=True)
 class LauncherBehavior:
-    """The app launcher: short press cycles the installed apps, long press
-    launches the one showing, double tap backs out.
+    """The app launcher: short press cycles the installed apps, **double tap
+    launches** the one showing, and long press backs out.
+
+    The double tap is deliberate and is the one place long press does not mean
+    "up one level" - it means it *here* too, which is exactly the point: a menu
+    where the universal escape gesture instead committed you to something would
+    be the single exception to a rule people are meant to trust without
+    thinking. See `run_launcher`, which is authoritative.
 
     Why this exists at all: a takeover app is reached by an `enter_mode` action
-    bound to a gesture, and there are four gestures. Keep one for everyday
-    logging and you can reach three apps, which makes "load the button with as
-    many apps as it will fit" untrue as written (ROADMAP Stage 2). One gesture
-    spent on this reaches all of them.
+    bound to a gesture, and there are six gestures. Keep one for everyday
+    logging and one for leaving, and you can reach four - against eleven apps,
+    which makes "load the button with as many apps as it will fit" untrue as
+    written (ROADMAP Stage 2). One gesture spent on this reaches all of them.
 
     `targets` empty means **every takeover mode in config order**, so a newly
     added app appears in the launcher without anyone editing a list. Naming

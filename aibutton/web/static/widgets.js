@@ -167,18 +167,29 @@ const WIDGETS = {
 
     return {
       el: wrap(spec, el('div', { className: 'row-tight' }, [input, units]), err),
+      // The floor is the descriptor's to declare, not this widget's to assume.
+      // A hard-coded "> 0" here made a *documented* default unsaveable: the
+      // Pomodoro's lead_in_s says `min: 0` and means it ("0 = starts
+      // immediately"), so a freshly seeded scene failed the editor's own
+      // Check. An undeclared floor is zero - a length of time cannot run
+      // backwards, and anything stricter than that is a fact about the field
+      // rather than about durations.
       validate() {
         const seconds = stored();
-        if (!Number.isFinite(seconds) || seconds <= 0) {
-          err.textContent = 'Must be more than zero';
-          return `${spec.label} must be more than zero`;
+        const floor = min ?? 0;
+        let msg = null;
+        let short = '';
+        if (!Number.isFinite(seconds)) {
+          msg = `${spec.label} must be a number`;
+          short = 'Must be a number';
+        } else if (seconds < floor) {
+          msg = floor > 0
+            ? `${spec.label} must be at least ${floor} seconds`
+            : `${spec.label} cannot be negative`;
+          short = floor > 0 ? `At least ${floor}s` : 'Cannot be negative';
         }
-        if (min != null && seconds < min) {
-          err.textContent = `At least ${min}s`;
-          return `${spec.label} must be at least ${min} seconds`;
-        }
-        err.textContent = '';
-        return null;
+        err.textContent = short;
+        return msg;
       },
     };
   },

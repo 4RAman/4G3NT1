@@ -31,8 +31,9 @@ from aibutton.device import (
     STYLE_USES_LEVEL,
 )
 
-SCHEMA_JS = (Path(__file__).resolve().parents[1]
-             / "aibutton/web/static/schema.js").read_text(encoding="utf-8")
+STATIC = Path(__file__).resolve().parents[1] / "aibutton/web/static"
+SCHEMA_JS = (STATIC / "schema.js").read_text(encoding="utf-8")
+WIDGETS_JS = (STATIC / "widgets.js").read_text(encoding="utf-8")
 
 
 def _hex_list(name: str) -> list[str]:
@@ -235,3 +236,334 @@ def test_signal_default_positions_match_on_both_sides():
     block = block[:block.index("startedBy:")]
     states = re.findall(r"\{ name: '([^']*)', color: '([^']*)', style: '([^']*)' \}", block)
     assert [(s.name, s.color, s.style) for s in cfg._default_signal_states()] == states
+
+
+# --- a seeded mode has to pass the editor's own Check -----------------------
+# Two things hand you a *whole* mode rather than a field: BUILTIN_MODES ("Add
+# a ready-made mode") and the from-scratch scene seed, which is
+# `as_dict(AppConfig())` shipped into the offline editor by
+# tools/build_editor.py and dropped in whole by its "New scene" button. What
+# nothing checked is that either one survives the validators the editor runs
+# on Save/Check - and neither did (TODO 35): a seeded Pomodoro's `lead_in_s:
+# 0` tripped a hard-coded "> 0" in the duration widget, and a seeded
+# Stopwatch's empty `log_as` tripped `required: true`. "New scene" then
+# "Check" rejected the config the editor had just written.
+#
+# This is the exact opposite case to the deleted "descriptor defaults must
+# parse" test noted above, and the two rules coexist: `defaults()` is a blank
+# form and *should* leave a required field empty for you to fill in, while a
+# seeded mode claims to be finished and ready to run.
+#
+# The reader below is a real bracket walk rather than a pattern, because these
+# tables carry brackets inside strings ("[1] usually means…") and URLs inside
+# comments - either one defeats a bracket count that cannot tell code from
+# text. It reads only the *scalars* at the top level of an object, which is
+# every field a `required` or a `min` can be declared on.
+
+
+def _past_string(text: str, start: int) -> int:
+    """Index just past the quoted run starting at `text[start]`."""
+    quote = text[start]
+    i = start + 1
+    while i < len(text) and text[i] != quote:
+        i += 2 if text[i] == "\\" else 1
+    return min(i + 1, len(text))
+
+
+def _past(text: str, start: int) -> int:
+    """Index just past the bracket opened at `text[start]`."""
+    closers = {"{": "}", "[": "]", "(": ")"}
+    stack = [closers[text[start]]]
+    i = start + 1
+    while i < len(text) and stack:
+        ch = text[i]
+        if ch in "'\"`":
+            i = _past_string(text, i)
+            continue
+        if text[i:i + 2] == "//":
+            newline = text.find("\n", i)
+            i = len(text) if newline < 0 else newline
+            continue
+        if ch in closers:
+            stack.append(closers[ch])
+        elif ch == stack[-1]:
+            stack.pop()
+        i += 1
+    assert not stack, f"unbalanced brackets from {text[start:start + 40]!r}"
+    return i
+
+
+def _inside(text: str, marker: str, at: int = 0) -> str:
+    """What `marker` (ending in its own opening bracket) encloses."""
+    opener = text.index(marker, at) + len(marker) - 1
+    return text[opener + 1:_past(text, opener) - 1]
+
+
+def _flat_comments(text: str) -> str:
+    """`text` with its `//` comments blanked out, strings left alone - which is
+    the whole reason this is a walk: a placeholder of 'https://…' is not a
+    comment, and blanking from the slashes would eat its closing quote."""
+    out, i = [], 0
+    while i < len(text):
+        if text[i] in "'\"`":
+            end = _past_string(text, i)
+            out.append(text[i:end])
+        elif text[i:i + 2] == "//":
+            end = text.find("\n", i)
+            end = len(text) if end < 0 else end
+            out.append(" " * (end - i))
+        else:
+            out.append(text[i])
+            i += 1
+            continue
+        i = end
+    return "".join(out)
+
+
+def _flat(inside: str) -> str:
+    """`inside` with its comments *and* its nested groups blanked out, so what
+    is left is exactly the top-level keys of one object literal."""
+    text = _flat_comments(inside)
+    out, i = [], 0
+    while i < len(text):
+        ch = text[i]
+        if ch in "'\"`":
+            end = _past_string(text, i)
+            out.append(text[i:end])
+        elif ch in "{[(":
+            end = _past(text, i)
+            out.append(" " * (end - i))
+        else:
+            out.append(ch)
+            i += 1
+            continue
+        i = end
+    return "".join(out)
+
+
+# A product is spelled out where it reads better as one (`work_s: 25 * 60`),
+# so a number here is a product of literals rather than a single one.
+_SCALAR = re.compile(
+    r"(\w+):\s*(?:'([^']*)'|\"([^\"]*)\"|(-?[\d.]+(?:\s*\*\s*-?[\d.]+)*)|(true|false))"
+)
+
+
+def _object(inside: str) -> dict:
+    """The scalar key/value pairs at the top level of one object literal.
+
+    A key whose value is a call, an array or another object is simply absent -
+    `ladder: defaultLadder()` and `states: [...]` are not things a `required`
+    or a `min` is ever declared on. Later keys win, which is what a spread
+    followed by overrides means in JS.
+    """
+    found = {}
+    for key, single, double, number, boolean in _SCALAR.findall(_flat(inside)):
+        if number:
+            product = 1.0
+            for part in number.split("*"):
+                product *= float(part)
+            found[key] = product
+        elif boolean:
+            found[key] = boolean == "true"
+        else:
+            found[key] = single or double
+    return found
+
+
+def _template_chunks() -> dict[str, str]:
+    """{template type: the source of its descriptor}."""
+    region = SCHEMA_JS[SCHEMA_JS.index("export const TEMPLATES = ["):
+                       SCHEMA_JS.index("export const TEMPLATE_BY_TYPE")]
+    parts = re.split(r"\n\s*type: '(\w+)',", region)
+    return {parts[i]: parts[i + 1] for i in range(1, len(parts), 2)}
+
+
+def _field_specs(block: str) -> list[dict]:
+    """Every field descriptor in one `fields: [...]` block, including the ones
+    referenced by name (LADDER_FIELD) rather than written inline."""
+    # Blanked first: the comments between entries name the very constants a
+    # by-name reference looks like (LED_STYLES is discussed twice), and a
+    # reader that could not tell the two apart went looking for a descriptor
+    # that is a prose mention.
+    block = _flat_comments(block)
+    specs, i = [], 0
+    while i < len(block):
+        if block[i] == "{":
+            end = _past(block, i)
+            specs.append(_object(block[i + 1:end - 1]))
+            i = end
+            continue
+        shared = re.match(r"[A-Z][A-Z_0-9]+", block[i:])
+        if shared:
+            specs.append(_object(_inside(SCHEMA_JS, f"const {shared.group(0)} = {{")))
+            i += shared.end()
+            continue
+        i += 1
+    return specs
+
+
+def _fields_by_template() -> dict[str, list[dict]]:
+    fields = {}
+    for name, chunk in _template_chunks().items():
+        fields[name] = _field_specs(_inside(chunk, "fields: [")) if "fields: [" in chunk else []
+    return fields
+
+
+def _fields_by_action() -> dict[str, list[dict]]:
+    block = _js_actions_block()
+    fields = {}
+    for match in re.finditer(r"^    type: '([^']*)',$", block, re.M):
+        fields[match.group(1)] = _field_specs(_inside(block, "fields: [", match.end()))
+    return fields
+
+
+def _builtin_seeds() -> list[tuple[str, dict]]:
+    """[(preset id, the mode object it writes), ...], spreads resolved.
+
+    Flat scalars only, so a preset's *nested* action objects (the DAW
+    transport's MIDI messages) are out of reach here - those are covered by
+    the parser tests. Every `required` and `min` in the file is on a flat
+    field, which is what this has to see.
+    """
+    chunks = _template_chunks()
+    block = SCHEMA_JS[SCHEMA_JS.index("export const BUILTIN_MODES = ["):]
+    block = block[:block.index("\n];")]
+    seeds = []
+    for match in re.finditer(r"id: '([^']+)'", block):
+        body = _inside(block, "mode: () => ({", match.end())
+        for template in re.findall(r"\.\.\.TEMPLATE_BY_TYPE\.(\w+)\.defaults\(\)", body):
+            body = body.replace(
+                f"...TEMPLATE_BY_TYPE.{template}.defaults()",
+                _inside(chunks[template], "defaults: () => ({"),
+            )
+        seeds.append((match.group(1), _object(body)))
+    return seeds
+
+
+def _widget_errors(obj: dict, specs: list[dict]) -> list[str]:
+    """What widgets.js would reject `obj` for, given `specs`.
+
+    Only the kinds that can reject a filled-in value are modelled: `required`
+    is checked by the text/textarea/select widgets, and `min`/`max` by
+    duration/number/range. A bound declared as a *function* of the live config
+    (the flash floor, in SETTINGS rather than in any template) reads as absent
+    here, which is the right answer - a seeded mode cannot be judged against a
+    number that depends on the config it is being added to.
+    """
+    errors = []
+    for spec in specs:
+        key, kind = spec.get("key"), spec.get("kind", "text")
+        label = spec.get("label", key)
+        value = obj.get(key)
+        if kind in ("text", "textarea", "select"):
+            if spec.get("required") and not str("" if value is None else value).strip():
+                errors.append(f"{label} is required")
+            continue
+        if kind not in ("duration", "number", "range"):
+            continue
+        floor = spec.get("min")
+        if kind == "duration":  # the widget reads `Number(obj[key] ?? 0)`
+            value = 0 if value in (None, "") else value
+            floor = 0 if floor is None else floor
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            errors.append(f"{label} must be a number")
+            continue
+        if floor is not None and number < floor:
+            errors.append(f"{label} must be at least {floor}")
+        if spec.get("max") is not None and number > spec["max"]:
+            errors.append(f"{label} must be at most {spec['max']}")
+    return errors
+
+
+def test_the_field_descriptors_are_still_readable():
+    """The guard on everything below: an extraction that quietly found nothing
+    would pass every check it makes."""
+    fields = _fields_by_template()
+    assert len(fields) >= 13, "templates stopped being extractable"
+    assert fields["stopwatch"] and fields["pomodoro"] and fields["countdown"]
+    # The two failures TODO 35 was about have to be visible from here, or this
+    # is checking modes against nothing.
+    assert any(f.get("key") == "log_as" and f.get("required") for f in fields["stopwatch"])
+    assert any(f.get("key") == "lead_in_s" and f.get("min") == 0 for f in fields["pomodoro"])
+    assert _fields_by_action()["log"][0]["required"] is True
+
+
+def test_a_from_scratch_scene_passes_the_editors_own_check():
+    """"New scene" then "Check" has to come back clean. The seed is
+    `as_dict(AppConfig())` (tools/build_editor.py hands it to the editor), so
+    what is really being asserted is that the parser's defaults and the
+    editor's validators agree about what a finished mode looks like."""
+    fields = _fields_by_template()
+    actions = _fields_by_action()
+    problems = []
+    for mode in cfg.as_dict(cfg.AppConfig())["modes"]:
+        for error in _widget_errors(mode, fields[mode["template"]]):
+            problems.append(f"{mode['name']}: {error}")
+        # An actions/control body validates each bound action too, exactly as
+        # the mode editor does. A bare string is a pool reference, not an
+        # action - see resolve_action.
+        for trigger in cfg.TRIGGER_TYPES:
+            bound = mode.get(trigger)
+            if isinstance(bound, dict) and bound.get("action") in actions:
+                for error in _widget_errors(bound, actions[bound["action"]]):
+                    problems.append(f"{mode['name']} / {trigger}: {error}")
+    assert not problems
+
+
+def test_every_built_in_mode_passes_the_editors_own_check():
+    """"Add a ready-made mode" writes a whole mode, so a preset that leaves a
+    required field blank is a mode the editor refuses to save the moment it
+    has been added."""
+    fields = _fields_by_template()
+    seeds = _builtin_seeds()
+    assert len(seeds) >= 14, "entries stopped being extractable"
+    problems = []
+    for entry, mode in seeds:
+        for error in _widget_errors(mode, fields[mode["template"]]):
+            problems.append(f"{entry}: {error}")
+    assert not problems
+
+
+# --- a bound is declared once, in the descriptor ----------------------------
+# The pair of tests above judge a seeded mode against what schema.js *says*.
+# That is only worth anything while the widget agrees, and the second half of
+# TODO 35 was exactly the case where it did not: the descriptor said `min: 0`
+# and the widget rejected zero anyway.
+
+
+def test_every_duration_field_declares_its_own_floor():
+    """A duration is not automatically positive. Zero is a real value for
+    `lead_in_s` ("0 = starts immediately") and nonsense for a work block, so
+    which one a field means is written on the field rather than inherited."""
+    specs = [
+        spec
+        for group in (*_fields_by_template().values(), *_fields_by_action().values())
+        for spec in group
+    ]
+    durations = [spec for spec in specs if spec.get("kind") == "duration"]
+    assert len(durations) == SCHEMA_JS.count("kind: 'duration'"), (
+        "a duration field lives somewhere this test does not read"
+    )
+    missing = [spec.get("key") for spec in durations if spec.get("min") is None]
+    assert not missing, f"no floor declared, so the widget has to guess one: {missing}"
+
+
+def test_the_duration_widget_floors_where_the_descriptor_says():
+    """Read off the source, the way test_color_engine.py reads its claims: the
+    alternative is a JavaScript engine in the suite.
+
+    A number written into this comparison is a *second* declaration of a bound
+    schema.js already makes - which is the drift this whole file exists to
+    catch, in the one place it was hiding as ordinary-looking validation."""
+    body = _inside(WIDGETS_JS, "duration(spec, obj, onInput, ctx) {")
+    check = _flat_comments(_inside(body, "validate() {"))
+    assert re.search(r"[<>]=?\s*(floor|min)\b", check), (
+        "the duration widget no longer compares against the declared bound"
+    )
+    literal = re.search(r"seconds\s*[<>]=?\s*-?\d|-?\d\s*[<>]=?\s*seconds", check)
+    assert not literal, (
+        f"the duration widget floors at a literal ({literal.group(0)!r}) instead "
+        "of at spec.min - a field declaring min: 0 cannot then hold zero"
+    )

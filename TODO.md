@@ -142,7 +142,7 @@ view.
 | **The gesture engine** — N taps, hold levels | 0b·2 ✔, 5-tap gesture ✔, **28** ✔ | Taps are done. Hold levels still need firmware and are the cheap half of **29** |
 | **Depth without the wire** — metronome config ✔, event values ✔, filtering/export ✔ | **1** ✔, **9** ✔, **12**, **14** ✔ | None — ship freely |
 | **Reach and hosting** — launcher ✔, ten apps ✔, remote UI | **0a** ✔, **7** ✔, **8** | Only the hardware walk left on 7 |
-| **The light as a language** — ladder ✔, where colour is edited ✔, stop list ✔ | **19** (a ✔, b ✔, c *checked, not free*, d ✔, e ✔), **36** | Item **19** is spent; **36** is where the light goes next — curves, a style per stop, one primitive |
+| **The light as a language** — ladder ✔, where colour is edited ✔, stop list ✔ | **19** (a ✔, b ✔, c *checked, not free*, d ✔, e ✔), **36** | Done — **36** shipped 2026-08-21, tests closed 2026-08-22. **19c** (a repainting tick for Pomodoro) is the one thread left, shared with 36d |
 | **Saying a number** — ambient counting ✔, count readout ✔ | **15** ✔, **17** ✔ | Only the human read test, on hardware (same sitting as **26b**) |
 | **Play** — timing/rhythm and guessing games | **16** ✔ | Done for forgiving games; tight rhythm still needs Stage 3's on-device runtime |
 | **Reaching other software** — OSC ✔, MIDI out ✔, clock in ✔, transport state | ✔ shipped with **7**, **22** ✔, **24** ✔, **25** | Sending and listening both work. **25** wants MCU's *return* feedback, which needs the DAW's Send To pointed back |
@@ -388,216 +388,6 @@ performance": (a) *habit* analytics for the user (mode usage, streaks,
 time-of-day patterns — a dashboard over `EventStore`), (b) *device* telemetry
 (BLE reconnect frequency, gesture-to-feedback latency, dropped presses), or
 (c) *hosting* metrics once item 8 exists. **Ask which.**
-
-### 36. One colour primitive — curves, effects per stop, and one editor
-
-Asked for 2026-08-21 as "the primo colour editor", and the framing that
-justifies it is not the UI. [ARCHITECTURE.md](ARCHITECTURE.md) lists three
-ways an app may gain a capability and ranks **"extend the effect set (a
-system decision, not an app's)"** second, above shipping native code; the
-rule it has to satisfy is *bounded by construction* — no loops, no
-allocation, no recursion, worst case knowable before the app runs. **A stop
-list with curves is exactly that**: a finite table. So this is the sanctioned
-growth path for what a light can say, and it costs the on-device runtime
-nothing it was not already prepared to pay.
-
-**The vision, as given.** A step sequencer over "nodes": 0% solid red, 50%
-solid yellow, 75% flashing yellow, 100% solid green. A loop checkbox (unchecked
-= play once, then back to the previous colour). Positions in percent, or
-seconds/ms, or beats, chosen from a dropdown. Interpolation you can shape
-between nodes — hold red a while, then a fast exponential run up to yellow,
-then a linear fade to green — the synth idea of a waveform whose peaks are
-shorter than its valleys and lag behind centre. And programmable one-offs:
-a confirmation that is *green pause green pause green blink green blink* over
-two seconds rather than "the flash style".
-
-**What was already built.** [sequencer.py](aibutton/sequencer.py) (item 19b,
-2026-08-19) is the step sequencer: ordered stops, per-stop `hold_s` and
-`fade_s`, `repeat`, and `repeat: false` meaning play once and fall back. The
-colour engine already edits them. So the ask is the four things below, not the
-whole thing.
-
-**The unification is real, with one correction.** sequencer.py's own docstring
-already draws the diagram — `ramp` is driven by progress 0→1, a stop list by
-the clock, a `ladder` by a counter — and these *are* one primitive with three
-clocks. The correction: the drive belongs to the **sequence**, not the stop
-(mixing beats and milliseconds in one list leaves `plan_at` with no single
-timeline, and it is currently total over its domain). The consequence worth
-deciding before code: a ramp and a ladder are parameterised by something
-*outside themselves* — a countdown owns its progress, a metronome owns its
-beat — while a stop list owns its own clock and is the only one of the three
-that can stand alone. So a percent-driven look is meaningless on IDLE. **One
-editor for all three is right; where you may bind the result depends on the
-drive**, which is `MODE_LED_STATES`-level logic, not editor logic.
-
-**Where "it replaces every other colour mode" stops being true.** The system
-palette ships to the device and renders **unattended**, which is why
-`_parse_palette` is effect-only. A sequence is a schedule only the host can
-walk. That constraint gets *more* important as the device gets more
-autonomous, not less. The resolution taken here is better than replacement:
-**the sequence is the authoring surface and `LedEffect` is the fallback
-form** — the same relationship `looks` and `led_palette` already have.
-
-**Asymmetric periodic styles are deliberately not a wire change.** Giving
-`breathe` a duty cycle and a phase skew would mean firmware, a protocol
-change and a reflash, against a v1 CLAUDE.md just froze with the bar at "a
-capability the device physically cannot express today". A host-walked stop
-list approximates any curve with no wire change at all, so the shape is
-available immediately as a sequence and only becomes a cheap device-rendered
-primitive if a v2 ever happens for other reasons. **Do not spend a style code
-on this.**
-
-**Bandwidth is the real limit, and it decides what sequences are for.**
-`_SEQUENCE_MIN_STEP_S` is 50 ms because feedback is fire-and-forget and
-`BLEDevice` drops rather than waits. A two-second exponential fade is ~40
-radio writes: fine for something that *happens* (a confirmation, a transition,
-an alarm), wrong for something that idles. Rich sequences are events. IDLE
-stays a device-rendered style until Stage 3 moves the walker onto the device.
-
-**Concept count is the other limit.** Item **30** already notes there are
-eleven concepts here and a novice holds about three. A node editor with curves
-and unit dropdowns is unambiguously **tinker-tier**; `LOOK_PRESETS` is the
-front door, and today it cannot offer a ramp or a stop list at all. Making the
-preset library carry sequences is what stops the power tool being the only
-door.
-
-#### a) Sequence presets, and a system state may name a look — **built 2026-08-21**
-
-`LOOK_PRESETS` becomes effect-*or*-sequence, and the system states
-(IDLE/LISTENING/THINKING/SUCCESS/ERROR) may name a look from the pool the way
-a mode already may. **The precedent already exists**: `control` → `LISTENING`
-is a dual citizen in `MODE_LED_STATES`, a page naming a look that overrides
-the global colour while it is open. Generalising it is not a new concept.
-Resolution order becomes explicit effect → the active mode's look → the global
-state look → `None`, which is what `set_led` already means by "fall back to
-the palette". This is what unblocks the programmable confirmation, and it is
-the smallest of the four.
-
-#### b) A curve on each stop — **built 2026-08-21**
-
-`Stop.curve`: linear (today's behaviour and the default), ease-in, ease-out,
-ease-in-out, exponential. Pure, ~30 lines, and it survives the Stage-3 move
-unchanged because `plan_at` still answers only "what colour now, and for how
-long". No firmware mirror: firmware/led.py does not walk sequences, so nothing
-drifts.
-
-#### c) A stop may carry a style, not only a colour — **built 2026-08-21**
-
-What makes "75% flashing yellow" and the rainbow applause at the end
-expressible. `sequencer.py` is a leaf and must not import `config`, so a stop
-carries plain `style`/`period_s` fields and main.py assembles the `LedEffect`.
-**The style applies during the stop's hold; a fade is always plain solid
-interpolation** — a flashing target half-way through a crossfade is not a
-thing anyone means. Care needed at the flash floor: this must be `flash_safe`
-applied *inside* `sequence_safe`, not a second call site (CLAUDE.md).
-
-#### d) `drive` on the sequence — the actual unification — **built 2026-08-21**
-
-`clock` (today), `progress` (what `ramp` does), `beats` (what `ladder` does).
-
-**Walked versus sampled turned out to be the real distinction, not the unit.**
-A clock-driven list owns its position and `plan_at` walks it, sleeping between
-frames. The other two are parameterised from *outside themselves*, so they are
-sampled: `sample_at(seq, 0..1)` answers "what colour at this point" and
-returns no wait, because only the app knows when its own number will move
-next. That is one new pure function, not a second driver.
-
-Two consequences that were not obvious until it was written:
-
-- **Sampled fades interpolate continuously; walked ones stay quantised.** The
-  50 ms stepping exists because a walked sequence pushes every frame over a
-  radio. A sampled one pushes only when the app ticks — a countdown steps once
-  a second, already twenty times coarser — so quantising on top loses the
-  gradient for nothing. Getting this wrong the first time produced a stop list
-  with no gradient at all: `min_step_s = 0` collapses a fade to a single hard
-  cut, which is `_fade_step`'s documented degenerate case and exactly the wrong
-  default for sampling.
-- **The binding table is keyed by template, not by state, and that is forced.**
-  `TIMING` belongs to both the countdown and the stopwatch, and only one of
-  them has an end to be a fraction of. `DRIVE_TEMPLATES` in config.py, mirrored
-  as `drives` on the descriptors in schema.js.
-
-**Precedence, derived rather than invented:** named stop list > ladder > ramp,
-in both `run_countdown` and `run_metronome`. It is the rule `run_countdown`
-already used between the ladder and the ramp — the more explicit thing wins —
-extended by one step, because a look you had to build, name and point a mode at
-is more deliberate than a checkbox on the mode.
-
-**A stranded drive is warned about, not refused.** Binding a progress look
-where nothing supplies progress keeps the binding and plays it on the clock;
-dropping it would leave the state with no look at all, a bigger change to what
-the button does than rendering the same colours on the wrong axis.
-
-**Pomodoro is still not wired, and for 19c's reason.** `run_pomodoro`'s
-`show()` fires on phase transitions only — it has no repainting tick, so there
-is no place to sample from. Giving it one is the same piece of work **19c**
-describes, and it should be done once, for both.
-
-**The preset library is now the front door it was supposed to be.** 100 stop-list
-presets landed 2026-08-21 in eleven groups — Confirm, Countdown, Tempo, Nature,
-Signals, Retro, Focus, Mood, Play, Ambient, Patterns — bringing `LOOK_PRESETS`
-to 142 entries (37 effects, 105 sequences; 84 clock, 11 progress, 10 beats).
-Countdown and Tempo are the drive-specific ones, so those two groups only mean
-anything under the app that supplies their number. They were designed as Python
-data and validated against the real parser, both floors and the drive table
-before being emitted as JS, which caught two that the dwell floor would have
-rewritten and five whose labels collided with the existing library.
-
-**Tests caught up 2026-08-21**, suite at 1796 passing. Written: every curve's
-endpoints, monotonicity, mutual distinctness and its linear fallback for an
-unknown name; `plan_at` rendering solid mid-fade and the stop's own style
-during its hold; `sample_at`'s clamp, wrap and continuous interpolation, with
-the no-gradient bug pinned as a regression test; `sequence_safe`'s two axes and
-**the asymmetry in the one-shot exemption** — a stop's style period is floored
-even for a one-shot of three; `look_for`'s four-step resolution order,
-including a mode look beating a global state look; and `test_look_presets.py`
-rebuilt around the two preset shapes, checking every sequence against both
-floors and its drive, and — for the sampled ones — that it actually produces a
-gradient rather than one flat colour that would pass every other check.
-
-Two of those tests were wrong before the code was: `ease_in_out` passes through
-exactly 0.5 at the midpoint (it is symmetric), so curve distinctness has to be
-compared over the whole range rather than at one point.
-
-**Still owed**, none of it safety-critical: a direct round-trip of the drive
-and the three new stop keys through `as_dict` (covered incidentally by the
-preset and state-look tests, not head-on); the `_drive_warning` binding
-messages; and the named-look > ladder > ramp precedence inside `run_countdown`
-and `run_metronome`, which needs the async harness `test_main_takeover.py`
-uses.
-
-### 35. A freshly seeded scene fails its own Check
-
-Found 2026-08-20 while driving the offline editor to verify **30a** — not
-caused by it, and present on the commit before. Click **New scene**, click
-**Check**, and the editor rejects the config it just wrote you:
-
-> • Pomodoro: Get-ready countdown must be more than zero
-> • Stopwatch: Timer name is required
-
-Two separate causes, each small and each worth fixing on its own terms:
-
-- **The `duration` widget ignores its own `min`.** Its `validate()` hard-codes
-  `seconds <= 0` as an error ([widgets.js](aibutton/web/static/widgets.js)),
-  while `lead_in_s` declares `min: 0` and defaults to `0.0` — zero is the
-  *documented* value there ("Zero for a Pomodoro — you started it
-  deliberately"). So a legal default is unsaveable through the editor. The fix
-  is for the widget to honour `spec.min` rather than assume every duration is
-  positive; check the other `duration` fields before changing the default, in
-  case any of them is relying on the accident.
-- **`StopwatchBehavior.log_as` defaults to `''` while schema.js marks it
-  `required: true`.** One of the two is wrong. A stopwatch that logs nothing is
-  a coherent thing to want, so the descriptor is the likelier offender — but
-  this is the mirrored-tables problem in its softest form (a Python default and
-  a JS `required` disagreeing), and neither side is currently tested against
-  the other.
-
-The general lesson is the testable one: **nothing checks that the modes the
-editor seeds pass the editor's own validators.** `test_schema_mirror.py`
-already deleted a "descriptor defaults must parse" test for a good reason
-(`defaults()` deliberately starts required fields blank), but *seeded whole
-modes* are the opposite case — `BUILTIN_MODES` and the from-scratch seed are
-meant to be complete. That is the test to add.
 
 ### 31. Lifecycle hooks — `on_enter` / `on_exit` on `Mode`
 
@@ -920,6 +710,21 @@ unimplemented, so there is no progress value to ramp over yet (item **29**).
 
 ## Smaller, worth doing
 
+- **The web UI cannot simulate a four- or five-tap.** `web/index.html`'s Press
+  row offers short/long/double/triple only, three sprints after four- and
+  five-tap shipped — and the DAW transport preset ships a binding on `tap_5`,
+  so a preset the product ships cannot be exercised from the browser at all.
+  Two rows of markup. Found 2026-08-22 while resyncing MANUAL.md.
+
+- **The launcher offers Alarm modes and `enter_mode` does not.**
+  `launcher_targets` filters on `TAKEOVER_BEHAVIORS`, which includes
+  `AlarmBehavior`, so a scheduled alarm shows up in the launcher menu and can be
+  started by hand; the `enter_mode` target picker in schema.js filters on
+  `startedBy: 'gesture'` and excludes it. `ReminderBehavior` is in neither,
+  being absent from `TAKEOVER_BEHAVIORS` entirely. Either one of the two filters
+  is wrong or the difference is deliberate and wants writing down — it is
+  currently neither. Found 2026-08-22.
+
 - **Presses dropped while busy.** The loop runs one action at a time and
   discards presses during the 2 s SUCCESS display. Deliberate, but it makes
   fast repeated taps feel dead — worth revisiting if it grates in daily use.
@@ -928,13 +733,6 @@ unimplemented, so there is no progress value to ramp over yet (item **29**).
   (Obsidian) and replace the placeholder tone tables carried over from the Pi
   build. A matching sound palette, pushed the way the LED palette is, is the
   obvious shape.
-- **MANUAL.md's reference tables have fallen behind.** §5.1's "Available
-  actions" lists four of the nine that exist (no readout, OSC, MIDI, standby or
-  named actions) and §2's gesture table stops at the triple tap, three sprints
-  after four- and five-tap shipped. Noticed while adding `standby`; deliberately
-  not half-fixed, because a table that is 5/9 correct reads as audited and is
-  not. One sitting, against `ACTIONS` and `GESTURES` in schema.js.
-
 - **The service is not always under the tray.** Started from a terminal it
   works identically (the panel polls `/api/status`, not the process table), but
   the panel's Start/Stop won't own it. Worth knowing when debugging.
@@ -987,6 +785,69 @@ unimplemented, so there is no progress value to ramp over yet (item **29**).
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**36. One colour primitive — curves, effects per stop, and one editor**~~ —
+  shipped 2026-08-21, its owed tests closed 2026-08-22. Four parts: (a)
+  `LOOK_PRESETS` became effect-*or*-sequence and a system state may name a look
+  from the pool, (b) `Stop.curve`, (c) a style per stop, (d) `drive` on the
+  sequence. **Walked versus sampled turned out to be the real distinction, not
+  the unit** — a clock-driven list owns its position and `plan_at` walks it,
+  while `progress` and `beats` are parameterised from outside themselves and are
+  sampled by `sample_at`, which returns no wait. 142 presets (37 effects, 105
+  sequences). Precedence is named stop list > ladder > ramp. Every rule this
+  leaves behind is in [CLAUDE.md](CLAUDE.md).
+
+  The three owed tests landed 2026-08-22. The `as_dict` round-trip pins the
+  serialiser's existing write-in-full convention (a defaulted stop *does* emit
+  `curve`/`style`/`period_s`) rather than imposing an omit-defaults one, and
+  carries a second assertion that the four new keys survive at all — a
+  serialiser that silently dropped them would still round-trip cleanly. The
+  precedence tables give each colour source a disjoint palette, so "which colour
+  arrived" *is* the answer; the countdown's named-look row is pinned to the
+  sequence's first stop, which additionally proves the list is sampled on
+  progress rather than walked on the clock.
+
+  **Still open, inherited rather than added:** `run_pomodoro` has no repainting
+  tick, so there is nowhere to sample a look from — that is **19c**, and it
+  should be done once for both.
+
+- ~~**35. A freshly seeded scene fails its own Check**~~ — fixed 2026-08-22.
+  Two independent causes. The `duration` widget hard-coded `seconds <= 0` and
+  now floors at `spec.min ?? 0`; the audit found all five duration fields
+  already declared an explicit `min`, so nothing was leaning on the accidental
+  rejection, and a test now pins that a duration value is never compared against
+  a numeric literal — the half a descriptor-level test cannot see.
+
+  **`log_as` went the opposite way to the one this item predicted.** The
+  descriptor was right and the Python default was wrong: `run_stopwatch` calls
+  `toggle_timer(log_as)` unconditionally, so `""` does not log nothing — it
+  writes rows named `""` and `"_lap"` and sums every unnamed stopwatch into one
+  bucket. The surfaces where blank genuinely *does* mean "log nothing" guard
+  with `if behavior.log_as:` and are correspondingly not `required`. Default is
+  now `"stopwatch"`. **`CounterBehavior.event` carried the identical bug** and
+  was fixed the same way (`"counter"`); it escaped the new test only because no
+  Counter sits in the from-scratch seed.
+
+  The generalising test is in `test_schema_mirror.py`: every seeded mode — the
+  from-scratch scene seed (which lives in `tools/build_editor.py`, not
+  `scenes.py`) and all 14 `BUILTIN_MODES` — must pass the validators the editor
+  would apply to it. Both new checks were verified by reintroducing the original
+  bugs.
+
+- ~~**MANUAL.md's reference tables had fallen behind**~~ (Smaller, worth doing)
+  — resynced 2026-08-22, and README.md with it. Gestures 4 → 6 rows, actions
+  4 → 8 plus the named-action pool, a new §5 opening table of all 13 mode kinds,
+  and the stale enumerations through §1, §4, §6, §8, §9 and §12; README went
+  five → six gestures and six → eight primitives. One **factual** error rather
+  than a stale count: §5.4 claimed a paused Pomodoro shows LISTENING, and it
+  does not — it freezes the phase colour into `waiting_style`.
+
+  §7's recipes were rebuilt rather than patched, because four of them walked the
+  reader through building what the shipped config already does, and a recipe
+  whose payoff is something you already have reads as "my button is broken".
+  The replacements teach the *change* instead of the wiring, and two of them
+  deliberately compete for the same triple tap, which is the launcher's reason
+  for existing made concrete.
 
 - ~~**30a. A named action pool**~~ — shipped 2026-08-20. `AppConfig.actions`,
   referenced from any gesture by a **bare string** (`"short_press": "smoke"`),
