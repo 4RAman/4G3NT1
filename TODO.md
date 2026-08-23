@@ -153,10 +153,19 @@ recipe. Candidates, cheapest first:
   native, but fires once per *connection* rather than per gesture, so it can
   express "the button woke up" and nothing finer.
 
-**iOS specifics were not verified when this was written** (assistant knowledge
-cutoff). Confirm before building anything: whether a native webhook-to-Shortcut
-route exists now, and that there is still no way to bind a hardware key to a
-Shortcut globally - **because if there is, 38 subsumes this item.**
+**Verified 2026-08-23, and the answer keeps this item alive.** Apple's trigger
+list has **no HTTP/webhook trigger and no hardware-key trigger** - a connected
+keyboard can type, but a keypress cannot start a Shortcut. So **38 does not
+subsume this item**, which was the one finding that would have merged them.
+
+What *does* exist is connection-level: **Bluetooth device connects** has been a
+trigger for years, and **iOS 26 added a "keyboard connection" trigger**
+alongside screenshot and notification ones. Both fire once per *connection*, so
+they can say "the button arrived" and nothing per-gesture. Worth knowing for 38:
+a button paired as an HID keyboard gets that trigger for free.
+
+So Pushcut (or a HomeKit/Home Assistant bridge) remains the route, and the cost
+here is still zero Python.
 
 **Definition of done.** A gesture runs a named Shortcut on the phone, written
 up in MANUAL.md as a recipe, with no new action and no new dependency. If it
@@ -180,6 +189,23 @@ host at all** - the firmware already renders animations unattended, so an
 on-device countdown is consistent with what is there. That makes this a
 rehearsal for Stage 4 rather than a toy, and it is the argument for doing it
 before the on-device runtime rather than after.
+
+**The mechanism is confirmed (2026-08-23), and it is not a keyboard key.**
+The shutter is the **Consumer Control** usage `0xE9` (Volume Up), not a
+keyboard scancode - so the HID report descriptor needs a **Consumer Page**
+collection, which is a different and smaller thing than emulating a keyboard.
+iOS has treated volume-up as the shutter across every built-in Camera mode
+since iOS 7, with no app installed.
+
+Two consequences worth having before anyone starts:
+
+- **Built-in Camera only.** Third-party camera apps generally take volume-up as
+  *volume* and change it instead of firing. So this app targets Apple's Camera
+  and should say so rather than being discovered.
+- **Pairing as a keyboard is worth doing anyway**, even though the shutter does
+  not need it: iOS 26's "keyboard connection" automation trigger would then let
+  connecting the button start a Shortcut, which is the only native bridge
+  between this item and **39**.
 
 **Decide before code:**
 
