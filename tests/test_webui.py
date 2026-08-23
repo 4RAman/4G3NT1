@@ -302,6 +302,16 @@ async def test_trigger_presses_the_device(client, ctx):
     assert ctx.device.events.get_nowait() is TriggerType.DOUBLE_TAP
 
 
+async def test_trigger_accepts_every_gesture(client, ctx):
+    """The Press row can only send what this endpoint takes, and the row now
+    offers all six - a gesture the parser binds but the endpoint refuses would
+    be one nothing but real hardware could ever exercise."""
+    for trigger in TriggerType:
+        res = await client.post(f"/api/trigger/{trigger.value}")
+        assert res.status_code == 200, trigger.value
+        assert ctx.device.events.get_nowait() is trigger
+
+
 async def test_trigger_unknown_404(client, ctx):
     res = await client.post("/api/trigger/quadruple_tap")
     assert res.status_code == 404
@@ -464,6 +474,24 @@ def test_every_sound_preview_button_names_a_real_sound():
 
     names = set(re.findall(r"data-sound=\"([^\"]+)\"", _INDEX_HTML.read_text(encoding="utf-8")))
     assert names == {s.value for s in Sound}
+
+
+def test_the_press_row_is_generated_from_the_gesture_table():
+    """A hand-written row is exactly how four- and five-tap became unsendable
+    from the browser: they shipped as a data change to GESTURES and this markup
+    did not notice for three sprints, so a preset the product ships bound a
+    gesture nothing but real hardware could produce. The guard is that no
+    gesture is named here at all - build the row from the table and the next
+    one costs nothing."""
+    source = _INDEX_HTML.read_text(encoding="utf-8")
+    named = re.findall(r'data-trigger="([^"]+)"', source)
+    assert not named, (
+        f"the Press row names gestures in markup ({sorted(set(named))}); build it "
+        "from schema.js's GESTURES instead, or the next gesture goes missing too"
+    )
+    assert 'id="press-row"' in source
+    assert "for (const gesture of GESTURES)" in source
+    assert "button.dataset.trigger = gesture.key" in source
 
 
 def test_the_page_plays_sound_outside_the_mock_only_branch():

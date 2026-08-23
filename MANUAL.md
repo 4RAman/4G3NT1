@@ -573,9 +573,13 @@ width for editing.
   result.
 - **Recent events** — your logged events and timer durations, newest first, on
   the **Events** tab.
-- **Press** — buttons that fire Short press / Long press / Double tap /
-  Triple tap through the real pipeline, handy for testing a mode without
-  touching the hardware.
+- **Press** — one button per gesture the button can send, fired through the
+  real pipeline, handy for testing a mode without touching the hardware. The
+  row is built from the gesture table rather than written out, so it always
+  offers exactly what a config can bind — including the four- and five-tap a
+  hand is slow at. A simulated press arrives instantly, where a real one waits
+  for the multi-tap window to close; anything timing you already accounts for
+  that difference.
 - **Sounds** — plays each of the button's four tones in the browser, useful
   when the button itself is in another room.
 - **Clock** — set the time the device *thinks* it is (e.g. 06:59) to try

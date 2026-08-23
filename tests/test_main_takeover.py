@@ -623,3 +623,134 @@ async def test_counter_starts_from_the_stores_count_not_zero(tmp_path, monkeypat
         assert store.count_today("water") == 3  # 2 seeded + 1 counter press
     finally:
         store.close()
+
+
+# --- lifecycle hooks (TODO 31) ---------------------------------------------
+# The hooks live on `Mode` and fire from `enter_takeover`, so what has to be
+# driven through run() is the *ordering* - a hook is only worth anything if
+# "started" arrives before the app draws and "ended" after its session row is
+# closed. Nothing below touches the Counter's own code, which is the point:
+# zero per-template code means the same two lines serve every takeover.
+
+
+def _hooked(db_path, **hooks) -> dict:
+    return {
+        "sounds_enabled": False,
+        "web_enabled": False,
+        "database_path": str(db_path),
+        "actions": {"bell": {"action": "log", "event": "bell"}},
+        "modes": [
+            {
+                "name": "Default", "template": "actions",
+                "activation": {"type": "always"},
+                "long_press": {"action": "enter_mode", "target": "Water"},
+            },
+            dict({
+                "name": "Water", "template": "counter",
+                "activation": {"type": "manual"}, "event": "water",
+            }, **hooks),
+        ],
+    }
+
+
+async def _session(tmp_path, monkeypatch, config) -> list[tuple[str, str]]:
+    """Enter Water, count once, leave - and return the log in the order it was
+    actually written (`recent` is newest-first over an autoincrementing id)."""
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps(config), encoding="utf-8")
+    device = MockDevice()
+    monkeypatch.setattr(main, "_SUCCESS_DISPLAY_S", 0.05)
+    monkeypatch.setattr(main, "_ERROR_DISPLAY_S", 0.05)
+    args = main._parse_args(["--no-web", "--config", str(cfg_path)])
+    run_task = asyncio.create_task(main.run(args, device=device))
+    await asyncio.sleep(0.1)
+
+    async def feed(trigger):
+        device.press(trigger)
+        await _drain(device.events)
+        await asyncio.sleep(0.08)
+
+    try:
+        await feed(TriggerType.LONG_PRESS)   # enter_mode -> Water
+        await feed(TriggerType.SHORT_PRESS)  # +1 -> log water
+        await feed(TriggerType.LONG_PRESS)   # exit
+        await asyncio.sleep(0.1)
+    finally:
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+    store = EventStore(config["database_path"])
+    try:
+        rows = store.recent(100)
+    finally:
+        store.close()
+    return [(kind, name) for (_ts, kind, name, _d, _m, _v) in reversed(rows)]
+
+
+async def test_hooks_fire_around_the_session_in_the_order_it_happened(tmp_path, monkeypatch):
+    """Enter hook after the mode_enter row; exit hook after the mode_exit row
+    that closes the session. The row order *is* the assertion - a hook that
+    posted "focus started" before the row saying so would be reporting a
+    session the log does not have yet.
+
+    The enter hook is spawned rather than awaited, so what is guaranteed is
+    that it is *scheduled* before the app runs; it lands at the app's first
+    suspension, which for every takeover here is waiting on a press. That is
+    why it still sorts ahead of the app's own rows, and it is the ordering a
+    non-blocking entry hook can actually promise."""
+    order = await _session(tmp_path, monkeypatch, _hooked(
+        tmp_path / "events.db",
+        on_enter={"action": "log", "event": "water_open"},
+        on_exit={"action": "log", "event": "water_shut"},
+    ))
+    assert order == [
+        ("mode_enter", "Water"),
+        ("log", "water_open"),
+        ("log", "water"),
+        ("mode_exit", "Water"),
+        ("log", "water_shut"),
+    ]
+
+
+async def test_a_hook_can_name_an_action_from_the_pool(tmp_path, monkeypatch):
+    """The fourth place an action is dispatched, so the fourth place a bare
+    string has to be resolved (CLAUDE.md). Without `resolve_action` here this
+    hook would simply do nothing, silently."""
+    order = await _session(tmp_path, monkeypatch, _hooked(
+        tmp_path / "events.db", on_exit="bell",
+    ))
+    assert ("log", "bell") in order
+    assert order[-1] == ("log", "bell")  # after the session closed, like any exit hook
+
+
+async def test_a_failing_hook_costs_the_hook_and_not_the_app(tmp_path, monkeypatch):
+    """A MIDI port nobody has - the cheapest real failure there is, and the
+    same shape as a webhook that 404s. The app must still open, still count,
+    still close, and the *other* hook must still fire."""
+    order = await _session(tmp_path, monkeypatch, _hooked(
+        tmp_path / "events.db",
+        on_enter={"action": "midi", "port": "no-such-port-zzz", "channel": 1,
+                  "kind": "note_on", "number": 60, "value": 127},
+        on_exit={"action": "log", "event": "water_shut"},
+    ))
+    assert order == [
+        ("mode_enter", "Water"),
+        ("log", "water"),
+        ("mode_exit", "Water"),
+        ("log", "water_shut"),
+    ]
+
+
+async def test_a_hook_naming_nothing_leaves_the_app_untouched(tmp_path, monkeypatch):
+    """A dangling name fails the way `handle()` already fails on one: loudly in
+    the log, and only for that hook."""
+    order = await _session(tmp_path, monkeypatch, _hooked(
+        tmp_path / "events.db", on_enter="gone", on_exit="bell",
+    ))
+    assert order == [
+        ("mode_enter", "Water"),
+        ("log", "water"),
+        ("mode_exit", "Water"),
+        ("log", "bell"),
+    ]

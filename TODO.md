@@ -389,26 +389,9 @@ time-of-day patterns — a dashboard over `EventStore`), (b) *device* telemetry
 (BLE reconnect frequency, gesture-to-feedback latency, dropped presses), or
 (c) *hosting* metrics once item 8 exists. **Ask which.**
 
-### 31. Lifecycle hooks — `on_enter` / `on_exit` on `Mode`
-
-**Split out of 23 (designed 2026-08-19). The design is ARCHITECTURE.md
-"Composition: an app's edges" — read it first; this item is build only.**
-Two optional `Action` fields on `Mode`, not on each behaviour: parser +
-serialiser in [config.py](aibutton/config.py), fired from `enter_takeover`
-in [main.py](aibutton/main.py) at the two moments it already logs
-`mode_enter`/`mode_exit`, editor fields in
-[schema.js](aibutton/web/static/schema.js) (tinker tier, once **14** ships).
-A hook is fire-and-forget like all feedback: a webhook that fails logs a
-warning and never blocks entry or exit.
-
-**Definition of done.** A mode can post a status webhook on enter and clear
-it on exit with zero per-template code; tests cover parse fallback (a bad
-hook is dropped with a warning, the mode survives) and firing order (enter
-hook before the loop starts, exit hook after it ends).
-
 ### 32. Session summaries — apps report structured results
 
-**Split out of 23; needs 31, because hooks are the carrier.** Each takeover
+**Split out of 23; needs 31, which shipped 2026-08-22 — hooks are the carrier.** Each takeover
 reports a flat bounded dict of scalars on exit (`{"rounds": 8, "total_s":
 480}`); the exit hook merges it into a webhook payload and maps it to OSC
 arguments. Contents are each app's decision — the contract (flat, scalars
@@ -710,12 +693,6 @@ unimplemented, so there is no progress value to ramp over yet (item **29**).
 
 ## Smaller, worth doing
 
-- **The web UI cannot simulate a four- or five-tap.** `web/index.html`'s Press
-  row offers short/long/double/triple only, three sprints after four- and
-  five-tap shipped — and the DAW transport preset ships a binding on `tap_5`,
-  so a preset the product ships cannot be exercised from the browser at all.
-  Two rows of markup. Found 2026-08-22 while resyncing MANUAL.md.
-
 - **The launcher offers Alarm modes and `enter_mode` does not.**
   `launcher_targets` filters on `TAKEOVER_BEHAVIORS`, which includes
   `AlarmBehavior`, so a scheduled alarm shows up in the launcher menu and can be
@@ -785,6 +762,43 @@ unimplemented, so there is no progress value to ramp over yet (item **29**).
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**31. Lifecycle hooks — `on_enter` / `on_exit` on `Mode`**~~ — shipped
+  2026-08-22. Two optional `Action`s on `Mode` rather than on each behaviour,
+  so all eleven takeover templates gained them with **zero per-template code**.
+  Fired where `enter_takeover` already logs `mode_enter`/`mode_exit` — **and
+  from `fire_alarm` too**, which the original scope missed: a hook lives on the
+  mode, so the same alarm reached by its schedule and by a gesture would
+  otherwise have fired on one path and not the other.
+
+  **Entry is spawned, exit is awaited, and the asymmetry is the decision.**
+  TODO 31 said "fire-and-forget like all feedback" and in this codebase that
+  phrase is load-bearing, so awaiting `on_enter` — up to `WEBHOOK_TIMEOUT_S`
+  between the press and the app opening — was the wrong reading of it: that is
+  a broken button, not a slow server. Exit stays awaited because nothing waits
+  on it and a launcher's chain needs each app's exit to land before the next
+  app's entry. The rule is in [CLAUDE.md](CLAUDE.md), including why a spawned
+  hook is held in a set.
+
+  `enter_mode`, `readout` and `standby` are refused as hooks: they change what
+  the loop does next rather than the world outside it, and `enter_mode` on
+  entry is a recursion ARCHITECTURE's "bounded by construction" rule exists to
+  forbid. A hook on an `actions` mode parses but warns — such a mode is never
+  entered or left. **`fire_hook` is the fourth action dispatch site**, so it
+  resolves named actions, and CLAUDE.md's invariant now says four and names it.
+
+- ~~**The web UI cannot simulate a four- or five-tap**~~ (Smaller, worth
+  doing) — fixed 2026-08-22, and **not by adding two buttons**. The Press row
+  was hard-coded markup, which is why it never noticed that four- and five-tap
+  shipped as a data change; it is now generated from `GESTURES`, so the next
+  gesture costs nothing here. The same pass found a second private copy of the
+  table behind the "Last: …" status line, which had been rendering a real
+  `tap_4` as its raw key.
+
+  The drift guard is the part worth keeping: `test_webui.py` asserts index.html
+  names **no** gesture in markup at all, so reverting to hand-written buttons
+  fails. Together with the existing `GESTURES`-to-`TriggerType` pin, that means
+  the row covers every gesture the device can send, by construction.
 
 - ~~**36. One colour primitive — curves, effects per stop, and one editor**~~ —
   shipped 2026-08-21, its owed tests closed 2026-08-22. Four parts: (a)

@@ -567,3 +567,40 @@ def test_the_duration_widget_floors_where_the_descriptor_says():
         f"the duration widget floors at a literal ({literal.group(0)!r}) instead "
         "of at spec.min - a field declaring min: 0 cannot then hold zero"
     )
+
+
+# --- the lifecycle hooks (TODO 31) -----------------------------------------
+# `on_enter`/`on_exit` are a mode-level pair rather than a template field, so
+# they are declared once on each side: MODE_HOOKS in config.py and in
+# schema.js. The allow-list beside them is the interesting mirror - an action
+# the editor offers on a hook and the parser refuses is a binding lost on Save,
+# which is the asymmetric failure the action-list tests above are about.
+
+
+def _js_hook_actions() -> list[str]:
+    match = re.search(r"export const HOOK_ACTIONS = \[(.*?)\];", SCHEMA_JS, re.S)
+    assert match, "HOOK_ACTIONS is not a flat array literal any more"
+    return re.findall(r"'(\w+)'", match.group(1))
+
+
+def _wire_kind(cls: type) -> str:
+    """`LogAction` -> 'log', `TimerToggleAction` -> 'timer_toggle' - the name
+    `_parse_action` branches on and the editor writes into `action:`."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", cls.__name__.removesuffix("Action")).lower()
+
+
+def test_the_two_lifecycle_hooks_are_the_same_two_on_both_sides():
+    keys = re.findall(
+        r"key: '(\w+)'", _inside(SCHEMA_JS, "export const MODE_HOOKS = [")
+    )
+    assert tuple(keys) == cfg.MODE_HOOKS
+
+
+def test_which_actions_a_hook_may_run_matches_on_both_sides():
+    assert _js_hook_actions() == [_wire_kind(c) for c in cfg.HOOK_ACTIONS]
+
+
+def test_a_hooks_allow_list_only_names_actions_that_exist():
+    """A subset of the action table, never a place a new name is invented - the
+    three left out are excluded on purpose, not by omission."""
+    assert set(_js_hook_actions()) < _py_action_kinds()

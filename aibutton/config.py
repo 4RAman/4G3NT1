@@ -978,6 +978,31 @@ SYSTEM_LED_STATES: tuple[str, ...] = tuple(
 )
 
 
+# The two lifecycle hooks, in the order they fire. They live on `Mode` rather
+# than on each behaviour because there is exactly one pair of moments to hang
+# them on and the run loop already owns both (ARCHITECTURE.md, "Composition: an
+# app's edges"). One field serves every takeover, which is what "zero
+# per-template code" means: adding an app does not add a hook.
+MODE_HOOKS: tuple[str, ...] = ("on_enter", "on_exit")
+
+# What a hook may be: the fire-and-forget primitives `actions.execute()` runs.
+# The three that are missing are the three `main.handle()` keeps for itself -
+# `enter_mode`, `readout` and `standby` each change what the *loop* does next,
+# and a hook fires beside the loop rather than inside it. `enter_mode` is the
+# case that makes this worth enforcing rather than documenting: a mode whose
+# on_enter entered another mode would be a takeover starting a takeover from
+# inside the moment the first one begins, which is the one shape
+# `enter_takeover`'s replace-don't-nest rule exists to refuse.
+#
+# A bare name (`NamedAction`) is allowed and resolved at use time like every
+# other binding, so a pool entry that happens to be one of those three fails at
+# dispatch the way a dangling name does - clearly, and only for that hook.
+# Mirrored as HOOK_ACTIONS in schema.js; test_schema_mirror.py fails on drift.
+HOOK_ACTIONS: tuple[type, ...] = (
+    LogAction, TimerToggleAction, WebhookAction, OscAction, MidiAction,
+)
+
+
 @dataclass(frozen=True)
 class Mode:
     """A named personality: a behaviour template + the activation that turns
@@ -992,6 +1017,11 @@ class Mode:
     # empty map is exactly today's behaviour. Keys are validated against
     # MODE_LED_STATES for the template; values against the config's look pool.
     looks: dict[str, str] = field(default_factory=dict)
+    # Fired as this mode is entered and as it ends (see MODE_HOOKS above).
+    # None means what it has always meant: nothing happens, and nothing costs
+    # anything - a mode with no hooks is one `getattr` per session.
+    on_enter: Action | None = None
+    on_exit: Action | None = None
 
     @property
     def template(self) -> str:
@@ -1585,6 +1615,49 @@ def _parse_mode_looks(
         if (complaint := _drive_warning(known[look], f"{where}.looks[{state!r}]", template)):
             log.warning("%s", complaint)
         chosen[state] = look
+    return chosen
+
+
+def _parse_hooks(
+    raw, where: str, template: str, actions: set[str] | None,
+) -> dict[str, Action]:
+    """One mode's `on_enter` / `on_exit` actions, dropping anything unusable.
+
+    Never fatal, for the reason `_parse_mode_looks` gives just above: a hook is
+    something the mode does *around* itself, and losing a whole Pomodoro
+    because its exit webhook has no URL would be wildly disproportionate. A bad
+    hook is dropped with a warning and the mode runs without it.
+
+    `actions` is the pool's names, handed through so a hook naming something
+    absent is reported at load like every other reference - `_parse_action`
+    does that part.
+    """
+    chosen: dict[str, Action] = {}
+    for key in MODE_HOOKS:
+        if raw.get(key) is None:
+            continue
+        action = _parse_action(raw[key], f"{where}.{key}", actions)
+        if action is None:
+            continue  # _parse_action has already said why
+        if not isinstance(action, (*HOOK_ACTIONS, NamedAction)):
+            log.error(
+                "config: %s.%s is a %r action, which a hook cannot run - it "
+                "changes what the mode loop does next rather than the world "
+                "outside it; ignored",
+                where, key, raw[key].get("action") if isinstance(raw[key], dict) else raw[key],
+            )
+            continue
+        if template == "actions":
+            # Kept rather than dropped: it round-trips, and the fix is to
+            # change the template rather than to lose what was written. But an
+            # everyday mode is never entered and never left, so nothing will
+            # ever fire this - and a hook that silently does nothing is exactly
+            # what a load-time warning is for.
+            log.warning(
+                "config: %s.%s is on an everyday (actions) mode, which is "
+                "never entered or left - the hook will never fire", where, key,
+            )
+        chosen[key] = action
     return chosen
 
 
@@ -2654,6 +2727,7 @@ def _parse_mode(
         behavior=behavior,
         activation=activation,
         looks=_parse_mode_looks(raw, where, template, looks or {}),
+        **_parse_hooks(raw, where, template, actions),
     )
 
 
@@ -2966,8 +3040,8 @@ def resolve_action(config: AppConfig, action: Action | None) -> Action | None:
     """The action to actually run: `action` itself, or whatever it names.
 
     The single place a `NamedAction` becomes a real one, which is why it lives
-    here rather than inlined at the three dispatch sites that need it
-    (main.py's ambient `handle`, `run_control` and `run_signal`). A name with
+    here rather than inlined at the four dispatch sites that need it (main.py's
+    ambient `handle`, `run_control`, `run_signal` and `fire_hook`). A name with
     nothing behind it returns None and the caller fails clearly - the same
     contract `EnterModeAction`'s target has had since it was written.
 
@@ -3225,6 +3299,12 @@ def _mode_to_dict(mode: Mode) -> dict:
     }
     if mode.looks:  # omitted when empty, so a mode that uses the palette
         entry["looks"] = dict(mode.looks)  # round-trips as the plain object it was
+    # Same rule, same reason: a mode with no hooks writes no hook keys, so every
+    # config written before they existed round-trips byte for byte.
+    for hook in MODE_HOOKS:
+        action = getattr(mode, hook)
+        if action is not None:
+            entry[hook] = _action_to_dict(action)
     if isinstance(mode.behavior, ActionsBehavior):
         if mode.behavior.unless_logged_today is not None:
             entry["unless_logged_today"] = mode.behavior.unless_logged_today

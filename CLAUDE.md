@@ -229,6 +229,15 @@ Three consequences for code written today:
 - **Feedback is fire-and-forget.** `set_led` and friends are synchronous and
   must never block; `BLEDevice` queues and drops rather than waiting. The
   mode machine cannot afford to await a radio.
+  **A mode's `on_enter` hook obeys the same law and its `on_exit` does not**,
+  and the asymmetry is the whole point: entry is a thing you are waiting for,
+  so `spawn_hook` schedules it and lets the app open now — a webhook timeout
+  between the press and the app is a broken button, not a slow server. Exit is
+  awaited because nothing is waiting on it and a launcher's chain needs each
+  app's exit to land before the next app's entry. A spawned hook is **held in
+  a set**: asyncio keeps only a weak reference, so a task nobody holds can be
+  collected mid-flight and simply not happen — the same trap as the ctypes
+  callback below, a different library.
 - **The host owns state; the device renders it.** The firmware's palette and
   animations are a *fallback* for running with no host attached. Anything
   persistent belongs in `config.json`.
@@ -342,11 +351,11 @@ Three consequences for code written today:
 - **A gesture holds an action or names one, and the name is resolved at use
   time.** The pool is `AppConfig.actions`; a binding that is a **bare string**
   is a reference into it (`NamedAction`). One resolver,
-  `config.resolve_action`, called at each of the three places an action is
-  dispatched (`main.handle`, `run_control`, `run_signal`) — a fourth dispatch
-  site calls it too, or that surface silently cannot use the pool. Naming is
-  optional and inline actions are untouched, because most actions are used
-  once. **Deleting a pool entry leaves the references dangling on purpose**:
+  `config.resolve_action`, called at each of the four places an action is
+  dispatched (`main.handle`, `run_control`, `run_signal`, and `fire_hook` for
+  a mode's `on_enter`/`on_exit`) — a fifth dispatch site calls it too, or that
+  surface silently cannot use the pool. Naming is optional and inline actions
+  are untouched, because most actions are used once. **Deleting a pool entry leaves the references dangling on purpose**:
   the parser warns, the editor shows "(missing)", and the runtime fails
   clearly, all of which beat quietly repointing several gestures at something
   nobody chose. Renaming in the editor rewrites references; a hand-edited file

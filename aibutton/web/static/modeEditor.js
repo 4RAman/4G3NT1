@@ -13,7 +13,7 @@
 
 import { el, clear } from './dom.js';
 import {
-  GESTURES, DAYS, ACTIONS, ACTION_BY_TYPE,
+  GESTURES, MODE_HOOKS, DAYS, ACTIONS, ACTION_BY_TYPE,
   TEMPLATES, TEMPLATE_BY_TYPE,
   ACTIVATIONS, ACTIVATION_BY_TYPE, describeActivation,
   describeExit, findEntryPoints,
@@ -92,7 +92,7 @@ export class ModeEditor {
     // light long enough to have an appearance of its own.
     this.bodyEl.append(
       this._header(), this.howtoEl, this._looksPicker(),
-      this._templatePicker(), this._activationPicker(),
+      this._templatePicker(), this._activationPicker(), this._hooks(),
     );
     this.refreshExplainers();
     return this.bodyEl;
@@ -260,6 +260,33 @@ export class ModeEditor {
   }
 
   /**
+   * The mode's lifecycle hooks - one action as the session starts, one as it
+   * ends. Rendered by `_gesture`, because a hook *is* a binding and only what
+   * triggers it differs, which is also why adding these costs no new widget.
+   *
+   * Takeover-only: an everyday mode is never entered or left, so a hook on one
+   * could never fire - the Python parser says exactly that as a warning, and
+   * this is the same fact one step earlier.
+   */
+  _hooks() {
+    const descriptor = TEMPLATE_BY_TYPE[this.mode.template];
+    if (!descriptor || descriptor.nature !== 'takeover') {
+      // Unmarked, not merely hidden: help.js unhides every
+      // [data-tier="tinker"] node when Tinker goes on, so a marked empty row
+      // would appear the moment it was switched on.
+      return el('div', { hidden: true });
+    }
+    // `gestures` for the layout, because that is literally what this row
+    // holds - a stack of gesture-rows - and inventing a second class that
+    // copied its four properties would be a rule waiting to drift.
+    const wrap = el('div', { className: 'gestures hooks-row', 'data-tier': 'tinker' }, [
+      el('span', { className: 'fld-label', textContent: 'Around the session' }),
+    ]);
+    for (const hook of MODE_HOOKS) wrap.append(this._gesture(hook));
+    return wrap;
+  }
+
+  /**
    * Rewrite the takeover mode's "how do I get in / how do I get out" lines.
    * Called on every edit - including edits to *other* modes, since what starts
    * this one lives in their gestures, not in this card.
@@ -397,6 +424,14 @@ export class ModeEditor {
       // parser would warn that the mode does not own that state.
       'looks']) {
       delete this.mode[key];
+    }
+    // Hooks are the mode's own and survive a swap between takeovers - what
+    // they do does not depend on the template. An everyday mode is never
+    // entered or left, though, so one moved onto that template could only be
+    // dead weight the parser warns about; drop it where it stops meaning
+    // anything, rather than keeping it somewhere it can never be seen.
+    if (descriptor.nature !== 'takeover') {
+      for (const hook of MODE_HOOKS) delete this.mode[hook.key];
     }
     this.mode.template = type;
     Object.assign(this.mode, descriptor.defaults());
@@ -585,9 +620,16 @@ export class ModeEditor {
     // the parser's kind branches. The leading underscores keep it out of the
     // namespace an action type could ever occupy.
     const NAMED = '__named__';
+    // A binding may narrow what it will accept (MODE_HOOKS does; a gesture
+    // does not). Offering an action the parser will drop is the failure this
+    // list exists to prevent, and filtering here keeps it one rule rather than
+    // a second sub-editor.
+    const offered = gesture.actions
+      ? ACTIONS.filter((a) => gesture.actions.includes(a.type))
+      : ACTIONS;
     const select = el('select', { className: 'inp' }, [
       el('option', { value: '', textContent: '- do nothing -' }),
-      ...ACTIONS.map((a) => el('option', { value: a.type, textContent: a.label })),
+      ...offered.map((a) => el('option', { value: a.type, textContent: a.label })),
       el('option', { value: NAMED, textContent: 'Use a named action' }),
     ]);
     // A string binding is a pool reference (config.py's NamedAction). Reading
@@ -614,7 +656,11 @@ export class ModeEditor {
         fieldValidators.push(picker.validate);
         return;
       }
-      const descriptor = action && ACTION_BY_TYPE[action.action];
+      // Looked up in `offered` rather than in the whole table, so an action
+      // outside this binding's allow-list reads exactly like an unknown one:
+      // the select above already shows "- do nothing -" for it, and fields
+      // underneath a control that disowns them would be worse than none.
+      const descriptor = action && offered.find((a) => a.type === action.action);
       if (!descriptor) return;
       for (const spec of descriptor.fields) {
         // `rebuild` lets a widget that writes *sibling* keys (the integration

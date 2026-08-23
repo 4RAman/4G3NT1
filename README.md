@@ -342,8 +342,9 @@ in JavaScript that nothing tests.
 With `MockDevice` behind the seam, the browser *is* the button — you drive
 everything from the page:
 
-- **Simulate buttons** fire short press, long press, double tap and
-  triple tap through the real rules → actions → status pipeline.
+- **Simulate buttons** fire every gesture the button can send — through the
+  real rules → actions → status pipeline. The row is generated from the
+  gesture table, so it covers whatever a config can bind.
 - **Virtual device panel** mirrors the LED (same animations: blue
   breathe, white pulse, …) and plays the device's actual feedback
   tones in the browser.

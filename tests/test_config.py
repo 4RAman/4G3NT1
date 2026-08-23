@@ -19,6 +19,7 @@ from aibutton.config import (
     ManualActivation,
     MetronomeBehavior,
     Mode,
+    NamedAction,
     PomodoroBehavior,
     ReadoutAction,
     ScheduleActivation,
@@ -1204,3 +1205,115 @@ def test_a_readout_action_round_trips_through_the_editor():
     once = parse_config(raw)
     twice = parse_config(as_dict(once))
     assert as_dict(once)["modes"] == as_dict(twice)["modes"]
+
+
+# --- lifecycle hooks (TODO 31) ---------------------------------------------
+# Two optional actions on the *mode*, not on each behaviour, so every takeover
+# gets them for nothing. What is worth testing here is the fail-soft half: a
+# hook is something a mode does around itself, so a broken one must cost you
+# the hook and never the app.
+
+
+def _takeover_with(**hooks) -> dict:
+    return {"modes": [dict({
+        "name": "Focus", "template": "stopwatch",
+        "activation": {"type": "manual"}, "log_as": "focus",
+    }, **hooks)]}
+
+
+def test_a_mode_can_carry_an_action_on_each_edge():
+    cfg = parse_config(_takeover_with(
+        on_enter={"action": "webhook", "url": "https://example.test/start"},
+        on_exit={"action": "log", "event": "focus_done"},
+    ))
+    mode = cfg.modes[0]
+    assert mode.on_enter == WebhookAction(url="https://example.test/start")
+    assert mode.on_exit == LogAction(event="focus_done")
+
+
+def test_a_mode_with_no_hooks_has_none_and_writes_none():
+    """The default has to be indistinguishable from before hooks existed, or
+    every config ever written stops round-tripping byte for byte."""
+    cfg = parse_config(_takeover_with())
+    assert (cfg.modes[0].on_enter, cfg.modes[0].on_exit) == (None, None)
+    written = as_dict(cfg)["modes"][0]
+    assert "on_enter" not in written and "on_exit" not in written
+
+
+def test_a_hook_may_name_a_pooled_action():
+    """A hook is the fourth place an action is dispatched, so it has to be able
+    to hold a name like the other three - resolved at use time, never here."""
+    cfg = parse_config({
+        "actions": {"desk-lamp": {"action": "osc", "address": "/lamp", "port": 9000}},
+        **_takeover_with(on_enter="desk-lamp"),
+    })
+    assert cfg.modes[0].on_enter == NamedAction(name="desk-lamp")
+
+
+def test_a_hook_naming_nothing_is_warned_about_but_kept():
+    """Same rule a gesture's dangling name follows: repointing it at something
+    nobody chose would be worse than leaving it visibly broken."""
+    cfg, warnings = parse_with_warnings(_takeover_with(on_exit="gone"))
+    assert cfg.modes[0].on_exit == NamedAction(name="gone")
+    assert any("gone" in w for w in warnings)
+
+
+def test_a_broken_hook_is_dropped_and_the_mode_survives():
+    """The whole fail-soft claim in one case: the webhook has no URL, so there
+    is nothing to fire - and losing a stopwatch over it would be absurd."""
+    cfg, warnings = parse_with_warnings(_takeover_with(
+        on_enter={"action": "webhook"},
+        on_exit={"action": "log", "event": "focus_done"},
+    ))
+    mode = cfg.modes[0]
+    assert mode.name == "Focus"
+    assert mode.behavior == StopwatchBehavior(log_as="focus", ladder=mode.behavior.ladder)
+    assert mode.on_enter is None            # dropped
+    assert mode.on_exit == LogAction(event="focus_done")  # the other one is untouched
+    assert any("on_enter" in w and "not a valid action" in w for w in warnings)
+
+
+@pytest.mark.parametrize("action", [
+    {"action": "enter_mode", "target": "Water"},
+    {"action": "readout", "event": "coffee"},
+    {"action": "standby"},
+])
+def test_the_three_loop_actions_are_refused_as_hooks(action):
+    """These change what the run *loop* does next rather than the world outside
+    it, and a hook fires beside the loop. An `enter_mode` hook is the one that
+    would actually break something - a takeover starting a takeover from inside
+    the moment the first one begins."""
+    cfg, warnings = parse_with_warnings(_takeover_with(on_enter=action))
+    assert cfg.modes[0].on_enter is None
+    assert any("on_enter" in w for w in warnings)
+
+
+def test_a_hook_on_an_everyday_mode_is_kept_and_complained_about():
+    """An ambient mode is never entered or left, so nothing will ever fire
+    this. Kept rather than deleted - the fix is to change the template, not to
+    lose what was written - but a hook that silently does nothing is exactly
+    what a load-time warning is for."""
+    cfg, warnings = parse_with_warnings({"modes": [{
+        "name": "Desk", "template": "actions", "activation": {"type": "always"},
+        "short_press": {"action": "log", "event": "ping"},
+        "on_enter": {"action": "log", "event": "never"},
+    }]})
+    desk = next(m for m in cfg.modes if m.name == "Desk")
+    assert desk.on_enter == LogAction(event="never")
+    assert any("never fire" in w for w in warnings)
+
+
+def test_hooks_round_trip_through_the_editor():
+    raw = {
+        "actions": {"desk-lamp": {"action": "log", "event": "lamp"}},
+        **_takeover_with(
+            on_enter={"action": "midi", "port": "Button", "channel": 1,
+                      "kind": "note_on", "number": 60, "value": 127},
+            on_exit="desk-lamp",
+        ),
+    }
+    once = parse_config(raw)
+    twice = parse_config(as_dict(once))
+    assert as_dict(once)["modes"] == as_dict(twice)["modes"]
+    # And a named hook stays the bare string it was written as.
+    assert as_dict(once)["modes"][0]["on_exit"] == "desk-lamp"

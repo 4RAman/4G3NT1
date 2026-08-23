@@ -428,12 +428,15 @@
 
       <div class="side-block">
         <h2>Press</h2>
-        <div class="row">
-          <button data-trigger="short_press">Short press</button>
-          <button data-trigger="long_press">Long press</button>
-          <button data-trigger="double_tap">Double tap</button>
-          <button data-trigger="triple_tap">Triple tap</button>
-        </div>
+        <!-- Filled from schema.js's GESTURES, not written out here: this row
+             was hand-written and sat four buttons long for three sprints after
+             four- and five-tap shipped as a data change, so a config could bind
+             a gesture the browser had no way to send. The next gesture costs
+             nothing here. -->
+        <div class="row" id="press-row"></div>
+        <p class="hint" data-help>Sends the gesture straight to the service. A
+        simulated press arrives instantly - a real one waits out the multi-tap
+        window first, which is what a mode measuring your timing corrects for.</p>
       </div>
 
       <!-- Not gated on mock mode: these are the tones the *buzzer* plays, and
@@ -530,6 +533,7 @@
 <script type="module">
 import { paint } from '/static/ledPreview.js';
 import { readFlag, readNumber, writeFlag, writeNumber } from '/static/prefs.js';
+import { GESTURES } from '/static/schema.js';
 
 const $ = s => document.querySelector(s);
 let soundSeq = null;
@@ -633,10 +637,12 @@ function fmtValue(v) {
   return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
 }
 
-const GESTURES = {
-  short_press: 'short press', long_press: 'long press',
-  double_tap: 'double tap', triple_tap: 'triple tap',
-};
+// The status line's names come from the same declared list the Press row is
+// built from, so a new gesture reads as words here too instead of falling
+// through to its raw key. Lowercased because it lands mid-sentence:
+// "Last: double tap → Focus".
+const GESTURE_NAMES = Object.fromEntries(
+  GESTURES.map((g) => [g.key, g.label.toLowerCase()]));
 
 async function refreshStatus() {
   try {
@@ -665,7 +671,7 @@ async function refreshStatus() {
     $('#last').textContent = (d.last_trigger || d.last_mode || d.last_message)
       ? 'Last: ' +
         (d.last_trigger
-          ? (GESTURES[d.last_trigger] || d.last_trigger) + (d.last_mode ? ` → ${d.last_mode}` : '')
+          ? (GESTURE_NAMES[d.last_trigger] || d.last_trigger) + (d.last_mode ? ` → ${d.last_mode}` : '')
           : (d.last_mode || '')) +
         (d.last_message ? ` - ${d.last_ok ? '' : '⚠️ '}${d.last_message}` : '')
       : '';
@@ -807,6 +813,17 @@ $('#clock-clear').addEventListener('click', async () => {
   }); refreshStatus(); }
   catch (e) { console.warn(e); }
 });
+
+// One button per declared gesture, then wired below with everything else
+// carrying [data-trigger] - the key is what /api/trigger/{trigger} takes, so
+// the wire name and the label both come from the one table.
+for (const gesture of GESTURES) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.dataset.trigger = gesture.key;
+  button.textContent = gesture.label;
+  $('#press-row').appendChild(button);
+}
 
 document.querySelectorAll('[data-trigger]').forEach(btn =>
   btn.addEventListener('click', async () => {

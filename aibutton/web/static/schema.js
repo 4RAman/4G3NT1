@@ -32,6 +32,34 @@ export const GESTURES = [
       + 'too, same wait.' },
 ];
 
+// Which actions a lifecycle hook may run - the fire-and-forget primitives.
+// Mirrors HOOK_ACTIONS in config.py, which explains why the other three are
+// missing: enter_mode, readout and standby each change what the mode *loop*
+// does next, and a hook fires beside the loop rather than inside it.
+// test_schema_mirror.py fails on drift.
+export const HOOK_ACTIONS = ['log', 'timer_toggle', 'webhook', 'osc', 'midi'];
+
+// The two lifecycle hooks (config.py's MODE_HOOKS). Shaped exactly like a
+// GESTURES entry, and rendered by the same sub-editor, because a hook *is* a
+// binding - only what triggers it differs. They live on the mode rather than
+// on a template, so one pair serves every takeover and adding an app adds no
+// hook of its own.
+//
+// Tinker-tier: a mode works with neither, and what they are for - telling
+// something else on the network that a session started or ended - is a fringe
+// edit rather than a first-use one.
+export const MODE_HOOKS = [
+  { key: 'on_enter', label: 'When it starts', tier: 'tinker', actions: HOOK_ACTIONS,
+    hint: 'Fired once as the app takes the button over, before it draws '
+      + 'anything - a webhook saying "focus started", a MIDI note arming a '
+      + 'DAW. It cannot stop the app starting: a failure is logged and the '
+      + 'app runs anyway.' },
+  { key: 'on_exit', label: 'When it ends', tier: 'tinker', actions: HOOK_ACTIONS,
+    hint: 'Fired once as the app hands the button back, after its own session '
+      + 'has been recorded - the other half of a status webhook. A failure is '
+      + 'logged and you still leave.' },
+];
+
 export const DAYS = [
   { key: 'mon', label: 'Mon' },
   { key: 'tue', label: 'Tue' },

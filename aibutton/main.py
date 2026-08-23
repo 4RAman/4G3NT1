@@ -838,6 +838,74 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             store.log_event(behavior.cleared_event, mode=mode_name)
         return ActionResult(True, f"Cleared: {label}")
 
+    async def fire_hook(mode, which: str) -> None:
+        """Run a mode's `on_enter` / `on_exit` action, if it has one.
+
+        **A hook can never stop a mode starting or ending.** Everything below
+        that can go wrong - a pool entry that is not there, a webhook that
+        404s, a MIDI port that has gone away, a bug in a primitive - ends as a
+        log line and nothing else. The alternative is an app you cannot leave
+        because a server across the room is down, which is the same bargain the
+        LED and the buzzer already make: the result is *forgotten*, not acted
+        on. `on_exit` is awaited: the mode is ending anyway, so nothing is
+        kept waiting by it, and a launcher's chain depends on each app's exit
+        landing before the next app's entry. `on_enter` is deliberately *not*
+        awaited - see `spawn_hook`.
+
+        Deliberately silent in `status` and on the light: on the way out the
+        app's own result is what the status line is reporting, and a THINKING
+        flash around something nobody pressed for would be the plumbing
+        showing through.
+        """
+        bound = getattr(mode, which)
+        if bound is None:
+            return  # the overwhelmingly common case, and it costs one getattr
+        # The fourth place an action is dispatched, so the fourth place a bare
+        # name has to be turned back into an action (CLAUDE.md). Without this a
+        # hook could not use the pool at all, and would fail silently rather
+        # than visibly - which is the whole reason the rule is written down.
+        action = resolve_action(cm.config, bound)
+        if action is None:
+            log.warning(
+                "mode %r %s: no action named %r", mode.name, which, bound.name
+            )
+            return
+        try:
+            result = await execute(
+                action, trigger=which, mode_name=mode.name, store=store
+            )
+        except Exception:  # a hook bug must never cost you the mode
+            log.exception("mode %r %s hook crashed", mode.name, which)
+            return
+        log.log(
+            logging.INFO if result.ok else logging.WARNING,
+            "mode %r %s: %s", mode.name, which, result.message,
+        )
+
+    _pending_hooks: set[asyncio.Task] = set()
+
+    def spawn_hook(mode, which: str) -> None:
+        """Fire an entry hook without waiting for it.
+
+        TODO 31 says a hook is fire-and-forget *like all feedback*, and in this
+        codebase that phrase is load-bearing: `set_led` and friends never wait
+        on the radio (CLAUDE.md). Awaiting `on_enter` would put up to
+        `actions.WEBHOOK_TIMEOUT_S` between your press and the app opening,
+        which is not a failure any bounded-cost argument makes acceptable - a
+        five-second pause before a Pomodoro starts reads as a broken button,
+        not as a slow server.
+
+        The set is not bookkeeping: `asyncio` holds only a weak reference to a
+        running task, so a hook nobody is holding can be collected mid-flight
+        and simply not happen. Same trap as the ctypes callback in midi_io.py,
+        different library.
+        """
+        if getattr(mode, which) is None:
+            return  # the common case, and it allocates nothing
+        task = asyncio.create_task(fire_hook(mode, which))
+        _pending_hooks.add(task)
+        task.add_done_callback(_pending_hooks.discard)
+
     async def fire_alarm(mode) -> None:
         """Run a scheduled mode - an alarm's ring or a reminder's flash - and
         surface its result, then drop back to the ambient layer (IDLE)."""
@@ -848,6 +916,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         log.info("scheduled mode %r firing", mode.name)
         entered_at = store.log_mode_enter(mode.name)
         active_mode = mode  # so ALERT wears this mode's look, if it has one
+        # The other place a mode is entered and left, and hooks fire from both.
+        # An alarm that reached you because the clock said so is the same
+        # session as one you started by hand, and the same mode firing its hook
+        # on one path and not the other would be indefensible.
+        spawn_hook(mode, "on_enter")
         try:
             if isinstance(mode.behavior, ReminderBehavior):
                 result = await run_reminder(mode.behavior, mode.name)
@@ -857,6 +930,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             log.exception("scheduled mode crashed")
             result = ActionResult(False, f"internal error: {exc}")
         store.log_mode_exit(mode.name, entered_at)
+        await fire_hook(mode, "on_exit")
         active_mode = None
         status.last_ok = result.ok
         status.last_message = result.message
@@ -2130,6 +2204,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             # wears this mode's look, and cleared after so the ambient layer's
             # IDLE below is the palette's again.
             active_mode = mode
+            # Before the loop starts, after the mode_enter row exists: a hook
+            # that posts "I am in focus mode" must not be able to arrive ahead
+            # of the row that says so.
+            spawn_hook(mode, "on_enter")
             chosen = None
             try:
                 if isinstance(mode.behavior, LauncherBehavior):
@@ -2163,6 +2241,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 result = ActionResult(False, f"internal error: {exc}")
                 chosen = None
             store.log_mode_exit(mode.name, entered_at)
+            # After the loop has ended and the session row is closed, and
+            # before the handoff below - so a launcher's chain fires each app's
+            # exit hook before the next app's enter hook, in the order they
+            # actually happened.
+            await fire_hook(mode, "on_exit")
             active_mode = None
             status.last_ok = result.ok
             status.last_message = result.message
