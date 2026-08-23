@@ -201,34 +201,6 @@ before the on-device runtime rather than after.
 involved, a countdown is visible on the LED, and leaving camera mode returns the
 button to the host without a power cycle.
 
-### 37. A `keys` action - the button types, clicks, and runs macros
-
-**Asked for 2026-08-23.** A new **action**, not a template: no protocol change,
-no reflash, and it works with the named-action pool for free.
-
-**Take no dependency.** This is `midi`'s worked example again (CLAUDE.md,
-Conventions): `user32.dll`'s `SendInput` through `ctypes` does keystrokes,
-modifiers and clicks, exactly as `winmm` did for MIDI. **Optional at import and
-out of `requirements.txt`**, so a machine that cannot use it loses the action
-and not the service - and a Linux host (**40**) degrades the same way `midi`
-already does.
-
-**Decide before code:**
-
-- **What a macro is.** A single chord (`ctrl+shift+p`) is obviously in scope. A
-  *sequence* with delays is **33** (`SequenceAction`) and should not be built
-  twice - if 33 lands first, `keys` is one of its steps.
-- **The bound is the parser's job.** Arbitrary key strings invite an action that
-  can type anything anywhere; the parser should accept a declared vocabulary
-  rather than passing text through, for the same reason `flash_safe` is
-  enforced rather than requested.
-- **Focus is not ours.** Keystrokes go wherever focus is. Say so in the editor
-  hint rather than pretending otherwise.
-
-**Definition of done.** A gesture presses a key combination and a mouse click on
-the host, expressed as data in `schema.js`, with the action absent rather than
-broken on a platform that cannot do it.
-
 ### 0c. Re-solder the button, and move its LED to 5 V while it is off
 
 **Do this before anything whose test is "look at the ring".**
@@ -791,6 +763,31 @@ unimplemented, so there is no progress value to ramp over yet (item **29**).
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**37. A `keys` action - the button types, clicks, and runs macros**~~ -
+  shipped 2026-08-23, the day it was triaged. A new action, not a template: no
+  protocol change, no reflash, and it joins the named-action pool and the
+  lifecycle hooks for free.
+
+  **No dependency**, which is the `midi` precedent applied a second time:
+  `user32.dll`'s `SendInput` through `ctypes` does chords and clicks, so
+  Windows costs nothing to support. **There is deliberately no Linux/macOS
+  backend** - uinput needs root or a udev rule and macOS needs an
+  Accessibility grant, and neither belonged in this change. The action is
+  absent rather than broken without one.
+
+  **The vocabulary is declared, not passed through** ([keys.py](aibutton/keys.py)):
+  modifiers, media keys, navigation, letters, digits, F1-F24. A name outside it
+  is a *config* error caught at load, because "type this string" is a much
+  larger promise than "press this chord" - one the parser could not bound and
+  the editor could not offer a picker for. Media keys are listed first and for
+  a reason: they are the only ones that work with no window focused.
+
+  **One chord, not a sequence.** A list with delays is **33**, and `keys`
+  becomes a step inside it rather than growing its own second implementation.
+
+  **Permanently host-local**, which matters for **40**: moved to a Pi it types
+  into the Pi. That is what synthesizing input means, not a bug to fix.
 
 - ~~**32. Session summaries**~~ - 2026-08-22, on 31's exit hook. Reporting:
   pomodoro, stopwatch, counter, reaction, hotcold; the other seven return

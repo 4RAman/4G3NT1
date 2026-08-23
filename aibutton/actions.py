@@ -36,9 +36,10 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import midi, midi_io, osc, summary
+from . import keys_io, midi, midi_io, osc, summary
 from .config import (
     Action,
+    KeysAction,
     LogAction,
     MidiAction,
     OscAction,
@@ -75,6 +76,24 @@ _ORDINAL_SUFFIXES = {1: "st", 2: "nd", 3: "rd"}
 def _ordinal(n: int) -> str:
     suffix = "th" if 11 <= n % 100 <= 13 else _ORDINAL_SUFFIXES.get(n % 10, "th")
     return f"{n}{suffix}"
+
+
+def _press_keys(action: KeysAction) -> ActionResult:
+    """Map a keystroke onto ok/not-ok. The OS work is in keys_io.py.
+
+    Two failures worth distinguishing: no backend is a platform fact the user
+    cannot fix here (they are not on Windows), while a refused SendInput is
+    almost always UIPI - an elevated window will not accept input from a
+    normal-integrity process, and it presents as a chord that works everywhere
+    except the one app you wanted it for.
+    """
+    try:
+        return ActionResult(True, f"pressed {keys_io.send(action.combo, action.click)}")
+    except keys_io.KeysUnavailable as exc:
+        return ActionResult(False, str(exc))
+    except Exception as exc:  # noqa: BLE001 - ctypes reaches a C layer; see _send_midi
+        log.exception("keys failed")
+        return ActionResult(False, f"keys failed: {exc}")
 
 
 def _send_midi(action: MidiAction) -> ActionResult:
@@ -177,6 +196,9 @@ async def execute(
 
     if isinstance(action, MidiAction):
         return _send_midi(action)
+
+    if isinstance(action, KeysAction):
+        return _press_keys(action)
 
     if isinstance(action, WebhookAction):
         payload = {

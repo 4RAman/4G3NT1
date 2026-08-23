@@ -37,7 +37,7 @@ export const GESTURES = [
 // missing: enter_mode, readout and standby each change what the mode *loop*
 // does next, and a hook fires beside the loop rather than inside it.
 // test_schema_mirror.py fails on drift.
-export const HOOK_ACTIONS = ['log', 'timer_toggle', 'webhook', 'osc', 'midi'];
+export const HOOK_ACTIONS = ['log', 'timer_toggle', 'webhook', 'osc', 'midi', 'keys'];
 
 // The two lifecycle hooks (config.py's MODE_HOOKS). Shaped exactly like a
 // GESTURES entry, and rendered by the same sub-editor, because a hook *is* a
@@ -505,6 +505,38 @@ export const ACTIONS = [
       if (a.kind === 'cc') return `MIDI CC ${a.number ?? '…'}=${a.value ?? '…'} ch${a.channel ?? '…'}`;
       const what = a.kind === 'note_off' ? 'note off' : 'note on';
       return `MIDI ${what} ${a.number ?? '…'} ch${a.channel ?? '…'}`;
+    },
+  },
+  {
+    type: 'keys',
+    label: 'Press keys / click',
+    fields: [
+      { key: 'combo', label: 'Key combination', kind: 'text',
+        placeholder: 'ctrl+shift+p',
+        hint: 'Modifiers then one key, joined by "+" - ctrl, shift, alt, win. '
+          + 'Media keys (playpause, nexttrack, volumeup, mute) are the ones '
+          + 'that work with no window focused; everything else goes to '
+          + 'whatever is in front. Leave blank to only click.' },
+      { key: 'click', label: 'Mouse click', kind: 'select', tier: 'tinker',
+        hint: 'Clicks wherever the pointer already is - the button cannot '
+          + 'move it. Blank for none.',
+        options: [
+          { value: '', label: 'None' },
+          { value: 'left', label: 'Left click' },
+          { value: 'right', label: 'Right click' },
+          { value: 'middle', label: 'Middle click' },
+          { value: 'double', label: 'Double click' },
+        ] },
+    ],
+    defaults: () => ({ action: 'keys', combo: '', click: '' }),
+    // Says where it lands, because that is the thing people get wrong: this
+    // types on the machine running the service, not the machine you are
+    // looking at, and those stop being the same one on a portable host.
+    describe: (a) => {
+      const bits = [];
+      if (a.combo) bits.push(a.combo);
+      if (a.click) bits.push(a.click === 'double' ? 'double click' : `${a.click} click`);
+      return bits.length ? `Press ${bits.join(' then ')}` : 'Press nothing yet';
     },
   },
   {

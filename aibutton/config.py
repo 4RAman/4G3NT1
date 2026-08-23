@@ -61,7 +61,7 @@ import os
 from dataclasses import dataclass, field, fields, replace
 from datetime import time
 
-from . import ladder, midi, ramp, scenes, sequencer
+from . import keys, ladder, midi, ramp, scenes, sequencer
 from .device import LED_STYLES, SAFE_MIN_PERIOD_S, STYLE_STROBES, LEDState, TriggerType
 from .scenes import SceneSettings
 
@@ -157,6 +157,32 @@ class MidiAction:
 
 
 @dataclass(frozen=True)
+class KeysAction:
+    """Press a key chord, and/or click, on the host running the service.
+
+    A sibling of `MidiAction` and `OscAction` - the third way the button
+    reaches other software - and the bluntest of the three: it drives whatever
+    already has focus rather than addressing an application by name.
+
+    **One chord, not a sequence** (TODO 37). A list of keystrokes with delays
+    is `SequenceAction` (TODO 33) and a `keys` step inside it, not a second
+    implementation here.
+
+    `combo` is spelled the way a menu spells it (`ctrl+shift+p`) and is
+    validated against `keys.KEYS` at parse time, so an unknown name is a config
+    error rather than a keystroke. `click` is one of `keys.CLICKS`. At least
+    one of the two is present - an action that does neither is a typo.
+
+    **Host-local, permanently.** This is one of the things that stays on
+    whatever machine runs the service (TODO 40): moved to a Pi it types into
+    the Pi. That is not a bug to fix; it is what synthesizing input means.
+    """
+
+    combo: str = ""
+    click: str = ""
+
+
+@dataclass(frozen=True)
 class EnterModeAction:
     """Switch into the named takeover mode, which is how a gesture starts one -
     so "entered by a gesture" needs no special activation type.
@@ -204,7 +230,7 @@ class NamedAction:
 
 Action = (
     LogAction | ReadoutAction | TimerToggleAction | WebhookAction | OscAction
-    | MidiAction | EnterModeAction | NamedAction | StandbyAction
+    | MidiAction | KeysAction | EnterModeAction | NamedAction | StandbyAction
 )
 
 
@@ -874,6 +900,7 @@ MODE_HOOKS: tuple[str, ...] = ("on_enter", "on_exit")
 # Mirrored as HOOK_ACTIONS in schema.js; test_schema_mirror.py fails on drift.
 HOOK_ACTIONS: tuple[type, ...] = (
     LogAction, TimerToggleAction, WebhookAction, OscAction, MidiAction,
+    KeysAction,
 )
 
 
@@ -1721,6 +1748,21 @@ def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | No
                 port=port, channel=channel, kind=midi_kind,
                 number=number, value=value,
             )
+    elif kind == "keys":
+        combo = raw.get("combo", "")
+        click = raw.get("click", "")
+        # The vocabulary is checked here rather than at send time for the
+        # reason the osc branch checks its address: the editor should be told
+        # about a key this build cannot press, and discovering it when someone
+        # presses the button is too late.
+        if (
+            isinstance(combo, str)
+            and isinstance(click, str)
+            and (combo or click)
+            and (not combo or keys.parse_combo(combo) is not None)
+            and (not click or click in keys.CLICKS)
+        ):
+            return KeysAction(combo=combo, click=click)
     elif kind == "enter_mode":
         # The target is validated as a non-empty string only; whether a
         # takeover mode by that name actually exists is left to the runtime
@@ -2842,6 +2884,8 @@ def _action_to_dict(action: Action) -> dict | str:
             "action": "midi", "port": action.port, "channel": action.channel,
             "kind": action.kind, "number": action.number, "value": action.value,
         }
+    if isinstance(action, KeysAction):
+        return {"action": "keys", "combo": action.combo, "click": action.click}
     if isinstance(action, EnterModeAction):
         return {"action": "enter_mode", "target": action.target}
     raise TypeError(f"unknown action type {type(action).__name__}")
