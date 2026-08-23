@@ -94,6 +94,141 @@ verification; **18** (Notion) is process and is parked.
 
 ## Sprint
 
+### 40. A portable host - the button away from the PC
+
+**Asked for 2026-08-23**, alongside 37-39. The goal in the user's words: use
+the button with an iPhone, away from the computer, with the GUI reachable and
+the button still functional. Portable batteries and a hotspot are available.
+
+**The iPhone cannot be the host, and that is structural.** iOS cannot run the
+service, and Safari has no Web Bluetooth - so **8(b) is out for iPhone
+specifically**, which is worth writing down because it is the obvious idea. A
+native iOS app speaking the existing GATT service is the Stage-4 answer
+(ROADMAP **D1**), not a near-term one.
+
+**So relocate the host rather than eliminate it.** A Raspberry Pi Zero 2 W (or
+any small Linux box) on a power bank, in the bag with the button:
+
+```
+button  <--BLE-->  Pi (the service, unchanged)  <--hotspot-->  iPhone (Safari)
+```
+
+**This needs no code.** The service is already headless by design - CLAUDE.md
+records that pystray and Pillow are the control panel's alone and "a headless
+host still installs four", and `bleak` speaks BlueZ on Linux. The GUI is the
+existing web UI at `http://<pi>:8080`.
+
+**Three things that are not free, and the third is a real bug:**
+
+- The `midi` action is Windows-only (`winmm`). It is optional at import, so the
+  service degrades rather than failing - already the designed behaviour.
+- A `keys` action (**37**) would be *host*-local: on the Pi it types into the
+  Pi. Macros and portability are different use cases and should not be sold as
+  one.
+- **The single-instance lock is per-machine.** `<database_path>.lock` is an OS
+  file lock, so a Pi and a PC cannot see each other's, and both will fight for
+  the one central the device allows - which presents as a connection that keeps
+  dropping, not as an error. **Fix this before recommending the topology to
+  anyone**, most likely by having the loser recognise it is not the connected
+  host rather than by inventing a distributed lock.
+
+**Definition of done.** The button runs a full day off a power bank with the
+service on the Pi, the web UI is usable from an iPhone over the hotspot, and
+two hosts contending for the device says so clearly instead of thrashing.
+
+**Not to be confused with 8.** Item 8 hosts the *dashboard* remotely and still
+needs a BLE process near the button; this item moves *that process*. 8(a)'s
+relay composes with this later if a permanent dashboard is wanted.
+
+### 39. iPhone Shortcuts, through the webhook action
+
+**Asked for 2026-08-23.** Almost certainly **zero Python**: `webhook` already
+posts arbitrary JSON, so this is a matter of picking the bridge and writing the
+recipe. Candidates, cheapest first:
+
+- **Pushcut** - purpose-built webhook-to-Shortcut. Paid, and the most direct.
+- **Home Assistant** - if one is already running, a webhook trigger drives a
+  Shortcut via HomeKit.
+- **Shortcuts' own "Bluetooth device connects" personal automation** - free and
+  native, but fires once per *connection* rather than per gesture, so it can
+  express "the button woke up" and nothing finer.
+
+**iOS specifics were not verified when this was written** (assistant knowledge
+cutoff). Confirm before building anything: whether a native webhook-to-Shortcut
+route exists now, and that there is still no way to bind a hardware key to a
+Shortcut globally - **because if there is, 38 subsumes this item.**
+
+**Definition of done.** A gesture runs a named Shortcut on the phone, written
+up in MANUAL.md as a recipe, with no new action and no new dependency. If it
+turns out a new action *is* needed, stop and re-scope - the value here was that
+it was free.
+
+### 38. BLE HID - a camera remote, and the first app that needs no host
+
+**Asked for 2026-08-23 as "iPhone selfie stick trigger, with countdown
+options".** A shutter remote is a BLE HID keyboard sending Volume Up; iOS
+Camera fires on that. So the ask is an **HID service alongside the existing
+custom one**, not a change to the existing one.
+
+**This clears the v1 freeze bar, and is the first thing to do so.** CLAUDE.md
+sets that bar at "a capability the device physically cannot express today", and
+talking to a phone that will never speak our GATT service is exactly that.
+Adding a service is additive, so **Add, don't repurpose** is satisfied.
+
+**The value is not selfies.** It would be the **first app that works with no
+host at all** - the firmware already renders animations unattended, so an
+on-device countdown is consistent with what is there. That makes this a
+rehearsal for Stage 4 rather than a toy, and it is the argument for doing it
+before the on-device runtime rather than after.
+
+**Decide before code:**
+
+- **The one-central conflict.** Paired to the phone as HID, the button is not
+  connected to the PC and none of the app machinery runs. So HID is a *mode*,
+  and how you enter and leave it - and how the button says which world it is in
+  - is the actual design question. A long press cannot mean "up one level" if
+  there is no host to go up to.
+- **Where the countdown runs.** On-device is the whole point; that means a
+  firmware app, which the project has never written. Keep it a pure step
+  function so it ports to the Stage-3 runtime.
+- **Pairing and bonding** are new surface: an HID device must bond, and the
+  phone remembers it. What happens when both a phone and a PC want it?
+- **MicroPython HID over GATT is non-trivial.** Spike it against `aioble`
+  before committing to a shape; if it proves impractical, say so here rather
+  than letting the item rot.
+
+**Definition of done.** The button takes a photo on an iPhone with no computer
+involved, a countdown is visible on the LED, and leaving camera mode returns the
+button to the host without a power cycle.
+
+### 37. A `keys` action - the button types, clicks, and runs macros
+
+**Asked for 2026-08-23.** A new **action**, not a template: no protocol change,
+no reflash, and it works with the named-action pool for free.
+
+**Take no dependency.** This is `midi`'s worked example again (CLAUDE.md,
+Conventions): `user32.dll`'s `SendInput` through `ctypes` does keystrokes,
+modifiers and clicks, exactly as `winmm` did for MIDI. **Optional at import and
+out of `requirements.txt`**, so a machine that cannot use it loses the action
+and not the service - and a Linux host (**40**) degrades the same way `midi`
+already does.
+
+**Decide before code:**
+
+- **What a macro is.** A single chord (`ctrl+shift+p`) is obviously in scope. A
+  *sequence* with delays is **33** (`SequenceAction`) and should not be built
+  twice - if 33 lands first, `keys` is one of its steps.
+- **The bound is the parser's job.** Arbitrary key strings invite an action that
+  can type anything anywhere; the parser should accept a declared vocabulary
+  rather than passing text through, for the same reason `flash_safe` is
+  enforced rather than requested.
+- **Focus is not ours.** Keystrokes go wherever focus is. Say so in the editor
+  hint rather than pretending otherwise.
+
+**Definition of done.** A gesture presses a key combination and a mouse click on
+the host, expressed as data in `schema.js`, with the action absent rather than
+broken on a platform that cannot do it.
+
 ### 0c. Re-solder the button, and move its LED to 5 V while it is off
 
 **Do this before anything whose test is "look at the ring".**
