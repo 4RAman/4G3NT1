@@ -164,6 +164,27 @@ def summary(game: Game) -> str:
     return f"hot/cold - {game.hits}/{game.played} on target{best}"
 
 
+def tally(game: Game) -> dict:
+    """The same session, written for a machine: what an `on_exit` hook carries
+    out ([summary.py](summary.py)).
+
+    Pure, and a plain function of the game, which is the point - a summary is
+    a snapshot of the app's variables at exit (ARCHITECTURE.md), so it is
+    something this module can hand over rather than something the driver has to
+    keep a running note of.
+
+    `best_pct` is 0 rather than absent when nothing was guessed. The key set is
+    the same on every exit deliberately: OSC arguments are positional, so a key
+    that only appears sometimes moves every argument after it, and `played` is
+    the number that says whether the other two mean anything.
+    """
+    return {
+        "played": game.played,
+        "hits": game.hits,
+        "best_pct": round((game.best or 0.0) * 100, 1),
+    }
+
+
 def step(
     game: Game, event: str, now: float, next_target: float = 0.0
 ) -> tuple[Game, tuple[Effect, ...]]:

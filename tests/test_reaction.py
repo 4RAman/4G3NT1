@@ -34,6 +34,7 @@ from aibutton.reaction import (
     Score,
     step,
     summary,
+    tally,
 )
 from aibutton.store import EventStore
 
@@ -278,3 +279,21 @@ async def test_long_press_leaves_the_game(tmp_path):
         assert device.led_state is LEDState.IDLE
     finally:
         await _stop(task)
+
+
+# --- what it reports on the way out (TODO 32) ------------------------------
+
+
+def test_the_session_reports_the_numbers_it_actually_holds():
+    played = game(played=2, best_ms=210.0, total_ms=500.0, false_starts=1)
+    assert tally(played) == {
+        "played": 2, "best_ms": 210.0, "average_ms": 250.0, "false_starts": 1,
+    }
+
+
+def test_a_game_with_no_times_reports_zeros_rather_than_gaps():
+    """Same rule as Hot/Cold's, and the guard on the average: dividing by a
+    `played` of zero would put `nan` in a webhook body, which is not JSON."""
+    empty = tally(game(false_starts=2))
+    assert set(empty) == set(tally(game(played=2, best_ms=210.0, total_ms=500.0)))
+    assert empty["average_ms"] == 0.0 and empty["false_starts"] == 2

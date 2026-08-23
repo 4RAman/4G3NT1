@@ -238,6 +238,18 @@ Three consequences for code written today:
   a set**: asyncio keeps only a weak reference, so a task nobody holds can be
   collected mid-flight and simply not happen — the same trap as the ctypes
   callback below, a different library.
+- **An app's result is data, and the contract is enforced rather than asked
+  for.** A takeover reports a flat dict of scalars on exit
+  ([summary.py](aibutton/summary.py)) and the `on_exit` hook carries it out -
+  merged flat into a webhook's payload, appended to an OSC message's arguments.
+  `summary.clean` is the single gate (flat, scalars, `MAX_KEYS`), for the
+  reason `flash_safe` is one: a rule each app is trusted to remember is a rule
+  that drifts. A key that breaks it is dropped with a warning and the hook
+  still fires. **An app reports the same keys on every exit, or none at all** -
+  one carrier is positional, so a key that appears only sometimes renumbers
+  every argument after it; report a zero, plus the count that says whether the
+  zero means anything. Nothing to report costs nothing: no key, no empty
+  object, no branch.
 - **The host owns state; the device renders it.** The firmware's palette and
   animations are a *fallback* for running with no host attached. Anything
   persistent belongs in `config.json`.

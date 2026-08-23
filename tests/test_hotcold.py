@@ -34,6 +34,7 @@ from aibutton.hotcold import (
     distance,
     phase_at,
     step,
+    tally,
 )
 
 
@@ -405,3 +406,19 @@ def test_a_smooth_wheel_still_behaves_exactly_as_it_did():
     score, reveal = effects
     assert score == Score(pytest.approx(1.0))
     assert reveal.hit
+
+
+# --- what it reports on the way out (TODO 32) ------------------------------
+
+
+def test_the_session_reports_the_numbers_it_actually_holds():
+    played = game(played=4, hits=3, best=0.87)
+    assert tally(played) == {"played": 4, "hits": 3, "best_pct": 87.0}
+
+
+def test_a_game_nobody_played_reports_zeros_rather_than_gaps():
+    """The key set is the same on every exit, because one of the carriers is
+    positional - a `best_pct` that appeared only after a guess would shift
+    every OSC argument after it. `played: 0` is what says the rest is empty."""
+    assert set(tally(game())) == set(tally(game(played=4, hits=3, best=0.87)))
+    assert tally(game())["best_pct"] == 0.0

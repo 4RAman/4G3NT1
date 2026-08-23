@@ -57,7 +57,9 @@ export const MODE_HOOKS = [
   { key: 'on_exit', label: 'When it ends', tier: 'tinker', actions: HOOK_ACTIONS,
     hint: 'Fired once as the app hands the button back, after its own session '
       + 'has been recorded - the other half of a status webhook. A failure is '
-      + 'logged and you still leave.' },
+      + 'logged and you still leave. Apps that count something send it along: '
+      + 'a webhook gets the numbers in its JSON, an OSC message gets them as '
+      + 'extra arguments after your own.' },
 ];
 
 export const DAYS = [

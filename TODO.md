@@ -389,20 +389,6 @@ time-of-day patterns — a dashboard over `EventStore`), (b) *device* telemetry
 (BLE reconnect frequency, gesture-to-feedback latency, dropped presses), or
 (c) *hosting* metrics once item 8 exists. **Ask which.**
 
-### 32. Session summaries — apps report structured results
-
-**Split out of 23; needs 31, which shipped 2026-08-22 — hooks are the carrier.** Each takeover
-reports a flat bounded dict of scalars on exit (`{"rounds": 8, "total_s":
-480}`); the exit hook merges it into a webhook payload and maps it to OSC
-arguments. Contents are each app's decision — the contract (flat, scalars
-only, bounded key count) is in ARCHITECTURE.md, and it is deliberately a
-snapshot a future manifest can declare as data. Start with pomodoro,
-stopwatch, counter, reaction and hotcold; the rest may honestly report
-nothing.
-
-**Definition of done.** An exit webhook carries the session's numbers; apps
-with nothing to say cost nothing; tests assert one real summary end to end.
-
 ### 33. `SequenceAction` — a flat list with delays
 
 **Split out of 30b (D9 decided — see ROADMAP 3d).** A flat list of actions
@@ -762,6 +748,31 @@ unimplemented, so there is no progress value to ramp over yet (item **29**).
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**32. Session summaries — apps report structured results**~~ — shipped
+  2026-08-22 on **31**'s exit hook. Five apps report: pomodoro
+  (`blocks`/`focused_s`), stopwatch (`elapsed_s`/`laps`), counter
+  (`count`/`added`), reaction (`played`/`best_ms`/`average_ms`/`false_starts`),
+  hotcold (`played`/`hits`/`best_pct`). The other seven return `None` and are
+  untouched — an app with nothing to say adds no key and no empty object, which
+  is asserted end to end rather than assumed.
+
+  **The contract is enforced, not requested.** [summary.py](aibutton/summary.py)
+  is pure — `clean` / `merge` / `as_args`, no clock, no store, no device — and
+  `clean` is called at exactly one place, inside `fire_hook`. *Flat* is enforced
+  by **dropping** a nested value rather than flattening it; non-finite floats go
+  too, because `nan` has no JSON spelling and would fail the whole body over one
+  key. Over eight keys it truncates. A violation costs the key and a log line,
+  never the hook — the app has already ended.
+
+  **The rule enforcement cannot check is in [CLAUDE.md](CLAUDE.md): an app
+  reports the same keys on every exit, or none at all.** OSC is positional, so a
+  key that only appears when the session went well renumbers every argument
+  after it; the games report zeros plus a `played` saying whether the zeros mean
+  anything, and the stopwatch's shutdown path now keeps the elapsed time it was
+  discarding. Summary values ride *after* the configured OSC arguments and are
+  sorted by key name, so a receiver can compute positions from the key list
+  rather than from the order our dict happened to be built in.
 
 - ~~**31. Lifecycle hooks — `on_enter` / `on_exit` on `Mode`**~~ — shipped
   2026-08-22. Two optional `Action`s on `Mode` rather than on each behaviour,

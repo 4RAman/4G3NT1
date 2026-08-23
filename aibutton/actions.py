@@ -31,12 +31,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
 
-from . import midi, midi_io, osc
+from . import midi, midi_io, osc, summary
 from .config import (
     Action,
     LogAction,
@@ -55,6 +56,12 @@ WEBHOOK_TIMEOUT_S = 5.0
 class ActionResult:
     ok: bool
     message: str  # human-readable; shown in the web UI / REST status
+    # What a takeover reports about the session it just ended - a flat dict of
+    # scalars, contents chosen per app ([summary.py](summary.py)). The same
+    # result as `message`, written for a machine instead of a person, and the
+    # thing an `on_exit` hook carries outward. None is what every action and
+    # most apps return: nothing to report, and nothing costs anything.
+    summary: Mapping[str, object] | None = None
 
 
 def _fmt_elapsed(seconds: float) -> str:
@@ -106,7 +113,19 @@ async def execute(
     mode_name: str,
     store,
     webhook_transport: httpx.AsyncBaseTransport | None = None,
+    session: Mapping[str, object] | None = None,
 ) -> ActionResult:
+    """Run one action.
+
+    `session` is the summary the app just ended reported, already through
+    [summary.py](summary.py)'s gate - so it is flat, scalar and bounded by the
+    time it arrives here, and this module never validates it again. Only the
+    two carriers that can express structured data read it: a webhook merges it
+    into the payload, an OSC message appends it to the arguments. The others
+    ignore it on purpose - a log row is one event name and a MIDI message is
+    three bytes, and stuffing numbers into either would be inventing an
+    encoding nobody asked for.
+    """
     if isinstance(action, LogAction):
         ts = store.log_event(action.event, mode=mode_name)
         message = f"Logged {action.event} at {ts.astimezone():%H:%M}"
@@ -132,7 +151,11 @@ async def execute(
         return ActionResult(True, message)
 
     if isinstance(action, OscAction):
-        payload = osc.message(action.address, action.args)
+        # The session's numbers ride *after* the configured arguments, so the
+        # indexes a receiver was already mapping do not move when a mode grows
+        # an exit hook. Their own order is by key name - summary.as_args.
+        args = (*action.args, *summary.as_args(session)) if session else action.args
+        payload = osc.message(action.address, args)
         try:
             # Resolved on the loop rather than inside sendto: a hostname would
             # otherwise cost a blocking DNS lookup in the middle of a press,
@@ -159,9 +182,17 @@ async def execute(
 
     if isinstance(action, WebhookAction):
         payload = {
-            "trigger": trigger,
-            "mode": mode_name,
-            "ts": datetime.now(timezone.utc).isoformat(),
+            # The session's numbers merge in flat, between the identity of the
+            # event and the user's own payload: summary.merge says why the
+            # first three win over an app and the last one wins over everything.
+            **summary.merge(
+                {
+                    "trigger": trigger,
+                    "mode": mode_name,
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                },
+                session or {},
+            ),
             **action.payload,  # user payload wins on key collisions
         }
         try:

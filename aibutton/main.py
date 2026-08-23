@@ -332,6 +332,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     from .rules import resolve
     from .scheduler import due_alarm
     from .store import EventStore
+    from .summary import clean as clean_summary
 
     cm = ConfigManager(args.config)
     # One process per button. BLE allows a single central, and two copies also
@@ -838,8 +839,15 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             store.log_event(behavior.cleared_event, mode=mode_name)
         return ActionResult(True, f"Cleared: {label}")
 
-    async def fire_hook(mode, which: str) -> None:
+    async def fire_hook(mode, which: str, session=None) -> None:
         """Run a mode's `on_enter` / `on_exit` action, if it has one.
+
+        `session` is what the app just reported about itself - a flat dict of
+        numbers, or None from every app that has nothing to say and from every
+        `on_enter` (there is no session to report as one begins). It is checked
+        against the contract *here*, at the one place a summary turns into
+        something that leaves the machine, rather than at each app's return
+        statement: one gate, for the reason the flash floor has one.
 
         **A hook can never stop a mode starting or ending.** Everything below
         that can go wrong - a pool entry that is not there, a webhook that
@@ -870,9 +878,17 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 "mode %r %s: no action named %r", mode.name, which, bound.name
             )
             return
+        # Cleaned after the early returns above, so an app that reports
+        # something into a mode with no hook - or with a dangling one - pays
+        # nothing for it. A rejected key is a log line and a missing number,
+        # never a failed hook: the app has already ended either way.
+        carried, complaints = clean_summary(session)
+        for complaint in complaints:
+            log.warning("mode %r %s summary: %s", mode.name, which, complaint)
         try:
             result = await execute(
-                action, trigger=which, mode_name=mode.name, store=store
+                action, trigger=which, mode_name=mode.name, store=store,
+                session=carried,
             )
         except Exception:  # a hook bug must never cost you the mode
             log.exception("mode %r %s hook crashed", mode.name, which)
@@ -930,7 +946,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             log.exception("scheduled mode crashed")
             result = ActionResult(False, f"internal error: {exc}")
         store.log_mode_exit(mode.name, entered_at)
-        await fire_hook(mode, "on_exit")
+        await fire_hook(mode, "on_exit", result.summary)
         active_mode = None
         status.last_ok = result.ok
         status.last_message = result.message
@@ -943,7 +959,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         exits (logs the elapsed time via toggle_timer, reusing the timer_toggle
         action's elapsed formatting). A None trigger (shutdown) stops the
         running timer so it isn't left open, then exits. The caller drops the
-        LED/status back to IDLE."""
+        LED/status back to IDLE.
+
+        Reports `elapsed_s` and `laps` on the way out (summary.py) - the two
+        numbers a stopwatch is, and both already here."""
         log_as = behavior.log_as
         store.toggle_timer(log_as, mode=mode_name)  # returns ("started", None)
         set_led(LEDState.TIMING)
@@ -951,6 +970,13 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         status.last_mode = mode_name
         status.last_message = f"{log_as} timer started"
         laps = 0
+
+        def tally(elapsed) -> dict:
+            """The same two keys on every exit, shutdown included - a summary
+            whose shape depends on how the session ended renumbers an OSC
+            receiver's arguments (summary.py)."""
+            return {"elapsed_s": round(elapsed or 0.0, 1), "laps": laps}
+
         # The open timer. Every normal exit clears this *before* closing the
         # timer, so the finally only fires on an abnormal (exception) exit -
         # closing a dangling timer without double-toggling a normal stop.
@@ -962,7 +988,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 await asyncio.sleep(_SUCCESS_DISPLAY_S)
                 running = False
                 _, elapsed = store.toggle_timer(log_as, mode=mode_name)
-                return ActionResult(True, f"{log_as} (demo: ran {_fmt_elapsed(elapsed or 0)})")
+                return ActionResult(
+                    True, f"{log_as} (demo: ran {_fmt_elapsed(elapsed or 0)})",
+                    tally(elapsed),
+                )
             # With a subdivision ladder on, the stopwatch grows a tick: the
             # light has to say what time it is, which means waking to change
             # it. Without one it still blocks indefinitely on the next press,
@@ -981,8 +1010,13 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                     continue  # a tick, not a press: repaint and keep waiting
                 if trigger is None:  # shutting down mid-run - stop the open timer
                     running = False
-                    store.toggle_timer(log_as, mode=mode_name)
-                    return ActionResult(True, f"{log_as} stopped (shutdown)")
+                    # The elapsed time was already coming back from here and
+                    # was being thrown away; a session cut short by a shutdown
+                    # is still a session, and reports the same two numbers.
+                    _, elapsed = store.toggle_timer(log_as, mode=mode_name)
+                    return ActionResult(
+                        True, f"{log_as} stopped (shutdown)", tally(elapsed)
+                    )
                 if trigger is TriggerType.LONG_PRESS:
                     running = False
                     _, elapsed = store.toggle_timer(log_as, mode=mode_name)
@@ -992,7 +1026,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                         message += f" ({_fmt_elapsed(total)} today)"
                     if laps:
                         message += f", {laps} lap(s)"
-                    return ActionResult(True, message)
+                    return ActionResult(True, message, tally(elapsed))
                 # short_press / double_tap -> a lap
                 store.log_event(f"{log_as}_lap", mode=mode_name)
                 laps += 1
@@ -1015,13 +1049,23 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         tally to keep in sync - counting from Home and then entering the
         Counter to continue agrees by construction, because they were already
         the same rows. No reset gesture exists here to reconsider: the only
-        bindings are short_press/double_tap (+1) and long_press (exit)."""
+        bindings are short_press/double_tap (+1) and long_press (exit).
+
+        Reports both numbers it holds (summary.py): `count`, the day's total,
+        and `added`, this session's share of it. They are different questions -
+        "how many today" and "how many just now" - and a receiver that only
+        ever got the first could not tell a busy session from an idle one."""
         event = behavior.event
         count = store.count_today(event)
+        opened_at = count  # what the day already held, so `added` can be told
         set_led(LEDState.COUNTING)
         set_status("COUNTING")
         status.last_mode = mode_name
         status.last_message = f"{event}: {count}"
+
+        def tally() -> dict:
+            return {"count": count, "added": count - opened_at}
+
         if args.demo:
             # --demo is unattended: log one increment so the path is exercised,
             # then exit with a summary instead of hanging the smoke test.
@@ -1030,13 +1074,15 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             play_sound(Sound.ACK)
             status.last_message = f"{event}: {count}"
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
-            return ActionResult(True, f"{event}: {count} this session (demo)")
+            return ActionResult(True, f"{event}: {count} this session (demo)", tally())
         while True:
             trigger = await _wait_for_trigger(device.events, stop)
             if trigger is None:  # shutting down
-                return ActionResult(True, f"{event}: {count} this session (shutdown)")
+                return ActionResult(
+                    True, f"{event}: {count} this session (shutdown)", tally()
+                )
             if trigger is TriggerType.LONG_PRESS:
-                return ActionResult(True, f"{event}: {count} this session")
+                return ActionResult(True, f"{event}: {count} this session", tally())
             # short_press / double_tap -> +1
             store.log_event(event, mode=mode_name)
             count += 1
@@ -1131,7 +1177,14 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
         def summary(suffix: str = "") -> ActionResult:
             text = f"{completed} block(s), {_fmt_elapsed(focused_s)} focused"
-            return ActionResult(True, f"{mode_name}: {text}{suffix}")
+            # Every exit already came through here, so the session's numbers
+            # ride out of one place rather than seven (summary.py). Rounded
+            # because focused_s is a sum of floats and nobody's exit hook wants
+            # 1500.0000000000002 seconds.
+            return ActionResult(
+                True, f"{mode_name}: {text}{suffix}",
+                {"blocks": completed, "focused_s": round(focused_s, 1)},
+            )
 
         status.last_mode = mode_name
         show()
@@ -1703,14 +1756,20 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         if args.demo:
             # --demo is unattended: nothing will ever be guessed.
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
-            return ActionResult(True, f"hot/cold (demo: {behavior.sweep_s:g}s wheel)")
+            return ActionResult(
+                True, f"hot/cold (demo: {behavior.sweep_s:g}s wheel)",
+                hotcold.tally(game),
+            )
 
         while True:
             trigger = await _wait_for_trigger(device.events, stop)
             if trigger is None or trigger is TriggerType.LONG_PRESS:
                 game, effects = hotcold.step(game, hotcold.LEAVE, loop.time())
                 message = render(effects, game) or hotcold.summary(game)
-                return ActionResult(True, message + ("" if trigger else " (shutdown)"))
+                return ActionResult(
+                    True, message + ("" if trigger else " (shutdown)"),
+                    hotcold.tally(game),
+                )
 
             # short press / double tap - the wheel stops here
             game, effects = hotcold.step(game, hotcold.GUESS, loop.time())
@@ -1725,16 +1784,22 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             while (left := until - loop.time()) > 0:
                 during = await _wait_for_trigger(device.events, stop, timeout=left)
                 if stop.is_set():
-                    return ActionResult(True, f"{hotcold.summary(game)} (shutdown)")
+                    return ActionResult(
+                        True, f"{hotcold.summary(game)} (shutdown)",
+                        hotcold.tally(game),
+                    )
                 if during is TriggerType.LONG_PRESS:
                     leaving = True
                     break
 
             if ended is not None:
-                return ActionResult(True, ended)
+                return ActionResult(True, ended, hotcold.tally(game))
             if leaving:
                 game, effects = hotcold.step(game, hotcold.LEAVE, loop.time())
-                return ActionResult(True, render(effects, game) or hotcold.summary(game))
+                return ActionResult(
+                    True, render(effects, game) or hotcold.summary(game),
+                    hotcold.tally(game),
+                )
 
             game, effects = hotcold.step(
                 game, hotcold.NEXT, loop.time(), random.random()
@@ -1822,15 +1887,22 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         if args.demo:
             # --demo is unattended: nobody is going to react to anything.
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
-            return ActionResult(True, "reaction (demo: no attempts)")
+            return ActionResult(
+                True, "reaction (demo: no attempts)", reaction.tally(game)
+            )
 
         while True:
             trigger = await _wait_for_trigger(device.events, stop, timeout=armed_for)
             if stop.is_set():
-                return ActionResult(True, f"{reaction.summary(game)} (shutdown)")
+                return ActionResult(
+                    True, f"{reaction.summary(game)} (shutdown)", reaction.tally(game)
+                )
             if trigger is None:
                 if armed_for is None:  # not a timeout - we are shutting down
-                    return ActionResult(True, f"{reaction.summary(game)} (shutdown)")
+                    return ActionResult(
+                        True, f"{reaction.summary(game)} (shutdown)",
+                        reaction.tally(game),
+                    )
                 # The wait elapsed with nothing pressed: light up, clock starts.
                 game, effects = reaction.step(game, reaction.GO, loop.time())
                 render(effects, game)
@@ -1838,7 +1910,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
             if trigger is TriggerType.LONG_PRESS:
                 game, effects = reaction.step(game, reaction.LEAVE, loop.time())
-                return ActionResult(True, render(effects, game) or reaction.summary(game))
+                return ActionResult(
+                    True, render(effects, game) or reaction.summary(game),
+                    reaction.tally(game),
+                )
 
             game, effects = reaction.step(game, reaction.PRESS, loop.time())
             ended = render(effects, game)
@@ -1851,16 +1926,22 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             while (left := until - loop.time()) > 0:
                 during = await _wait_for_trigger(device.events, stop, timeout=left)
                 if stop.is_set():
-                    return ActionResult(True, f"{reaction.summary(game)} (shutdown)")
+                    return ActionResult(
+                        True, f"{reaction.summary(game)} (shutdown)",
+                        reaction.tally(game),
+                    )
                 if during is TriggerType.LONG_PRESS:
                     leaving = True
                     break
 
             if ended is not None:
-                return ActionResult(True, ended)
+                return ActionResult(True, ended, reaction.tally(game))
             if leaving:
                 game, effects = reaction.step(game, reaction.LEAVE, loop.time())
-                return ActionResult(True, render(effects, game) or reaction.summary(game))
+                return ActionResult(
+                    True, render(effects, game) or reaction.summary(game),
+                    reaction.tally(game),
+                )
 
             game, effects = reaction.step(game, reaction.NEXT, loop.time(), delay())
             render(effects, game)
@@ -2244,8 +2325,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             # After the loop has ended and the session row is closed, and
             # before the handoff below - so a launcher's chain fires each app's
             # exit hook before the next app's enter hook, in the order they
-            # actually happened.
-            await fire_hook(mode, "on_exit")
+            # actually happened. The app's own numbers ride out with it - see
+            # summary.py; an app with nothing to report passes None and the
+            # hook is exactly what it was before summaries existed.
+            await fire_hook(mode, "on_exit", result.summary)
             active_mode = None
             status.last_ok = result.ok
             status.last_message = result.message

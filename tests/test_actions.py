@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -30,13 +31,14 @@ def _insert(store, kind, name, days_ago=0, duration_s=None):
     store._conn.commit()
 
 
-async def run(action, *, store=None, transport=None):
+async def run(action, *, store=None, transport=None, session=None):
     return await execute(
         action,
         trigger="short_press",
         mode_name="Test",
         store=store,
         webhook_transport=transport,
+        session=session,
     )
 
 
@@ -110,6 +112,52 @@ async def test_webhook_success_posts_context(store):
     body = seen["json"].decode()
     assert '"trigger": "short_press"' in body or '"trigger":"short_press"' in body
     assert "hi" in body
+
+
+async def _posted(store, action, **kwargs) -> dict:
+    """The JSON body one webhook action actually posts."""
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.read()))
+        return httpx.Response(200)
+
+    result = await run(
+        action, store=store, transport=httpx.MockTransport(handler), **kwargs
+    )
+    assert result.ok
+    return seen
+
+
+async def test_webhook_carries_the_sessions_numbers(store):
+    """TODO 32: an app's result is data, and the exit hook is what carries it
+    out. Flat, not nested - the receiving end of one of these is a filter in
+    n8n or a rule in IFTTT."""
+    body = await _posted(
+        store, WebhookAction(url="https://hook.example/x"),
+        session={"blocks": 4, "focused_s": 6000},
+    )
+    assert body["blocks"] == 4 and body["focused_s"] == 6000
+    assert body["trigger"] == "short_press"  # the context it always had
+
+
+async def test_an_app_that_reported_nothing_changes_the_payload_not_at_all(store):
+    """The cost of the feature for the apps that have nothing to say: none.
+    No key, no empty object, nothing to filter out at the far end."""
+    action = WebhookAction(url="https://hook.example/x", payload={"note": "hi"})
+    without = await _posted(store, action)
+    empty = await _posted(store, action, session={})
+    assert set(without) == set(empty) == {"trigger", "mode", "ts", "note"}
+
+
+async def test_the_users_own_payload_still_wins_over_the_session(store):
+    """The rule the webhook already had, unchanged by summaries arriving
+    between the context and it."""
+    body = await _posted(
+        store, WebhookAction(url="https://hook.example/x", payload={"blocks": "mine"}),
+        session={"blocks": 4},
+    )
+    assert body["blocks"] == "mine"
 
 
 async def test_webhook_http_error_status(store):

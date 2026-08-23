@@ -98,6 +98,26 @@ def summary(game: Game) -> str:
     return f"reaction - best {best} ms, average {average} ms{starts}"
 
 
+def tally(game: Game) -> dict:
+    """The same session as a flat bag of numbers, for an `on_exit` hook to
+    carry out ([summary.py](summary.py)). Shaped exactly like
+    [hotcold.py](hotcold.py)'s, and pure for the same reason.
+
+    Zeros rather than missing keys when nothing was timed - the key set has to
+    be the same on every exit because one of the carriers is positional - and
+    `played` is what says whether the times mean anything. `false_starts` is
+    reported even though it is not a time: it is the half of the session the
+    average deliberately leaves out, so a receiver that never saw it would
+    think a scrappy run was a clean one.
+    """
+    return {
+        "played": game.played,
+        "best_ms": round(game.best_ms or 0.0, 1),
+        "average_ms": round(game.total_ms / game.played, 1) if game.played else 0.0,
+        "false_starts": game.false_starts,
+    }
+
+
 def step(
     game: Game, event: str, now: float, next_delay: float = 0.0
 ) -> tuple[Game, tuple[Effect, ...]]:

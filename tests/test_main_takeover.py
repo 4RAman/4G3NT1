@@ -12,8 +12,10 @@ same queue directly) see them in order without races. The web UI is off
 import asyncio
 import json
 
+import httpx
 import pytest
 
+import aibutton.actions as actions
 import aibutton.main as main
 from aibutton.device import LEDState, MockDevice, TriggerType
 from aibutton.store import EventStore
@@ -633,7 +635,9 @@ async def test_counter_starts_from_the_stores_count_not_zero(tmp_path, monkeypat
 # zero per-template code means the same two lines serve every takeover.
 
 
-def _hooked(db_path, **hooks) -> dict:
+def _hooked(db_path, app=None, **hooks) -> dict:
+    """A config whose only takeover is `app` (a Counter unless something else
+    is named), reached by a long press and carrying `hooks`."""
     return {
         "sounds_enabled": False,
         "web_enabled": False,
@@ -648,7 +652,7 @@ def _hooked(db_path, **hooks) -> dict:
             dict({
                 "name": "Water", "template": "counter",
                 "activation": {"type": "manual"}, "event": "water",
-            }, **hooks),
+            } if app is None else app, **hooks),
         ],
     }
 
@@ -754,3 +758,75 @@ async def test_a_hook_naming_nothing_leaves_the_app_untouched(tmp_path, monkeypa
         ("mode_exit", "Water"),
         ("log", "bell"),
     ]
+
+
+# --- session summaries (TODO 32) -------------------------------------------
+# The hooks above carry an app's *result* outward, and a result is data rather
+# than a sentence (ARCHITECTURE.md): what a webhook receives has to be the
+# session's numbers, not a string it would have to parse back.
+
+
+async def _exit_payload(tmp_path, monkeypatch, config) -> dict:
+    """Drive a session whose exit hook is a webhook; return the JSON it posted.
+
+    `run()` never passes a transport - in production there is nothing to
+    inject - so the seam is `execute` itself, wrapped rather than replaced so
+    the real payload builder is what gets tested. Patched on the actions module
+    because main imports the name inside run(), which has not been called yet.
+    """
+    posted: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posted.update(json.loads(request.read()))
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    real = actions.execute
+
+    async def through_the_mock(action, **kwargs):
+        return await real(action, **{**kwargs, "webhook_transport": transport})
+
+    monkeypatch.setattr(actions, "execute", through_the_mock)
+    await _session(tmp_path, monkeypatch, config)
+    return posted
+
+
+WEBHOOK = {"action": "webhook", "url": "https://hook.example/done"}
+
+
+async def test_an_exit_webhook_carries_the_sessions_numbers(tmp_path, monkeypatch):
+    """The whole point of the item, end to end: enter a Counter, count once,
+    leave - and the webhook the mode's on_exit fires knows how many."""
+    posted = await _exit_payload(tmp_path, monkeypatch, _hooked(
+        tmp_path / "events.db", on_exit=WEBHOOK,
+    ))
+    assert posted["mode"] == "Water" and posted["trigger"] == "on_exit"
+    assert posted["count"] == 1  # the day's total, which this session is all of
+    assert posted["added"] == 1  # and its own share of it
+
+
+async def test_an_app_with_nothing_to_report_adds_nothing_to_the_payload(tmp_path, monkeypatch):
+    """The other half of the contract: most apps have no numbers, and they must
+    not pay for the ones that do - no key, no empty object, nothing for a
+    receiver to special-case. A Signal is one of them (its position dies with
+    the session, by design)."""
+    posted = await _exit_payload(tmp_path, monkeypatch, _hooked(
+        tmp_path / "events.db",
+        app={"name": "Water", "template": "signal", "activation": {"type": "manual"}},
+        on_exit=WEBHOOK,
+    ))
+    assert set(posted) == {"trigger", "mode", "ts"}
+
+
+
+async def test_a_stopwatchs_numbers_are_its_own_two(tmp_path, monkeypatch):
+    """A second app, to show the keys are the app's decision rather than a
+    system-wide shape: a Counter counts, a stopwatch times and laps."""
+    posted = await _exit_payload(tmp_path, monkeypatch, _hooked(
+        tmp_path / "events.db",
+        app={"name": "Water", "template": "stopwatch",
+             "activation": {"type": "manual"}, "log_as": "focus"},
+        on_exit=WEBHOOK,
+    ))
+    assert posted["laps"] == 1
+    assert isinstance(posted["elapsed_s"], float) and posted["elapsed_s"] >= 0.0

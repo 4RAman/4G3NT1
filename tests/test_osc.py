@@ -147,6 +147,40 @@ async def test_a_press_actually_puts_a_datagram_on_the_wire():
         transport.close()
 
 
+async def test_a_sessions_numbers_ride_after_the_configured_arguments():
+    """TODO 32: the other carrier. Positional, so two things are being
+    asserted - that the numbers arrive at all, and that they arrive *after*
+    the arguments the action already had, so a mode growing an exit hook does
+    not renumber what a receiver was already mapping. Their own order is by
+    key name (summary.as_args)."""
+    loop = asyncio.get_running_loop()
+    received: list[bytes] = []
+    ready = asyncio.Event()
+
+    class Receiver(asyncio.DatagramProtocol):
+        def datagram_received(self, data, _addr):
+            received.append(data)
+            ready.set()
+
+    transport, _protocol = await loop.create_datagram_endpoint(
+        Receiver, local_addr=("127.0.0.1", 0)
+    )
+    try:
+        port = transport.get_extra_info("sockname")[1]
+        result = await execute(
+            OscAction(host="127.0.0.1", port=port, address="/done", args=(1,)),
+            trigger="on_exit", mode_name="Focus", store=None,
+            session={"focused_s": 6000.0, "blocks": 4},
+        )
+        assert result.ok
+        await asyncio.wait_for(ready.wait(), timeout=2.0)
+        # 1 is the action's own argument; then blocks, then focused_s - by key
+        # name, not by the order the app happened to build the dict in.
+        assert received == [osc.message("/done", [1, 4, 6000.0])]
+    finally:
+        transport.close()
+
+
 async def test_an_unreachable_host_fails_the_press_without_raising():
     result = await execute(
         OscAction(host="no.such.host.invalid", port=9000, address="/go"),
