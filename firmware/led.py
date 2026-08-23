@@ -1,13 +1,11 @@
 # LED state animations, rendered on-device from a host-supplied palette.
 #
-# The wire carries a state, not frames: the host writes one LED_STATE byte
-# and the effect for that state runs here until the next write. What each
-# state *looks* like is the palette (style, colours, period), which the host
-# writes on connect and on every edit; DEFAULT_PALETTE below is only what an
-# ESP32 shows when no host has told it otherwise.
-#
-# set_state() cancels the running animation and starts the new one, then
-# returns immediately - a BLE write must never wait on a fade.
+# The wire carries a state, not frames: the host writes one LED_STATE byte and
+# the effect for that state runs here until the next write. What each state
+# *looks* like is the palette (style, colours, period), which the host writes on
+# connect and on every edit; DEFAULT_PALETTE below is only what an ESP32 shows
+# when no host has told it otherwise. set_state() cancels the running animation
+# and starts the new one, then returns - a BLE write must never wait on a fade.
 #
 # Hardware imports live inside the backend constructors, so this module is
 # importable (and its animation maths testable) on the host.
@@ -64,9 +62,10 @@ _GRB_ORDER = (1, 0, 2, 3)  # what MicroPython's neopixel driver defaults to
 
 
 def neopixel_order(name):
-    """'RGB'/'GRB'/'BGR'... -> the driver's ORDER tuple (where each of R, G, B
-    lands in the wire buffer). An unrecognised name keeps the driver default
-    rather than scrambling colours in a new way."""
+    """'RGB'/'GRB'/'BGR'... -> the driver's ORDER tuple, where ORDER[i] is where
+    component i lands in the wire buffer. Derived from the name so any
+    permutation works without a lookup table; an unrecognised name keeps the
+    driver default rather than scrambling colours in a new way."""
     name = str(name).upper()
     if sorted(name) != ["B", "G", "R"]:
         print("led: NEOPIXEL_ORDER %r is not a permutation of RGB - using GRB" % name)
@@ -106,8 +105,7 @@ class NullBackend:
     """No LED wired. The button still works; you just can't see it."""
 
     # Read by DEVICE_INFO: a capability bit that lies is worse than no bit at
-    # all, so "has an LED" means one actually came up, not that hardware.py
-    # asked for one.
+    # all, so CAP_LED means one actually came up, not that hardware.py asked.
     usable = False
 
     def set(self, r, g, b):
@@ -130,10 +128,8 @@ class NeoPixelBackend:
 
         self._count = count if count > 0 else 1
         self._np = NeoPixel(Pin(pin, Pin.OUT), self._count)
-        # The driver ships assuming a GRB strip and reorders for you; on a
-        # board wired RGB that reorder *is* the bug. ORDER[i] is where
-        # component i lands in the wire buffer, so deriving it from the name
-        # handles any permutation without a lookup table.
+        # The driver ships assuming a GRB strip and reorders for you; on a board
+        # wired RGB that reorder *is* the bug.
         self._np.ORDER = neopixel_order(order)
         self._brightness = brightness
 
@@ -149,10 +145,9 @@ class NeoPixelBackend:
 
 
 class MultiBackend:
-    """Fans one state out to several physical LEDs - the button's own
-    WS2812 and the board's onboard one, lit the same so both show the
-    current state. Each `set`/`off` reaches every backend even if one of
-    them raises, so a bad onboard LED can't blank the one in the button."""
+    """Fans one state out to several physical LEDs - the button's own WS2812 and
+    the board's onboard one, lit the same. Each `set`/`off` reaches every
+    backend even if one raises, so a bad onboard LED can't blank the button's."""
 
     def __init__(self, backends):
         self._backends = backends
@@ -200,12 +195,10 @@ class PWMBackend:
 def _announce(what, pin):
     """Say out loud which pin we think an LED is on.
 
-    A WS2812 has no readback, so the firmware cannot tell an absent one from
-    a dark one: `NeoPixel(Pin(n))` constructs happily for any valid GPIO,
-    which means a wrong pin number fails *silently* - no exception, no log,
-    just an LED that never lights. Printing the assumption is the only thing
-    that turns "it's dark and I don't know why" into "it's dark and it thinks
-    it's on 48", which is the difference between guessing and measuring.
+    A WS2812 has no readback, and `NeoPixel(Pin(n))` constructs happily for any
+    valid GPIO - so a wrong pin number fails *silently*, with no exception and
+    no log, just an LED that never lights. Printing the assumption is what turns
+    "it's dark and I don't know why" into "it's dark and it thinks it's on 48".
     """
     print("led: %s on GPIO%s" % (what, pin))
 
@@ -237,9 +230,9 @@ def _make_primary_backend():
 
 
 def _make_onboard_backend():
-    """The board's own WS2812, if ONBOARD_NEOPIXEL_PIN says one exists.
-    Same degrade-to-dark rule as the primary LED - it's a bonus indicator,
-    not one the button can afford to crash over."""
+    """The board's own WS2812, if ONBOARD_NEOPIXEL_PIN says one exists. Same
+    degrade-to-dark rule as the primary LED, and more so - it is a bonus
+    indicator, not one the button can afford to crash over."""
     pin = getattr(hardware, "ONBOARD_NEOPIXEL_PIN", None)
     if pin is None:
         return None
@@ -311,9 +304,9 @@ class LEDController:
     def show_effect(self, style, color, color2, period_s):
         """Render a look that belongs to no state, until the next set_state().
 
-        The palette is left alone: this is a thing the host is *showing*, not
-        a thing it is changing. `_state` is cleared because nothing named is
-        on screen anymore - so a palette edit arriving mid-effect updates the
+        The palette is left alone: this is a thing the host is *showing*, not a
+        thing it is changing. `_state` is cleared because nothing named is on
+        screen any more, so a palette edit arriving mid-effect updates the
         stored entry without yanking the light off what it is displaying.
         """
         if style not in self._styles:
@@ -348,10 +341,9 @@ class LEDController:
             print("led: animation crashed (%s)" % exc)
 
     # --- the six styles -----------------------------------------------
-    #
     # Every one runs forever: the host decides when a state ends (it already
-    # holds SUCCESS for two seconds, then writes IDLE), so nothing here needs
-    # to know how long anything lasts.
+    # holds SUCCESS for two seconds, then writes IDLE), so nothing here needs to
+    # know how long anything lasts.
 
     async def _solid(self, effect):
         self._backend.set(*_norm(effect.color))
@@ -401,19 +393,18 @@ class LEDController:
     async def _rainbow(self, effect):
         """Hue rotates a full turn per period.
 
-        The colour is still not a *hue* here - the point of a rainbow is that
-        it is all of them - but its brightest channel is the **brightness**,
-        which is the one thing about a rainbow worth setting. That is an
-        addition rather than a repurpose: these bytes have never meant anything
-        for this style, so nothing that was written before can be misread now.
+        The colour is not a *hue* here - a rainbow is all of them - but its
+        brightest channel is the **brightness**, which is the one thing about a
+        rainbow worth setting. An addition rather than a repurpose: these bytes
+        never meant anything for this style, so nothing written before can be
+        misread now.
 
-        Zero means full, deliberately. Every rainbow written before this
-        carried whatever colour happened to be in the field, very often
-        #000000, and a rainbow that renders black is indistinguishable from the
-        light being off - which nobody configures a rainbow to do. So the one
-        value we cannot honour is the one that means "unset", and treating it
-        as full is what makes an un-updated config render exactly as it always
-        did after a reflash.
+        Zero means full, deliberately. Rainbows written before this carried
+        whatever was in the colour field, very often #000000, and a rainbow
+        rendering black is indistinguishable from the light being off - which
+        nobody configures a rainbow to do. So the one value we cannot honour is
+        the one meaning "unset", and treating it as full is what makes an
+        un-updated config render after a reflash exactly as it always did.
         """
         level = max(effect.color) / 255.0
         if level <= 0:

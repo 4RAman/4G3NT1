@@ -85,15 +85,11 @@ export class ConfigMenu {
 
     this.statusEl = el('span', { className: 'menu-status' });
     this.resultEl = el('pre', { className: 'menu-result' });
-    const mkBtn = (text, cls, fn) => {
-      const b = el('button', { type: 'button', className: cls, textContent: text });
-      b.addEventListener('click', fn);
-      return b;
-    };
+    const bar = (text, className, onclick) => el('button', { type: 'button', className, textContent: text, onclick });
     this.mounts.bar.append(
-      mkBtn('Save', 'primary', () => this.save()),
-      mkBtn('Check', '', () => this.check()),
-      mkBtn('Revert', '', () => this.load()),
+      bar('Save', 'primary', () => this.save()),
+      bar('Check', '', () => this.check()),
+      bar('Revert', '', () => this.load()),
       this.statusEl,
       this.resultEl,
     );
@@ -122,22 +118,22 @@ export class ConfigMenu {
   // faster than assembling a Pomodoro field by field, and it doubles as the
   // answer to "what can this thing do?".
   _renderBuiltins() {
-    const picker = el('select', { className: 'inp builtin-pick' }, [
+    const blurb = el('span', { className: 'menu-hint builtin-blurb' });
+    const picker = el('select', {
+      className: 'inp builtin-pick',
+      onchange: () => {
+        const chosen = BUILTIN_MODES.find((b) => b.id === picker.value);
+        if (chosen) {
+          this._addMode(this._uniquelyNamed(chosen.mode()));
+          picker.value = '';  // back to the prompt entry: nothing stays selected
+        }
+        // Re-read after that reset - the blurb describes what is selected now.
+        blurb.textContent = BUILTIN_MODES.find((b) => b.id === picker.value)?.blurb || '';
+      },
+    }, [
       el('option', { value: '', textContent: 'Add a ready-made mode…' }),
       ...BUILTIN_MODES.map((b) => el('option', { value: b.id, textContent: b.label })),
     ]);
-    const blurb = el('span', { className: 'menu-hint builtin-blurb' });
-    const describe = () => {
-      const chosen = BUILTIN_MODES.find((b) => b.id === picker.value);
-      blurb.textContent = chosen ? chosen.blurb : '';
-    };
-    picker.addEventListener('change', () => {
-      const chosen = BUILTIN_MODES.find((b) => b.id === picker.value);
-      if (!chosen) return describe();
-      this._addMode(this._uniquelyNamed(chosen.mode()));
-      picker.value = '';
-      describe();
-    });
     return el('span', { className: 'builtin-wrap' }, [picker, blurb]);
   }
 
@@ -185,8 +181,10 @@ export class ConfigMenu {
   _renderModesLayout() {
     this.modeNavEl = el('div', { className: 'mode-nav scroll-fade' });
     this.modeDetailEl = el('div', { className: 'mode-detail' });
-    const addBtn = el('button', { type: 'button', className: 'add-mode', textContent: '+ Add mode' });
-    addBtn.addEventListener('click', () => this._addMode(this._defaultMode()));
+    const addBtn = el('button', {
+      type: 'button', className: 'add-mode', textContent: '+ Add mode',
+      onclick: () => this._addMode(this._defaultMode()),
+    });
 
     this._renderModes();
 
@@ -229,13 +227,12 @@ export class ConfigMenu {
         const dot = el('span', { className: 'mode-active-dot', hidden: true });
         const nameEl = el('span', { className: 'mode-nav-name', textContent: mode.name || '(unnamed)' });
         const summaryEl = el('span', { className: 'mode-nav-summary', textContent: describeTemplate(mode) });
-        const item = el('button', {
+        this.navButtons.set(mode, { dot, nameEl, summaryEl });
+        groupEl.append(el('button', {
           type: 'button',
           className: 'mode-nav-item' + (mode === this.selectedMode ? ' selected' : ''),
-        }, [dot, nameEl, summaryEl]);
-        item.addEventListener('click', () => this._renderModes(mode));
-        this.navButtons.set(mode, { dot, nameEl, summaryEl });
-        groupEl.append(item);
+          onclick: () => this._renderModes(mode),
+        }, [dot, nameEl, summaryEl]));
       }
       this.modeNavEl.append(groupEl);
     }
@@ -269,20 +266,16 @@ export class ConfigMenu {
       onMoveUp: () => this._move(mode, -1),
       onMoveDown: () => this._move(mode, 1),
       // Only everyday modes are read in order, so only they get the reorder
-      // arrows - a takeover mode is found by name, and offering to reorder
-      // it would imply a priority it does not have.
+      // arrows - a takeover mode is found by name, and offering to reorder it
+      // would imply a priority it does not have.
       canReorder: this._natureOf(mode) === 'ambient',
-      // Lets the enter_mode target picker list the current sibling modes
-      // (filtered to takeover templates) live, without ModeEditor knowing
-      // where the modes list lives.
+      // The three pools below are config-wide, so the mode editor reads them
+      // through a handler rather than owning them or knowing where they live
+      // (Dependency Inversion). Adding a look from a mode is the normal path
+      // now that mode colour lives there - the Lights tab is where looks are
+      // *managed*, not where they have to be born.
       getModes: () => this.model.modes,
-      // The look pool is config-wide, so the mode editor reads and adds to it
-      // rather than owning it. Adding from a mode is the normal way a look
-      // gets made now that mode colour lives here - the Lights tab is where
-      // they are *managed*, not where they have to be born.
       getLooks: () => this.model.looks || {},
-      // Same reasoning as getLooks: the action pool is config-wide, so a mode
-      // reads it rather than owning it.
       getActions: () => this.model.actions || {},
       getFloor: () => this.model.min_flash_period_s,
       api: this.api,
@@ -385,25 +378,21 @@ export class ConfigMenu {
     this.looksWrap = el('div', { className: 'palette-wrap' });
     this._renderLooks();
 
-    const add = el('button', { type: 'button', textContent: '+ Add a look' });
-    add.addEventListener('click', () => {
-      let name = 'look';
-      for (let n = 2; this.model.looks[name]; n += 1) name = `look ${n}`;
-      this.model.looks[name] = { style: 'breathe', color: '#ff8800', color2: '#000000', period_s: 2 };
-      this._renderLooks();
-      this._markDirty();
+    const add = el('button', {
+      type: 'button', textContent: '+ Add a look',
+      onclick: () => {
+        let name = 'look';
+        for (let n = 2; this.model.looks[name]; n += 1) name = `look ${n}`;
+        this.model.looks[name] = { style: 'breathe', color: '#ff8800', color2: '#000000', period_s: 2 };
+        this._renderLooks();
+        this._markDirty();
+      },
     });
 
-    // Two sections, and the omission is the point. **Mode colours are not
-    // here.** A mode's appearance belongs on the mode's own page, or a mode is
-    // not modular: you would edit a Pomodoro in one tab and its colour in
-    // another, and "change every Pomodoro at once" is a thing almost nobody
-    // wants and everybody eventually does by accident.
-    //
-    // The palette entries for those states still exist in config as the
-    // invisible fallback a mode with no named look renders (`base_look` reads
-    // them) - only the editor group is gone. Removing the entries as well
-    // would leave such a mode with nothing to show.
+    // Two sections, and the omission is the point: **mode colours are not
+    // here**, they are on the mode's own page - CLAUDE.md's "the Lights tab is
+    // the button's vocabulary" invariant, which also says why their palette
+    // entries stay in config even though this stopped editing them.
     return el('div', {}, [
       el('p', { className: 'menu-hint', 'data-help': true, textContent: "The button's own vocabulary - what it looks like when it is idle, listening, thinking, or reporting a result. Saving sends these straight to the device: no reflash, no restart." }),
       group(SYSTEM_LED_STATES),
@@ -450,9 +439,7 @@ export class ConfigMenu {
         // palette section's spec above.
         allowSequence: true,
         // Renaming rewrites every mode pointing here, so the pool and the
-        // references can never drift into a dangling name from the UI. The
-        // Python parser still warns about one, because a hand-edited config
-        // can always produce it.
+        // references can never drift into a dangling name from the UI.
         rename: (next) => {
           if (!next || next === name || this.model.looks[next]) return false;
           this.model.looks[next] = this.model.looks[name];
@@ -471,11 +458,11 @@ export class ConfigMenu {
           }
           return true;
         },
+        // Deliberately leaves the references dangling - CLAUDE.md's rule for
+        // a deleted pool entry: "(missing)" here and a parser warning beat
+        // quietly changing what several modes look like.
         remove: () => {
           delete this.model.looks[name];
-          // Deliberately leaves the references. The mode editor shows a
-          // "(missing)" entry and the parser warns, which is more honest than
-          // silently changing what several modes look like.
           this._renderLooks();
           this._markDirty();
         },
@@ -487,17 +474,20 @@ export class ConfigMenu {
    * "or wear a named look instead", under one system state's colour row.
    *
    * **The palette entry above it does not go away, and that is the design**
-   * (TODO 36a). A palette entry ships to the device and renders unattended;
-   * a named look may be a stop list, which only the host can walk. So the
-   * palette stays as what a host-less button shows and the look is what it
-   * wears while something is driving it - authoring surface over fallback
-   * form, the same relation `looks` and `led_palette` have everywhere else.
-   *
-   * Tinker-tier: naming a look for SUCCESS is the second thing anybody does
-   * to SUCCESS, and the row above is the first.
+   * (TODO 36a) - CLAUDE.md's "a stop list is the rich form; a palette entry is
+   * the fallback form". Tinker-tier: naming a look for SUCCESS is the second
+   * thing anybody does to SUCCESS, and the row above is the first.
    */
   _renderStateLookRow(state) {
-    const pick = el('select', { className: 'inp' });
+    const pick = el('select', {
+      className: 'inp',
+      onchange: () => {
+        if (!this.model.state_looks) this.model.state_looks = {};
+        if (pick.value) this.model.state_looks[state.key] = pick.value;
+        else delete this.model.state_looks[state.key];
+        this._markDirty();
+      },
+    });
     const hint = el('span', { className: 'menu-hint', 'data-help': true });
 
     const refresh = () => {
@@ -525,13 +515,6 @@ export class ConfigMenu {
     this.stateLookRefreshers.push(refresh);
     refresh();
 
-    pick.addEventListener('change', () => {
-      if (!this.model.state_looks) this.model.state_looks = {};
-      if (pick.value) this.model.state_looks[state.key] = pick.value;
-      else delete this.model.state_looks[state.key];
-      this._markDirty();
-    });
-
     return el('div', { className: 'scope-row', 'data-tier': 'tinker' }, [
       el('span', { className: 'scope-lbl', textContent: `${state.label}: named look` }),
       pick,
@@ -544,27 +527,25 @@ export class ConfigMenu {
    *
    * **Tinker-tier by the whole item's design, not by timidity.** A novice does
    * not think "I want to make an action", they think "I want it to count
-   * cigarettes", and starting from an action and then hunting for somewhere to
-   * attach it is backwards. So this powers the recipe-shaped path without
-   * appearing in it: everything here is reachable, and nothing here is in the
-   * way. `data-tier="tinker"` is all it takes - help.js's MutationObserver
-   * finds the node whenever this rerenders.
-   *
-   * On the Modes tab rather than a tab of its own, because concept count is
-   * the enemy and an action is a thing a *gesture* has.
+   * cigarettes"; starting from an action and hunting for somewhere to attach
+   * it is backwards. So this powers the recipe-shaped path without appearing
+   * in it. On the Modes tab rather than a tab of its own, because concept
+   * count is the enemy and an action is a thing a *gesture* has.
    */
   _renderActionPoolSection() {
     this.actionsWrap = el('div', { className: 'palette-wrap' });
     this._renderActionPool();
 
-    const add = el('button', { type: 'button', textContent: '+ Add a named action' });
-    add.addEventListener('click', () => {
-      if (!this.model.actions) this.model.actions = {};
-      let name = 'action';
-      for (let n = 2; this.model.actions[name]; n += 1) name = `action ${n}`;
-      this.model.actions[name] = { action: 'log', event: '' };
-      this._renderActionPool();
-      this._markDirty();
+    const add = el('button', {
+      type: 'button', textContent: '+ Add a named action',
+      onclick: () => {
+        if (!this.model.actions) this.model.actions = {};
+        let name = 'action';
+        for (let n = 2; this.model.actions[name]; n += 1) name = `action ${n}`;
+        this.model.actions[name] = { action: 'log', event: '' };
+        this._renderActionPool();
+        this._markDirty();
+      },
     });
 
     return el('div', { className: 'action-pool', 'data-tier': 'tinker' }, [
@@ -588,29 +569,30 @@ export class ConfigMenu {
 
   /** One pool entry: its name, what it is, and the two edits a pool needs. */
   _renderActionRow(name) {
-    const nameInput = el('input', { type: 'text', className: 'inp', value: name });
     // Renaming rewrites every gesture pointing here, so the pool and its
-    // references can never drift into a dangling name *from the UI*. The
-    // parser still warns about one, because a hand-edited config always can.
-    nameInput.addEventListener('change', () => {
-      const next = nameInput.value.trim();
-      if (!next || next === name || this.model.actions[next]) {
-        nameInput.value = name;  // refused: taken, empty, or unchanged
-        return;
-      }
-      this.model.actions[next] = this.model.actions[name];
-      delete this.model.actions[name];
-      for (const mode of this.model.modes || []) {
-        for (const gesture of GESTURES) {
-          if (mode[gesture.key] === name) mode[gesture.key] = next;
+    // references can never drift into a dangling name *from the UI*.
+    const nameInput = el('input', {
+      type: 'text', className: 'inp', value: name,
+      onchange: () => {
+        const next = nameInput.value.trim();
+        if (!next || next === name || this.model.actions[next]) {
+          nameInput.value = name;  // refused: taken, empty, or unchanged
+          return;
         }
-        for (const state of mode.states || []) {
-          if (state && state.action === name) state.action = next;
+        this.model.actions[next] = this.model.actions[name];
+        delete this.model.actions[name];
+        for (const mode of this.model.modes || []) {
+          for (const gesture of GESTURES) {
+            if (mode[gesture.key] === name) mode[gesture.key] = next;
+          }
+          for (const state of mode.states || []) {
+            if (state && state.action === name) state.action = next;
+          }
         }
-      }
-      this._renderActionPool();
-      this._renderModes();
-      this._markDirty();
+        this._renderActionPool();
+        this._renderModes();
+        this._markDirty();
+      },
     });
 
     const summary = el('span', {
@@ -636,25 +618,26 @@ export class ConfigMenu {
       }
     };
 
-    const kind = el('select', { className: 'inp' },
-      ACTIONS.map((a) => el('option', { value: a.type, textContent: a.label })));
+    const kind = el('select', {
+      className: 'inp',
+      onchange: () => {
+        this.model.actions[name] = ACTION_BY_TYPE[kind.value].defaults();
+        buildFields();
+        summary.textContent = describeAction(this.model.actions[name]);
+        this._markDirty();
+      },
+    }, ACTIONS.map((a) => el('option', { value: a.type, textContent: a.label })));
     kind.value = this.model.actions[name].action || 'log';
-    kind.addEventListener('change', () => {
-      this.model.actions[name] = ACTION_BY_TYPE[kind.value].defaults();
-      buildFields();
-      summary.textContent = describeAction(this.model.actions[name]);
-      this._markDirty();
-    });
 
-    const remove = el('button', { type: 'button', textContent: 'Delete' });
-    remove.addEventListener('click', () => {
-      delete this.model.actions[name];
-      // Deliberately leaves the references, exactly as deleting a look does:
-      // the gesture picker shows "(missing)" and the parser warns, which is
-      // more honest than silently changing what several gestures do.
-      this._renderActionPool();
-      this._renderModes();
-      this._markDirty();
+    const remove = el('button', {
+      type: 'button', textContent: 'Delete',
+      // Leaves the references dangling, exactly as deleting a look does.
+      onclick: () => {
+        delete this.model.actions[name];
+        this._renderActionPool();
+        this._renderModes();
+        this._markDirty();
+      },
     });
 
     buildFields();

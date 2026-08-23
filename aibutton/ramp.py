@@ -13,7 +13,7 @@ different questions:
     a held button      which hold level you are in (ROADMAP D5)
     a stopwatch        how close to a target you are
 
-Only the first has a consumer today. The rest are why this is its own module
+Only the first has a consumer today; the rest are why this is its own module
 rather than a corner of [config.py](config.py), and why nothing below mentions
 seconds.
 
@@ -42,10 +42,10 @@ from dataclasses import dataclass
 
 from .device import rgb_bytes
 
-# rgb_bytes is imported rather than re-derived because device.py already owns
-# "what does '#rrggbb' mean in bytes", imports nothing from this package, and
-# is the module the wire encoding uses. A third hex parser would be a mirrored
-# table with nothing testing the mirror.
+# rgb_bytes is imported rather than re-derived: device.py already owns "what
+# does '#rrggbb' mean in bytes", imports nothing from this package, and is what
+# the wire encoding uses. A third hex parser would be a mirrored table with
+# nothing testing the mirror.
 
 
 @dataclass(frozen=True)
@@ -76,10 +76,9 @@ def color_at(stops, progress: float) -> str:
     """The colour `progress` of the way along `stops`.
 
     Total: `progress` is clamped to 0..1, an empty ramp is black, and stops are
-    sorted here rather than assumed sorted. Sorting on every call is a
-    non-issue - a ramp is a handful of stops and this runs a few times a minute
-    - and the alternative is a precondition that fails silently and looks like
-    a colour bug.
+    sorted here rather than assumed sorted - a handful of stops a few times a
+    minute costs nothing, and the alternative is a precondition that fails
+    silently and looks like a colour bug.
     """
     ordered = sorted(stops, key=lambda stop: stop.at)
     if not ordered:

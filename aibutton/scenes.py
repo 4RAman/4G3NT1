@@ -104,13 +104,13 @@ def merge(base: dict, scene: dict) -> dict:
     """Layer a scene's raw JSON over the base config's raw JSON.
 
     Shallow and key-by-key on purpose. A scene that defines `modes` replaces
-    the list wholesale - half of one modes list spliced into half of another
-    is nobody's intent - while a scene that says nothing about `led_palette`
-    inherits the base's, which is exactly what testing two arrangements of the
-    same modes against one set of colours needs.
+    the list wholesale - half of one modes list spliced into half of another is
+    nobody's intent - while a scene silent about `led_palette` inherits the
+    base's, which is what testing two arrangements of the same modes against
+    one set of colours needs.
 
-    Pure: the caller does the reading, and the result is raw JSON rather than
-    an AppConfig, so the single parser downstream stays the only validator.
+    Pure, and the result is raw JSON rather than an AppConfig, so the single
+    parser downstream stays the only validator.
     """
     merged = dict(base)
     for key, value in scene.items():
@@ -143,8 +143,8 @@ def safe_id(scene_id) -> bool:
     Ids come off the wire, so this is a containment check: anything with a
     separator, a drive letter or a leading dot could reach outside. It
     deliberately does *not* insist on slug-shaped names - `My Focus.json` is a
-    perfectly good hand-made scene, and hiding it from the picker because of
-    the space would punish exactly the offline editing this exists for.
+    good hand-made scene, and hiding it from the picker over the space would
+    punish exactly the offline editing this exists for.
     """
     if not isinstance(scene_id, str) or not scene_id or scene_id in (".", ".."):
         return False
@@ -247,8 +247,8 @@ def list_scenes(directory: Path) -> list[SceneInfo]:
     """Every scene file in `directory`, readable or not.
 
     A broken file is listed *with* its error rather than hidden: these are
-    meant to be hand-edited, and a scene silently disappearing from the picker
-    after a stray comma is the worst possible way to learn about the comma.
+    hand-edited, and a scene vanishing from the picker after a stray comma is
+    the worst possible way to learn about the comma.
     """
     try:
         paths = sorted(p for p in directory.glob(f"*{SUFFIX}") if p.is_file())

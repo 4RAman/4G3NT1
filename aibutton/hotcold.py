@@ -1,34 +1,25 @@
 """Hot/Cold: stop a spinning hue wheel as close to a hidden target as you can.
 
-Pure by construction - no clock, no device, no store, no config, and no
-asyncio. `step` is a total function over `(game, event, now)` returning the
-next game and what the driver should do about it, which is the shape
-[ROADMAP.md](../ROADMAP.md)'s Stage-3 runtime wants every app to be in. The
-driver in [main.py](main.py) is the only part that awaits anything.
-
-That is not decoration. It is the whole reason this file exists separately:
-everything below is exercised by [test_hotcold.py](../tests/test_hotcold.py)
-with plain numbers and no mocks, and when the runtime moves onto the device
-this half moves unchanged.
+Pure by construction - no clock, no device, no store, no config, no asyncio.
+`step` is a total function over `(game, event, now)` returning the next game
+and what the driver should do about it, which is the shape
+[ROADMAP.md](../ROADMAP.md)'s Stage-3 runtime wants every app to be in; the
+driver in [main.py](main.py) is the only part that awaits anything. That is
+why [test_hotcold.py](../tests/test_hotcold.py) exercises all of it with plain
+numbers and no mocks, and why this half moves onto the device unchanged.
 
 **Why the host can know where the wheel is.** The sweep is one `rainbow`
 effect pushed at the device, and [firmware/led.py](../firmware/led.py)'s
 `_rainbow` starts its hue at whatever moment the effect arrives - so phase 0
 is the push, and the phase at any later instant is arithmetic rather than a
-guess. That is what makes this game possible without streaming a colour per
-frame down the radio: one write per round.
+guess. That is what makes this game one radio write per round rather than a
+colour per frame.
 
-**Why a press has to be dated earlier than it arrives.** A real button holds a
-single press back until the multi-tap window closes, so the finger moved before
-the gesture landed. How much before is `Game.latency_s`, which the driver fills
-in from `ButtonDevice.press_latency_s` - a number this module is *told* rather
-than one it knows, because a game that hardcoded a firmware constant would be
-wrong on every other way of delivering a press (an injected one is instant) and
-would not survive the move onto the device.
-
-Subtracting it works because it is a *constant*, not jitter. What is left over
-- radio and scheduling, tens of milliseconds - is the real precision floor, and
-the reason `tolerance` is not tighter by default.
+**A press is dated earlier than it arrives**, by `Game.latency_s`, which the
+driver fills in from `ButtonDevice.press_latency_s` - told, never hardcoded
+(CLAUDE.md). Subtracting works because it is a *constant*, not jitter; what is
+left over - radio and scheduling, tens of milliseconds - is the real precision
+floor, and the reason `tolerance` is not tighter by default.
 """
 
 from __future__ import annotations
@@ -37,10 +28,10 @@ from dataclasses import dataclass, replace
 
 
 # --- what the driver should do ---------------------------------------------
-# A small closed set, in the spirit of the Stage-3 effect list. Deliberately
-# not the global one: inventing that is Stage-3 work and ROADMAP.md is explicit
-# that no Stage-3 refactor may block Stage 2. These are the four things this
-# game asks of the world, named so a test can assert them without a device.
+# A small closed set, in the spirit of the Stage-3 effect list but deliberately
+# not the global one: inventing that is Stage-3 work, and ROADMAP.md is explicit
+# that no Stage-3 refactor may block Stage 2. Named so a test can assert them
+# without a device.
 
 
 @dataclass(frozen=True)
@@ -94,12 +85,11 @@ class Game:
     rounds: int  # 0 = keep dealing until you leave
     tolerance: float
     reveal_s: float
-    # How many places on the wheel there are. 0 keeps the wheel continuous,
-    # which is what it was before and is *much* harder than it looks: a press
-    # is only ever accurate to a few tens of milliseconds, and against a smooth
-    # sweep that is a smaller slice than anyone can aim at. Quantising snaps
-    # both the target and the guess to the same grid, so landing anywhere in
-    # the right place counts as landing on it.
+    # How many places on the wheel there are. 0 keeps it continuous, which is
+    # *much* harder than it looks: a press is only ever accurate to a few tens
+    # of milliseconds, and against a smooth sweep that is a smaller slice than
+    # anyone can aim at. Quantising snaps target and guess to the same grid, so
+    # landing anywhere in the right place counts as landing on it.
     segments: int = 0
     latency_s: float = 0.0  # how late this device's gestures arrive
     target: float = 0.0  # 0..1, where on the wheel the hidden target sits
@@ -168,15 +158,11 @@ def tally(game: Game) -> dict:
     """The same session, written for a machine: what an `on_exit` hook carries
     out ([summary.py](summary.py)).
 
-    Pure, and a plain function of the game, which is the point - a summary is
-    a snapshot of the app's variables at exit (ARCHITECTURE.md), so it is
-    something this module can hand over rather than something the driver has to
-    keep a running note of.
-
-    `best_pct` is 0 rather than absent when nothing was guessed. The key set is
-    the same on every exit deliberately: OSC arguments are positional, so a key
-    that only appears sometimes moves every argument after it, and `played` is
-    the number that says whether the other two mean anything.
+    A plain function of the game, which is the point - a summary is a snapshot
+    of the app's variables at exit (ARCHITECTURE.md), not a running note the
+    driver has to keep. `best_pct` is 0 rather than absent when nothing was
+    guessed, and `played` is the count that says whether the other two mean
+    anything: the same keys on every exit (CLAUDE.md).
     """
     return {
         "played": game.played,
@@ -190,11 +176,10 @@ def step(
 ) -> tuple[Game, tuple[Effect, ...]]:
     """Advance the game. Total, pure, and free of anything that ticks.
 
-    `next_target` is where the *next* round's target will sit. It is passed in
-    on every call rather than drawn here because randomness is I/O by another
-    name - a step function that rolled its own dice could not be checked
-    against a table. The driver supplies a fresh number each time and it is
-    simply unused unless a round actually starts.
+    `next_target` is where the *next* round's target will sit, passed in on
+    every call rather than drawn here because randomness is I/O by another name
+    - a step function that rolled its own dice could not be checked against a
+    table. It is simply unused unless a round actually starts.
     """
     if game.over:
         return game, ()
@@ -204,9 +189,9 @@ def step(
 
     if event == GUESS:
         # Both sides go on the same grid, so a segment is compared with a
-        # segment. `tolerance` still means what it meant - how far off still
-        # counts - which on a quantised wheel decides whether the neighbouring
-        # places count too, and on a continuous one is the whole rule.
+        # segment. `tolerance` - how far off still counts - then decides on a
+        # quantised wheel whether the neighbouring places count too, and on a
+        # continuous one is the whole rule.
         where = snap(
             phase_at(game.spun_at, now, game.sweep_s, game.latency_s), game.segments
         )

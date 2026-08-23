@@ -1,21 +1,14 @@
-// One way to choose a colour, used everywhere a colour is chosen.
+// One way to choose a colour, used everywhere a colour is chosen. One control
+// that can validate *and* push a look at the hardware, with callers turning
+// parts off - a picker that could do one but not the other is the wrong seam.
 //
-// This replaces three near-identical things: the Lights tab's palette rows,
-// the named-looks rows, and the test bench. They had drifted into different
-// capabilities for no reason anyone chose - only the bench could show you a
-// look on the actual hardware, and only the palette rows could validate. A
-// colour control that can do one but not the other is the wrong seam, so
-// there is now one control that does both and callers turn parts off.
+// **Pushing at the hardware is the load-bearing half.** It answers with the
+// *device's* rendering rather than the config's intent, which is how you tell
+// a wiring fault from a config one (README's WS2812 gotchas), so it belongs
+// beside every colour picker rather than on a bench of its own.
 //
-// **The bench is not gone, it is distributed.** Its genuinely useful property
-// was that it answered with the *device's* rendering rather than the config's
-// intent, which is how you tell a wiring fault from a config one (README's
-// WS2812 gotchas). That belonged next to every colour picker, not on its own
-// page at the bottom of one tab.
-//
-// Everything returns the widget contract the rest of the app uses -
-// `{ el, validate }` - so this drops into a form beside any other field
-// (Liskov, same as widgets.js).
+// Returns the widget contract the rest of the app uses - `{ el, validate }` -
+// so this drops into a form beside any other field (Liskov, as widgets.js).
 
 import { clear, el } from './dom.js';
 import {
@@ -29,8 +22,6 @@ import { paint as applySwatch } from './ledPreview.js';
  * Whether `style` renders `spec`. Two specs share the key `color` - a hue
  * picker and a brightness slider - so a spec may declare which *reading* it
  * is with `shows`, and the style's `uses` list names the reading it wants.
- * Module-private: this used to live in menu.js, and now that one component
- * asks the question there is nobody else to ask it.
  */
 function usedBy(style, spec) {
   return style.uses.includes(spec.shows || spec.key);
@@ -70,10 +61,9 @@ function ledCtx(style, floor) {
 // --- sequences ----------------------------------------------------------
 // A look with a `stops` key is a stop list (sequencer.Sequence, host-side)
 // rather than a device-animated effect: several colours the *host* walks
-// through and pushes one at a time, not a style the firmware renders on its
-// own. That is why it has none of LED_STYLES' machinery - no `style`, no
-// `uses`, nothing schema.js needs to know about, because the firmware never
-// sees the shape (sequencer.py: "a sequence is not an effect").
+// through and pushes one at a time. The firmware never sees the shape, which
+// is why it has none of LED_STYLES' machinery (sequencer.py: "a sequence is
+// not an effect").
 
 /** One row per stop: the engine's own colour field, plus the two seconds a
  *  stop knows about. Module-level like DIAGNOSTIC - pure data, no `o`. */
@@ -270,6 +260,14 @@ export function createLookEditor(o) {
       o.onChange?.();
     };
 
+    const rowBtn = (text, title, className, disabled, onclick) => el('button', {
+      type: 'button', className: `mini ${className}`, textContent: text, title, disabled, onclick,
+    });
+    const swap = (a, b) => {
+      [seq.stops[a], seq.stops[b]] = [seq.stops[b], seq.stops[a]];
+      commitStructure();
+    };
+
     const rows = el('div', { className: 'sequence-rows' });
     seq.stops.forEach((stop, index) => {
       const rowFields = el('div', { className: 'sequence-row-fields' });
@@ -279,51 +277,34 @@ export function createLookEditor(o) {
         rowFields.append(field.el);
       }
 
-      const up = el('button', {
-        type: 'button', className: 'mini', textContent: '↑', title: 'Move earlier',
-      });
-      up.disabled = index === 0;
-      up.addEventListener('click', () => {
-        [seq.stops[index - 1], seq.stops[index]] = [seq.stops[index], seq.stops[index - 1]];
-        commitStructure();
-      });
-
-      const down = el('button', {
-        type: 'button', className: 'mini', textContent: '↓', title: 'Move later',
-      });
-      down.disabled = index === seq.stops.length - 1;
-      down.addEventListener('click', () => {
-        [seq.stops[index], seq.stops[index + 1]] = [seq.stops[index + 1], seq.stops[index]];
-        commitStructure();
-      });
-
-      const remove = el('button', {
-        type: 'button', className: 'mini danger', textContent: '×', title: 'Remove this stop',
-      });
-      // Never offer to remove the last one - same rule the ramp widget
-      // (widgets.js) already follows: an empty sequence is not a thing you
-      // can mean, and the parser would just hand back the default look.
-      remove.disabled = seq.stops.length <= 1;
-      remove.addEventListener('click', () => {
-        seq.stops.splice(index, 1);
-        commitStructure();
-      });
-
       rows.append(el('div', { className: 'sequence-row' }, [
         el('span', { className: 'sequence-index', textContent: String(index + 1) }),
         rowFields,
-        el('div', { className: 'sequence-row-actions' }, [up, down, remove]),
+        el('div', { className: 'sequence-row-actions' }, [
+          rowBtn('↑', 'Move earlier', '', index === 0, () => swap(index - 1, index)),
+          rowBtn('↓', 'Move later', '', index === seq.stops.length - 1,
+            () => swap(index, index + 1)),
+          // Never offer to remove the last one - same rule the ramp widget
+          // (widgets.js) already follows: an empty sequence is not a thing you
+          // can mean, and the parser would just hand back the default look.
+          rowBtn('×', 'Remove this stop', 'danger', seq.stops.length <= 1, () => {
+            seq.stops.splice(index, 1);
+            commitStructure();
+          }),
+        ]),
       ]));
     });
 
-    const add = el('button', { type: 'button', className: 'mini', textContent: '+ Stop' });
-    add.addEventListener('click', () => {
-      const last = seq.stops[seq.stops.length - 1];
-      seq.stops.push({
-        color: last ? last.color : '#ffffff', hold_s: 0.5, fade_s: 0,
-        curve: 'linear', style: 'solid', period_s: 1,
-      });
-      commitStructure();
+    const add = el('button', {
+      type: 'button', className: 'mini', textContent: '+ Stop',
+      onclick: () => {
+        const last = seq.stops[seq.stops.length - 1];
+        seq.stops.push({
+          color: last ? last.color : '#ffffff', hold_s: 0.5, fade_s: 0,
+          curve: 'linear', style: 'solid', period_s: 1,
+        });
+        commitStructure();
+      },
     });
 
     // What moves the list along (TODO 36d). A full rebuild on change, because

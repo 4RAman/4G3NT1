@@ -1,20 +1,17 @@
 """BLEDevice - the host as BLE central, talking to the ESP32 firmware.
 
 The other half of [device.py](device.py)'s seam: gestures arrive as
-notifications and become presses on the queue; LED and sound go out as
-one-byte writes. Everything above it is unchanged and unaware.
+notifications and become presses on the queue; LED and sound go out as writes.
+Everything above it is unchanged and unaware. Two things shape the design:
 
-Two things shape the design:
+**Writes must not block.** The mode machine cannot wait on a radio, so writes
+go into an outbox and return. A pump drains it while connected and drops it
+while not - feedback that arrives seconds late is worse than none.
 
-**Writes must not block.** The mode machine cannot wait on a radio, so
-writes go into an outbox and return. A pump drains it while connected and
-drops it while not: feedback that arrives seconds late is worse than
-feedback that never arrives.
-
-**The link will drop.** The connection is a loop, not an event - scan,
-connect, serve, wait, scan again, until close(). Each reconnect re-asserts
-the palette and the current LED state, so the device never sits showing
-something the host has moved on from.
+**The link will drop.** The connection is a loop, not an event - scan, connect,
+serve, wait, scan again, until close(). Each reconnect re-asserts the palette
+and the current LED state, so the device never sits showing something the host
+has moved on from.
 """
 
 from __future__ import annotations
@@ -70,9 +67,8 @@ class BLEDevice(ButtonDevice):
         retry_s: float = RETRY_S,
     ) -> None:
         super().__init__()
-        # Gestures off a real button come from the detector in
-        # firmware/trigger.py, which holds a single press back until the
-        # multi-tap window closes. See ButtonDevice.press_latency_s.
+        # The detector in firmware/trigger.py holds a single press back until
+        # the multi-tap window closes. See ButtonDevice.press_latency_s.
         self.press_latency_s = DOUBLE_WINDOW_S
         self._name = name
         self._scan_timeout_s = scan_timeout_s
@@ -138,12 +134,11 @@ class BLEDevice(ButtonDevice):
         elif self.info.has(CAP_EFFECT):
             self._send(LED_EFFECT_UUID, effect_payload(effect))
         else:
-            # A device that predates ephemeral effects can still show the
-            # look - by borrowing the state's palette entry, which is exactly
-            # the reach-around run_metronome and run_countdown used to do from
-            # the run loop. It lives here now so the loops don't have to know
-            # which kind of device they are talking to, and so the borrowing
-            # is undone automatically rather than by a `finally` remembering.
+            # A device that predates ephemeral effects can still show the look,
+            # by borrowing the state's palette entry. The borrowing lives here
+            # rather than in the run loops so a mode never has to know which
+            # kind of device it is talking to, and so it is undone
+            # automatically rather than by a `finally` remembering.
             self._clobbered.add(state)
             self._send(LED_PALETTE_UUID, palette_payload(state, effect))
 
@@ -182,10 +177,10 @@ class BLEDevice(ButtonDevice):
     def set_gesture_config(self, max_taps: int) -> None:
         """Tell the device how long a tap burst to watch for.
 
-        Gated: a device that predates parameterised gestures counts to two and
-        cannot be told otherwise, so writing to a characteristic it does not
-        have would only log a failure. It keeps behaving exactly as it always
-        has, which is the right answer for a button nobody has reflashed.
+        Gated, because a device that predates parameterised gestures counts to
+        two and cannot be told otherwise: writing to a characteristic it does
+        not have would only log a failure, and behaving exactly as it always has
+        is the right answer for a button nobody has reflashed.
         """
         super().set_gesture_config(max_taps)
         if self.info.has(CAP_GESTURE_PARAMS):
@@ -202,10 +197,9 @@ class BLEDevice(ButtonDevice):
     async def _adopt_info(self, client: BleakClient) -> None:
         """Ask the device what it is, before sending it anything.
 
-        A device with no DEVICE_INFO characteristic is this project's own
-        firmware from before the characteristic existed, so it falls back to
-        ASSUMED_INFO (LED, buzzer, palette) rather than to nothing - otherwise
-        learning to ask would silence every button that hasn't been reflashed.
+        A device with no DEVICE_INFO characteristic falls back to ASSUMED_INFO
+        rather than to nothing, so that learning to ask cannot silence a button
+        nobody has reflashed.
         """
         raw = None
         try:
@@ -276,11 +270,11 @@ class BLEDevice(ButtonDevice):
             self._connected = True
             log.info("BLE: connected to %s (%s)", self._name, device.address)
             # Ask first: everything below is gated on what it says it can do,
-            # and re-asked on every reconnect because the thing on the other
-            # end may have been reflashed since.
+            # and re-asked every reconnect because the thing on the other end
+            # may have been reflashed since.
             await self._adopt_info(client)
-            # A fresh device holds its own palette, so nothing is borrowed
-            # yet however this connection ended last time.
+            # A fresh device holds its own palette, so nothing is borrowed yet
+            # however this connection ended last time.
             self._clobbered.clear()
             if self.info.has(CAP_GESTURE_PARAMS):
                 await client.write_gatt_char(

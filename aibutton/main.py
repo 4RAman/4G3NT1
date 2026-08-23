@@ -18,17 +18,16 @@ timer_toggle / webhook), and surface the result on the LED, the sound,
 and the web UI.
 
 Takeover modes own the button instead of resolving per gesture, and are
-reached two ways. A *clock* starts the scheduled ones: each loop iteration
-asks scheduler.due_alarm() whether an alarm or reminder is due, and if so it
-owns the device until a press clears it. The press-wait polls on a <=1s
-timeout so the test clock stays responsive and an alarm added live (web UI or
-SIGHUP) starts firing within a second. A *gesture* starts the rest, via an
-enter_mode action - including the launcher, which then hands over to the app
-you pick. enter_takeover runs them in sequence rather than nesting them; see
-its docstring for why.
+reached two ways. A *clock* starts the scheduled ones (scheduler.due_alarm(),
+asked once per tick); a *gesture* starts the rest via an enter_mode action -
+including the launcher, which then hands over to the app you pick.
+enter_takeover runs them in sequence rather than nesting them; see its
+docstring for why. Long press means "up one level" in every one of them
+(CLAUDE.md's invariants).
 
-Long press means "up one level" in every takeover, which is the one gesture
-convention the whole button leans on (CLAUDE.md's invariants).
+`--demo` runs unattended, so no press will ever arrive: every takeover below
+shows itself for _SUCCESS_DISPLAY_S and returns rather than hanging the smoke
+test, logging one row first where that is the path worth exercising.
 
 Signals: SIGHUP reloads the config, SIGTERM/SIGINT shut down cleanly.
 """
@@ -69,19 +68,18 @@ _ERROR_DISPLAY_S = 1.5
 _SUCCESS_DISPLAY_S = 2.0
 
 # What IDLE looks like while the ambient layer is asleep (config.StandbyAction).
-# Solid rather than any animation, and dim rather than off: "off" and "the
-# button is unplugged" have to be different things to look at, and a light that
-# is not moving is the least attention this build can ask for while still
-# answering the only question standby raises - is it still on?
+# Dim rather than off, and solid rather than animated: "asleep" and "unplugged"
+# have to be different things to look at, and a light that is not moving is the
+# least attention this build can ask for while still answering the only
+# question standby raises - is it still on?
 _STANDBY_COLOR = "#101010"
 
 # How long a control surface holds its per-command confirmation. Much shorter
 # than _SUCCESS_DISPLAY_S on purpose: that one ends with a drop back to IDLE,
-# so two seconds is a pause between separate interactions. A control surface
-# stays open and is meant to be played - Play then Record is one gesture after
-# another, and two seconds of "yes, that went" between them would make the app
-# feel broken. Presses during it are queued rather than lost, so this is a
-# latency choice and not a dropped-input one.
+# while a control surface stays open and is meant to be played - two seconds of
+# "yes, that went" between Play and Record would make the app feel broken.
+# Presses during it are queued rather than lost, so this is a latency choice
+# and not a dropped-input one.
 _CONTROL_CONFIRM_S = 0.3
 
 # How often a clocked metronome re-reads the DAW's tempo. The pulses are being
@@ -104,20 +102,12 @@ _CLOCK_BPM_EPSILON = 0.5
 # cheap scheduler scan per second. It also paces the loop's fault backoff.
 _SCHEDULER_TICK_S = 1.0
 
-# The shortest period the LED may flash at: roughly 3 times a second, per
-# WCAG 2.3.1. It now lives in device.py as SAFE_MIN_PERIOD_S (config imports it
-# too, and device.py is the module both may import) and it is the *default* for
-# `min_flash_period_s` rather than a law - one button on one desk, and its
-# owner may decide it can go faster. Everything here reads the config's
-# effective value; this name is only the fallback for a pure function nobody
-# handed one to.
-#
-# Two consumers, and they work around it differently because they mean
-# different things: run_metronome marks every Nth beat (so raising max_bpm
-# makes the button faster without making the light more dangerous), while
-# run_countdown floors its configured period. Stop lists (sequencer.py) are a
-# third: config.sequence_safe defines the floor over *transitions* (a stop's
-# dwell) rather than over a period, for the reason its docstring gives.
+# The flash floor (device.SAFE_MIN_PERIOD_S, ~3 Hz per WCAG 2.3.1) is the
+# *default* for config.min_flash_period_s rather than a law - one button on one
+# desk, and its owner may decide it can go faster. Everything here reads the
+# config's effective value; the imported constant is only the fallback for a
+# pure function nobody handed one to. `set_led` is the single gate that
+# enforces it (CLAUDE.md).
 
 # How often a stop-list fade is re-sampled while it plays - the floor on how
 # "smooth" a host-driven fade may claim to be. Small enough to look like
@@ -138,11 +128,10 @@ _COUNTDOWN_COLOR_STEP = 4
 # to be obviously not the alarm's flash, which is the whole distinction.
 _REMINDER_PERIOD_S = 2.0
 
-# The reaction timer's two non-ramp colours. Dark is deliberately not *off*:
-# a button that has gone black is indistinguishable from a button that has
-# crashed, and the whole game is spent staring at it waiting for something to
-# happen. The false-start red is bright enough to be obviously a verdict
-# rather than the go signal arriving.
+# The reaction timer's two non-ramp colours. Dark is deliberately not *off*: a
+# black button is indistinguishable from a crashed one, and the whole game is
+# spent staring at it. The false-start red is bright enough to read as a
+# verdict rather than as the go signal arriving.
 _REACTION_DARK = "#050515"
 _REACTION_FALSE_START = "#ff0033"
 
@@ -152,16 +141,12 @@ def metronome_flash(
 ) -> tuple[float, int]:
     """(LED period, how many beats each flash stands for) for a tempo of `bpm`.
 
-    Module-level and pure on purpose. It is the one part of the metronome that
-    is logic rather than I/O, and what it enforces is a safety property - so it
-    is worth checking as a table rather than by tapping a mock device against a
-    real clock, where the assertion ends up being about scheduler jitter.
-
     Tempo and flash rate are separate limits. Past roughly 180 BPM a beat is
     shorter than the light may legally blink, so instead of clamping the tempo
     (which would lie about it) or blinking through the floor (which would be a
     hazard), each flash marks the smallest whole number of beats that lands
-    back inside the floor.
+    back inside the floor. Pure and module-level so that safety property can be
+    checked as a table rather than against a real clock's jitter.
     """
     beat_s = 60.0 / bpm
     per_flash = max(1, math.ceil(min_period_s / beat_s))
@@ -174,14 +159,11 @@ async def _wait_for_trigger(
     """Wait for the next button press, or None once `stop` fires (or the
     optional `timeout` elapses).
 
-    Shared by the main loop and ring_alarm's dismiss/snooze wait, so a
-    ringing or snoozing alarm never blocks graceful shutdown - without
-    this, SIGTERM during a 9-minute snooze would hang for up to 9
-    minutes.
+    Waiting on `stop` too is what keeps a ringing or snoozing alarm from
+    blocking graceful shutdown - without it, SIGTERM during a 9-minute snooze
+    would hang for up to 9 minutes.
 
-    The main loop passes a short `timeout` so it wakes at least once a
-    second to recompute scheduled alarm fires against the (possibly test-)
-    clock; a None return then means "tick, nothing pressed" rather than
+    With a `timeout`, a None return means "tick, nothing pressed" rather than
     "shutting down" - the caller distinguishes via stop.is_set().
     """
     get_task = asyncio.create_task(queue.get())
@@ -219,14 +201,13 @@ class DeviceStatus:
 
 @dataclass
 class FaultTracker:
-    """Counts main-loop faults and decides which ones get logged.
+    """Counts main-loop faults and decides which ones get logged: the first
+    always, then one per `interval_s`.
 
-    Pure - it never logs, it only answers "is this one worth a traceback?",
-    so the throttle is testable without a clock or a logger. The reason it
-    exists: a fault that recurs every tick writes a traceback a second, and
-    over the 24-hour soak in ROADMAP.md that is both a full disk and a log
-    nobody can read. The first fault always logs; after that, one per
-    `interval_s`.
+    A fault that recurs every tick would otherwise write a traceback a second,
+    which over ROADMAP.md's 24-hour soak is both a full disk and a log nobody
+    can read. Pure - it never logs, only answers "worth a traceback?" - so the
+    throttle is testable without a clock or a logger.
     """
 
     interval_s: float = 60.0
@@ -247,12 +228,10 @@ class FaultTracker:
 class Clock:
     """Wall clock with a settable offset - the web UI's "test clock".
 
-    Ambient mode resolution and the alarm scheduler read time through
-    this, so time-windowed modes and scheduled alarms can be tested
-    without waiting for the right hour (set 06:59, watch a 07:00 alarm
-    fire seconds later). The offset keeps ticking (set 06:30, a minute
-    later it is 06:31), never persists across restarts, and does not
-    affect event-log timestamps, which stay real UTC.
+    Ambient mode resolution and the alarm scheduler read time through this, so
+    time-windowed modes and scheduled alarms can be tried without waiting for
+    the right hour. The offset keeps ticking, never persists across restarts,
+    and does not affect event-log timestamps, which stay real UTC.
     """
 
     delta: timedelta = timedelta(0)
@@ -379,37 +358,29 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     # would be a button that comes back dead with nothing on it to say why.
     standby = False
 
-    # The task walking a Sequence look's planner, if one is currently running
-    # - see `_drive_sequence`. Cancelled by `set_led` before it does anything
-    # else, which is what makes a sequence last "until the next state change"
-    # exactly like an ephemeral effect: nothing downstream of `set_led` has
-    # to know a sequence was ever involved.
+    # The task walking a Sequence look's planner, if one is running - see
+    # `_drive_sequence`. Cancelled by `set_led` before it does anything else,
+    # which is what makes a sequence last "until the next state change" exactly
+    # like an ephemeral effect: nothing downstream has to know one was involved.
     sequence_task: asyncio.Task | None = None
 
     async def _drive_sequence(state: LEDState, seq: sequencer.Sequence) -> None:
         """Walk `seq`'s planner, pushing each frame as a plain `LedEffect` -
         never a Sequence itself, since `device.set_led` duck-types its
-        `effect` on `.style`/`.color`/`.color2`/`.period_s` (device.py) and a
-        Sequence has none of those.
-
-        A frame is solid mid-fade and wears the stop's own style during its
-        hold (TODO 36c), so a stop list can hold "flashing yellow" as one of
-        its nodes without the fade into it flashing on the way.
+        `effect` on `.style`/`.color`/`.color2`/`.period_s` (device.py). A
+        frame is solid mid-fade and wears the stop's own style during its hold
+        - `sequencer.plan_at` decides that, per CLAUDE.md.
 
         Pushes go straight through `device.set_led`, *not* through the
         `set_led` closure above: that closure cancels this very task on every
-        call, and calling it from inside its own task would cancel itself one
-        step in. `flash_safe` is skipped here because `sequence_safe` has
-        already floored *both* axes of this sequence before the task started -
-        the stop dwells and each stop's own style period - so there is nothing
-        left for a per-push clamp to catch, and adding one would be the second
-        call site CLAUDE.md forbids.
+        call, so calling it from inside its own task would cancel itself one
+        step in. `flash_safe` is skipped for the same reason a second clamp is
+        always wrong (CLAUDE.md): `sequence_safe` already floored both of this
+        sequence's axes before the task started.
 
         **Assumes the host is awake and connected**, like every run_* loop in
-        this file (CLAUDE.md) - the sleeps below are wall-clock, and a host
-        that is asleep or disconnected simply stops advancing the sequence
-        rather than catching up, which is the same trade every other timed
-        effect in this module already makes.
+        this file (CLAUDE.md) - the sleeps are wall-clock, so a host that is
+        asleep stops advancing the sequence rather than catching up.
         """
         loop = asyncio.get_running_loop()
         start = loop.time()
@@ -438,19 +409,16 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         allocating a global LEDState (ROADMAP D4).
 
         With no explicit effect, the *active mode's* look for this state is
-        used if it has chosen one. That is what makes two Pomodoros able to
-        look different: the state stays `WORKING` for both, and only its
-        appearance differs. A mode that has chosen nothing resolves to None and
-        the device falls back to the palette, exactly as before looks existed.
+        used if it has chosen one; that is what lets two Pomodoros look
+        different while both stay in `WORKING`. A mode that chose nothing
+        resolves to None and the device falls back to the palette.
 
-        A look that is a stop list (`sequencer.Sequence`) is not pushed
-        directly - the device only understands one effect at a time, not a
-        schedule - so it is handed to `_drive_sequence` instead, which pushes
-        the sequence's steps one at a time as plain effects. Every call here
-        first cancels whatever sequence task is currently running, whatever
-        `state`/`effect` turn out to be: a sequence lasts until the next
-        state change, exactly like an ephemeral effect, and "the next state
-        change" includes this call turning out to want another sequence.
+        A look that is a stop list (`sequencer.Sequence`) is handed to
+        `_drive_sequence` rather than pushed - the device understands one
+        effect at a time, not a schedule. Every call here first cancels
+        whatever sequence task is running, whatever `state`/`effect` turn out
+        to be: a sequence lasts until the next state change exactly like an
+        ephemeral effect, and that includes this call wanting another one.
         """
         nonlocal sequence_task
         if sequence_task is not None:
@@ -460,21 +428,16 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         if effect is None:
             effect = look_for(cm.config, active_mode, state)
         if standby and state is LEDState.IDLE:
-            # Standby dims the *resting* light and only that. It is the ambient
-            # layer that is asleep, so IDLE is the one state that should look
-            # different, and a scheduled alarm ringing through a standby must
-            # still look like an alarm. Substituted here, at the same point a
-            # mode's own look is, rather than at each of the several places
-            # that drop back to IDLE - those would drift, and one of them
-            # already does the drop after a takeover the ambient layer never
-            # saw start.
-            #
-            # It wins over whatever IDLE would otherwise wear, a named look
-            # included (TODO 36a): the one thing this light has to say is
-            # "asleep", and a configured IDLE look is exactly what would hide
-            # it. Nothing reachable pushes an explicit IDLE effect while
-            # asleep - the readout is ambient, so the gate in `handle` has
-            # already turned it away.
+            # Standby dims the *resting* light and only that: it is the ambient
+            # layer that is asleep, and an alarm ringing through a standby must
+            # still look like an alarm. Substituted here, where a mode's own
+            # look is, rather than at each of the several places that drop back
+            # to IDLE - those would drift. It wins over whatever IDLE would
+            # otherwise wear, a named look included (TODO 36a): "asleep" is the
+            # one thing this light has to say, and a configured IDLE look is
+            # exactly what would hide it. Nothing reachable pushes an explicit
+            # IDLE effect while asleep - the readout is ambient, so `handle`'s
+            # gate turned it away already.
             effect = LedEffect(style="solid", color=_STANDBY_COLOR)
 
         if isinstance(effect, sequencer.Sequence):
@@ -491,11 +454,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             return
 
         # The one gate every pushed look passes through, which is why the floor
-        # is enforced here rather than in each run_* loop: a mode computing its
-        # own effect (the metronome's period, the countdown's colour) cannot
-        # route around it, and neither can a look someone hand-edited into a
-        # scene file. The palette's own entries are floored where they are
-        # pushed - the device renders those without asking.
+        # lives here rather than in each run_* loop: a mode computing its own
+        # effect (the metronome's period, the countdown's colour) cannot route
+        # around it, and neither can a look hand-edited into a scene file. The
+        # palette's own entries are floored in push_palette instead.
         effect = flash_safe(effect, cm.config.min_flash_period_s)
         device.set_led(state, effect)
         status.led_state = state.value
@@ -503,9 +465,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
     def push_palette(palette: dict) -> None:
         """Send the stored palette, floored. Separate from `set_led` because
-        the device renders these entries on its own when no effect overrides
-        them, so a strobing palette entry would never pass through the gate
-        above."""
+        the device renders these entries unasked when no effect overrides them,
+        so a strobing palette entry would never pass that gate."""
         device.set_palette(
             {
                 name: flash_safe(entry, cm.config.min_flash_period_s)
@@ -513,9 +474,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             }
         )
 
-    # Deferred until push_palette exists, rather than pushed raw at connect
-    # time: the very first palette the button ever sees has to be inside the
-    # floor too. Nothing between here and device.start() reads the palette.
+    # Deferred until push_palette exists rather than pushed raw at connect
+    # time: the very first palette the button sees has to be inside the floor
+    # too. Nothing between here and device.start() reads the palette.
     push_palette(cm.config.led_palette)
 
     def base_look(state: LEDState):
@@ -523,14 +484,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         it has one, the palette entry otherwise. What `run_countdown` walks the
         colour of, and what `run_metronome` rewrites the period of.
 
-        A stop-list look has no single style or period to build on top of, so
-        it is treated the same as no look chosen at all: the palette entry,
-        exactly like a mode that named nothing. That does not make a sequence
-        a second-class look - `set_led` above renders one directly wherever a
-        mode's look is used as-is (its static states, a reminder, a launcher's
-        preview) - it only means the *derived, host-animated* effects this
-        function feeds (a ramp, a beat pulse, a ladder tick) need something
-        with a style and a period to modify, which a schedule is not.
+        A stop-list look falls back to the palette entry, exactly like a mode
+        that named nothing: the *derived, host-animated* effects this function
+        feeds (a ramp, a beat pulse, a ladder tick) need a style and a period
+        to modify, which a schedule is not. `set_led` still renders a sequence
+        directly wherever a mode's look is used as-is.
         """
         look = look_for(cm.config, active_mode, state)
         if isinstance(look, sequencer.Sequence):
@@ -542,10 +500,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         can drive (TODO 36d). None otherwise, including for a plain effect.
 
         The counterpart of `base_look`: that one asks "what do I animate on top
-        of", which a schedule cannot answer, and this one asks "did someone
-        hand me a schedule to sample". A run loop that owns a number - a
-        countdown's progress, a metronome's beat - asks this first, and only
-        falls back to its own ramp or ladder when nothing was named.
+        of", this one "did someone hand me a schedule to sample". A run loop
+        that owns a number - a countdown's progress, a metronome's beat - asks
+        this first and falls back to its own ramp or ladder.
         """
         look = look_for(cm.config, active_mode, state)
         if isinstance(look, sequencer.Sequence) and look.drive == drive:
@@ -555,20 +512,17 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     def sampled_paint(state: LEDState, seq: sequencer.Sequence):
         """A `paint(fraction)` that shows `seq` sampled at 0..1.
 
-        The sampled twin of `ladder_paint`, and it makes the same two moves for
-        the same reasons: pushes go through the central `set_led` (so the flash
-        floor runs on every one of them, once, where it always has), and a
-        frame identical to the last is not pushed at all - a radio whose
-        contract is fire-and-forget should not carry a colour that has not
-        moved (`ramp.differs`, as `run_countdown`'s own ramp already does).
+        The sampled twin of `ladder_paint`, making the same two moves for the
+        same reasons: pushes go through the central `set_led`, and a frame
+        identical to the last is not pushed at all (`ramp.differs` - a
+        fire-and-forget radio should not carry a colour that has not moved).
 
-        `sequence_safe` is deliberately *not* applied here, and the reason is
-        that it would be measuring the wrong thing. Its dwell floor asks how
-        fast one stop follows another, which for a sampled sequence is decided
-        by how fast the app's number moves and not by the stops at all - a
-        countdown steps once a second whatever its stop list says. The half of
-        it that still applies, a stop's own strobing style, is `flash_safe`'s
-        job and runs inside `set_led` on every push below.
+        `sequence_safe` is deliberately *not* applied here: its dwell floor
+        asks how fast one stop follows another, which for a sampled sequence is
+        decided by how fast the app's number moves and not by the stops at all
+        - a countdown steps once a second whatever its stop list says. The half
+        that still applies, a stop's own strobing style, is `flash_safe`'s job
+        inside `set_led`.
         """
         shown: sequencer.Frame | None = None
 
@@ -599,14 +553,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
         **The flash floor applies to the cadence, not to the effect's period.**
         A ladder changes colour every tick, so a 0.1s tick is a 10 Hz change
-        rate however sedate the underlying style is - which is exactly the hole
-        `flash_safe` cannot see, since it reads `period_s` and a `solid` never
-        strobes by its own reckoning. Flooring the tick is the same safety
-        property enforced over the axis that actually moves here.
-
-        Colours are pushed only when they change, for the reason ramp.differs
-        exists: a ladder is a couple of writes a second on a radio whose whole
-        contract is fire-and-forget, and most ticks repeat the previous colour.
+        rate however sedate the underlying style is - the hole `flash_safe`
+        cannot see, since it reads `period_s` and a `solid` never strobes by
+        its own reckoning. Colours are pushed only when they change: most ticks
+        repeat the previous colour, and the radio is fire-and-forget.
         """
         tick = max(spec.tick_s, cm.config.min_flash_period_s)
         shown: str | None = None
@@ -672,9 +622,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 # The endpoint runs on this loop, so setting the event
                 # directly is safe and needs no thread hop.
                 on_stop=stop.set,
-                # Frozen here so the scene endpoints can tell the user which
-                # of their changes are waiting on a restart: the store, the
-                # lock, the web bind and the BLE name were all decided above.
+                # Frozen here so the scene endpoints can say which changes are
+                # waiting on a restart: the store, the lock, the web bind and
+                # the BLE name were all decided above.
                 startup_config=cm.config,
             )
             web_server = make_server(
@@ -686,9 +636,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 and t.exception()
                 and log.error("web UI stopped: %s", t.exception())
             )
-            log.info(
-                "web UI on http://%s:%d", cm.config.web_host, cm.config.web_port
-            )
+            log.info("web UI on http://%s:%d", cm.config.web_host, cm.config.web_port)
         except Exception as exc:
             log.error("web UI unavailable (%s) - continuing without it", exc)
             web_server = None
@@ -696,11 +644,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     loop = asyncio.get_running_loop()
 
     # SIGHUP is POSIX-only and reloads the config. SIGTERM/SIGINT exist
-    # everywhere and are the graceful-shutdown hook - they used to sit behind
-    # the same SIGHUP check, which meant Windows (the host this actually runs
-    # on) had no graceful shutdown at all: Ctrl+C unwound as KeyboardInterrupt
-    # straight through the takeover loops instead of letting them exit on
-    # `stop` and stop their own timers and alarms.
+    # everywhere and are wired *outside* that check, because Windows (the host
+    # this actually runs on) would otherwise have no graceful shutdown at all:
+    # Ctrl+C unwinds as KeyboardInterrupt straight through the takeover loops
+    # instead of letting them exit on `stop` and stop their timers and alarms.
     if hasattr(signal, "SIGHUP"):
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(signal.SIGHUP, cm.reload)
@@ -740,13 +687,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     async def ring_alarm(behavior: AlarmBehavior, mode_name: str) -> ActionResult:
         """Ring (ALERT LED + looping ALARM tone) for a takeover alarm mode
         until the next press dismisses it, or - on long_press with
-        snooze_minutes set - go quiet for that long and ring again. The
-        snooze wait uses _wait_for_trigger so SIGTERM during a long snooze
-        still shuts down promptly instead of waiting it out."""
+        snooze_minutes set - go quiet for that long and ring again. Both waits
+        watch `stop`, so SIGTERM during a long snooze shuts down promptly
+        instead of waiting it out."""
         label = behavior.message or behavior.label or mode_name
         if args.demo:
-            # --demo runs unattended: no press will ever arrive to dismiss
-            # this, so show it briefly instead of hanging the smoke test.
             set_led(LEDState.ALERT)
             start_loop(Sound.ALARM)
             status.last_message = label
@@ -780,13 +725,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     def reminder_look(behavior: ReminderBehavior):
         """What a reminder shows on ALERT.
 
-        A named look wins, exactly as everywhere else. With none chosen the
-        fallback is *not* the bare ALERT palette entry, because that is the
-        ringing-alarm look and a reminder that is indistinguishable from an
-        alarm has failed at the one thing it is for. Breathing the same colour
-        reads as "notice me" where the alarm's hard flash reads as "deal with
-        me", and it costs no wire code: it is an ephemeral effect over the
-        state the mode already owns.
+        A named look wins, as everywhere else. With none chosen the fallback is
+        *not* the bare ALERT palette entry - that is the ringing-alarm look,
+        and a reminder indistinguishable from an alarm has failed at the one
+        thing it is for. Breathing the same colour reads as "notice me" where
+        the alarm's hard flash reads as "deal with me", and costs no wire code.
         """
         chosen = look_for(cm.config, active_mode, LEDState.ALERT)
         if chosen is not None:
@@ -800,21 +743,14 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         """A scheduled nudge: flash until any press clears it, or until it
         gives up on its own.
 
-        Three deliberate differences from `ring_alarm`, which is the template
-        this parallels and does not touch:
-
-        *Any* press clears it, rather than a nominated gesture. Requiring a
-        specific one would make a reminder as demanding as an alarm, which is
-        the thing it exists not to be - and it keeps the "escapable with a
-        press" invariant trivially true.
-
-        No snooze, and no loop. A reminder that could be postponed is an alarm
-        with extra steps; if you want it again, schedule it again.
-
-        It times out. `timeout_minutes` (0 = wait forever) is the other half of
-        being ignorable - a reminder nobody was in the room for should not
-        still be flashing at midnight. A timeout is not a clear: nothing is
-        logged, because nobody saw it.
+        Three deliberate differences from `ring_alarm`, which this parallels
+        and does not touch. *Any* press clears it, because requiring a
+        nominated gesture would make a reminder as demanding as an alarm. No
+        snooze and no loop - a reminder you could postpone is an alarm with
+        extra steps; schedule it again instead. And it times out
+        (`timeout_minutes`, 0 = wait forever), because a reminder nobody was in
+        the room for should not still be flashing at midnight. A timeout is not
+        a clear: nothing is logged, because nobody saw it.
         """
         label = behavior.message or behavior.label or mode_name
         set_led(LEDState.ALERT, reminder_look(behavior))
@@ -824,8 +760,6 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         set_status("REMINDING")
 
         if args.demo:
-            # --demo runs unattended: no press will ever arrive, so show it
-            # briefly rather than hanging the smoke test.
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             return ActionResult(True, f"{label} (demo: flashes until cleared)")
 
@@ -843,40 +777,31 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         """Run a mode's `on_enter` / `on_exit` action, if it has one.
 
         `session` is what the app just reported about itself - a flat dict of
-        numbers, or None from every app that has nothing to say and from every
-        `on_enter` (there is no session to report as one begins). It is checked
-        against the contract *here*, at the one place a summary turns into
-        something that leaves the machine, rather than at each app's return
+        numbers, or None from an app with nothing to say and from every
+        `on_enter`. It is checked against the contract *here*, at the one place
+        a summary leaves the machine, rather than at each app's return
         statement: one gate, for the reason the flash floor has one.
 
         **A hook can never stop a mode starting or ending.** Everything below
-        that can go wrong - a pool entry that is not there, a webhook that
-        404s, a MIDI port that has gone away, a bug in a primitive - ends as a
-        log line and nothing else. The alternative is an app you cannot leave
-        because a server across the room is down, which is the same bargain the
-        LED and the buzzer already make: the result is *forgotten*, not acted
-        on. `on_exit` is awaited: the mode is ending anyway, so nothing is
-        kept waiting by it, and a launcher's chain depends on each app's exit
-        landing before the next app's entry. `on_enter` is deliberately *not*
-        awaited - see `spawn_hook`.
+        that can go wrong - a missing pool entry, a webhook that 404s, a MIDI
+        port that has gone away, a bug in a primitive - ends as a log line and
+        nothing else, because an app you cannot leave while a server across the
+        room is down is the worse failure. `on_exit` is awaited (nothing is
+        kept waiting by it, and a launcher's chain needs each app's exit to
+        land before the next app's entry); `on_enter` is not - see `spawn_hook`.
 
-        Deliberately silent in `status` and on the light: on the way out the
-        app's own result is what the status line is reporting, and a THINKING
-        flash around something nobody pressed for would be the plumbing
-        showing through.
+        Deliberately silent in `status` and on the light: the app's own result
+        is what the status line is reporting, and a THINKING flash around
+        something nobody pressed for would be the plumbing showing through.
         """
         bound = getattr(mode, which)
         if bound is None:
             return  # the overwhelmingly common case, and it costs one getattr
         # The fourth place an action is dispatched, so the fourth place a bare
-        # name has to be turned back into an action (CLAUDE.md). Without this a
-        # hook could not use the pool at all, and would fail silently rather
-        # than visibly - which is the whole reason the rule is written down.
+        # name has to be turned back into an action (CLAUDE.md).
         action = resolve_action(cm.config, bound)
         if action is None:
-            log.warning(
-                "mode %r %s: no action named %r", mode.name, which, bound.name
-            )
+            log.warning("mode %r %s: no action named %r", mode.name, which, bound.name)
             return
         # Cleaned after the early returns above, so an app that reports
         # something into a mode with no hook - or with a dangling one - pays
@@ -903,12 +828,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     def spawn_hook(mode, which: str) -> None:
         """Fire an entry hook without waiting for it.
 
-        TODO 31 says a hook is fire-and-forget *like all feedback*, and in this
-        codebase that phrase is load-bearing: `set_led` and friends never wait
-        on the radio (CLAUDE.md). Awaiting `on_enter` would put up to
-        `actions.WEBHOOK_TIMEOUT_S` between your press and the app opening,
-        which is not a failure any bounded-cost argument makes acceptable - a
-        five-second pause before a Pomodoro starts reads as a broken button,
+        A hook is fire-and-forget *like all feedback* (TODO 31), and here that
+        phrase is load-bearing: awaiting `on_enter` would put up to
+        `actions.WEBHOOK_TIMEOUT_S` between your press and the app opening, and
+        a five-second pause before a Pomodoro starts reads as a broken button,
         not as a slow server.
 
         The set is not bookkeeping: `asyncio` holds only a weak reference to a
@@ -932,10 +855,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         log.info("scheduled mode %r firing", mode.name)
         entered_at = store.log_mode_enter(mode.name)
         active_mode = mode  # so ALERT wears this mode's look, if it has one
-        # The other place a mode is entered and left, and hooks fire from both.
-        # An alarm that reached you because the clock said so is the same
-        # session as one you started by hand, and the same mode firing its hook
-        # on one path and not the other would be indefensible.
+        # The other place a mode is entered and left, and hooks fire from both:
+        # an alarm the clock started is the same session as one you started by
+        # hand.
         spawn_hook(mode, "on_enter")
         try:
             if isinstance(mode.behavior, ReminderBehavior):
@@ -956,10 +878,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     async def run_stopwatch(behavior: StopwatchBehavior, mode_name: str) -> ActionResult:
         """Takeover stopwatch: start a timer, then own the button - short_press
         or double_tap marks a lap (logs `<log_as>_lap`), long_press stops and
-        exits (logs the elapsed time via toggle_timer, reusing the timer_toggle
-        action's elapsed formatting). A None trigger (shutdown) stops the
-        running timer so it isn't left open, then exits. The caller drops the
-        LED/status back to IDLE.
+        exits (logs the elapsed time via toggle_timer). A None trigger
+        (shutdown) stops the running timer so it isn't left open, then exits.
+        The caller drops the LED/status back to IDLE.
 
         Reports `elapsed_s` and `laps` on the way out (summary.py) - the two
         numbers a stopwatch is, and both already here."""
@@ -983,9 +904,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         running = True
         try:
             if args.demo:
-                # --demo is unattended: no press will arrive, so show it
-                # briefly, stop the timer (don't leave it open), and exit.
-                await asyncio.sleep(_SUCCESS_DISPLAY_S)
+                await asyncio.sleep(_SUCCESS_DISPLAY_S)  # then close the timer
                 running = False
                 _, elapsed = store.toggle_timer(log_as, mode=mode_name)
                 return ActionResult(
@@ -994,9 +913,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 )
             # With a subdivision ladder on, the stopwatch grows a tick: the
             # light has to say what time it is, which means waking to change
-            # it. Without one it still blocks indefinitely on the next press,
-            # exactly as before - a stopwatch that woke twice a second to
-            # repaint a colour nobody asked for would be pure radio traffic.
+            # it. Without one it blocks indefinitely on the next press - waking
+            # twice a second to repaint a colour nobody asked for would be
+            # pure radio traffic.
             ticking, tick_s = (
                 ladder_paint(behavior.ladder, LEDState.TIMING)
                 if behavior.ladder.enabled else (None, None)
@@ -1010,9 +929,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                     continue  # a tick, not a press: repaint and keep waiting
                 if trigger is None:  # shutting down mid-run - stop the open timer
                     running = False
-                    # The elapsed time was already coming back from here and
-                    # was being thrown away; a session cut short by a shutdown
-                    # is still a session, and reports the same two numbers.
+                    # A session cut short by a shutdown is still a session, and
+                    # reports the same two numbers.
                     _, elapsed = store.toggle_timer(log_as, mode=mode_name)
                     return ActionResult(
                         True, f"{log_as} stopped (shutdown)", tally(elapsed)
@@ -1043,18 +961,14 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         count, long_press exits with a session summary. A None trigger
         (shutdown) just exits. The caller drops the LED/status back to IDLE.
 
-        Reading the starting count from the store rather than a local zero is
-        TODO 15's "one line of state": an ambient `log`/`readout` binding and
-        this takeover both log the same event name, and there is no second
-        tally to keep in sync - counting from Home and then entering the
-        Counter to continue agrees by construction, because they were already
-        the same rows. No reset gesture exists here to reconsider: the only
-        bindings are short_press/double_tap (+1) and long_press (exit).
+        Starting from the store rather than a local zero is TODO 15's "one line
+        of state": an ambient `log`/`readout` binding and this takeover log the
+        same event name, so counting from Home and then entering the Counter to
+        continue agrees by construction - they were already the same rows.
 
         Reports both numbers it holds (summary.py): `count`, the day's total,
-        and `added`, this session's share of it. They are different questions -
-        "how many today" and "how many just now" - and a receiver that only
-        ever got the first could not tell a busy session from an idle one."""
+        and `added`, this session's share of it. A receiver that only ever got
+        the first could not tell a busy session from an idle one."""
         event = behavior.event
         count = store.count_today(event)
         opened_at = count  # what the day already held, so `added` can be told
@@ -1067,9 +981,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             return {"count": count, "added": count - opened_at}
 
         if args.demo:
-            # --demo is unattended: log one increment so the path is exercised,
-            # then exit with a summary instead of hanging the smoke test.
-            store.log_event(event, mode=mode_name)
+            store.log_event(event, mode=mode_name)  # one increment, then out
             count += 1
             play_sound(Sound.ACK)
             status.last_message = f"{event}: {count}"
@@ -1097,11 +1009,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         the test clock: shifting the clock to try a time-windowed mode should
         not make a 25-minute block end instantly.
 
-        Which gesture does what is configurable (behavior.gestures), and so is
-        how transitions happen (behavior.advance) - the two things people
-        disagree about most. What is *not* configurable is that a finished
-        work block gets logged, so counts and streaks work on focus time the
-        same way they work on everything else.
+        Which gesture does what (behavior.gestures) and how transitions happen
+        (behavior.advance) are configurable - the two things people disagree
+        about most. What is *not* is that a finished work block gets logged, so
+        counts and streaks work on focus time like they do on everything else.
         """
         loop = asyncio.get_running_loop()
         completed = 0  # work blocks finished this session
@@ -1126,9 +1037,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         def show() -> None:
             state = LEDState.WORKING if working else LEDState.RESTING
             if leading:
-                # The work phase's colour, frozen - the lead-in is about the
-                # block that is coming, so wearing its colour is what tells you
-                # which one. Same trick as paused/pending below.
+                # The work phase's colour, frozen: the lead-in is about the
+                # block that is coming, so wearing its colour says which one.
                 base = base_look(state)
                 set_led(state, replace(base, style=behavior.waiting_style)
                         if base is not None else None)
@@ -1139,13 +1049,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 )
                 return
             if paused or pending:
-                # The same phase's colour - the mode's own look if it named
-                # one, else the palette entry - frozen into waiting_style
-                # instead of its usual animation. Not LISTENING: that is the
-                # button's global "your press registered" state, edited once
-                # in the Lights tab, and a Pomodoro does not own it (see
-                # MODE_LED_STATES) - which is exactly why it used to override
-                # whatever look this mode had chosen.
+                # The same phase's colour, frozen into waiting_style instead of
+                # its usual animation. Not LISTENING: that is the button's
+                # global "your press registered" state, edited once in the
+                # Lights tab, and a Pomodoro does not own it (MODE_LED_STATES).
                 base = base_look(state)
                 effect = (
                     replace(base, style=behavior.waiting_style)
@@ -1177,9 +1084,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
         def summary(suffix: str = "") -> ActionResult:
             text = f"{completed} block(s), {_fmt_elapsed(focused_s)} focused"
-            # Every exit already came through here, so the session's numbers
-            # ride out of one place rather than seven (summary.py). Rounded
-            # because focused_s is a sum of floats and nobody's exit hook wants
+            # Every exit comes through here, so the session's numbers ride out
+            # of one place rather than seven (summary.py). Rounded because
+            # focused_s is a sum of floats and no exit hook wants
             # 1500.0000000000002 seconds.
             return ActionResult(
                 True, f"{mode_name}: {text}{suffix}",
@@ -1190,9 +1097,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         show()
 
         if args.demo:
-            # --demo is unattended: log one block so the path is exercised,
-            # then leave rather than sitting here for 25 minutes.
-            store.log_event(behavior.log_as, mode=mode_name)
+            store.log_event(behavior.log_as, mode=mode_name)  # one block, then out
             completed, focused_s = 1, behavior.work_s
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             return summary(" (demo)")
@@ -1222,9 +1127,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                     store.log_event(behavior.log_as, mode=mode_name)
                     play_sound(Sound.SUCCESS)
                     if behavior.rounds and completed >= behavior.rounds:
-                        # A counted session ends itself. Checked after the
-                        # block is logged, so the last round counts exactly
-                        # like the ones before it.
+                        # Checked after the block is logged, so the last round
+                        # counts exactly like the ones before it.
                         return summary(" - session complete")
                 else:
                     play_sound(Sound.ACK)
@@ -1285,14 +1189,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         pulses at the resulting tempo as an ephemeral effect, so the session
         never touches the stored palette and nothing has to be put back.
 
-        How this goes fast. The tempo and the flash rate are different limits.
-        `max_bpm` bounds the tempo and is yours to raise;
-        `min_flash_period_s` bounds how often the light may blink and defaults
-        to a photosensitivity floor. Above roughly 180 BPM those
-        two collide, so rather than clamp the tempo (a lie) or flash through
-        the floor (a hazard), the light marks every Nth beat - the smallest N
-        that keeps it inside the floor. The tempo stays honest and the LED
-        stays safe.
+        Fast tempos stay honest: `max_bpm` is yours to raise, and where it
+        collides with the flash floor the light marks every Nth beat rather
+        than the tempo being clamped - see `metronome_flash`.
         """
         loop = asyncio.get_running_loop()
         taps: list[float] = []  # loop.time() of recent beats, oldest first
@@ -1302,18 +1201,16 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         set_status("METRONOME")
         status.last_mode = mode_name
 
-        # Two ways to put a colour on a beat, and the same precedence the
-        # countdown uses: **a named beats-driven stop list wins over a ladder**,
-        # because you had to build it, name it and point this mode at it, while
-        # a ladder is a checkbox on the mode itself (TODO 36d).
+        # Two ways to put a colour on a beat, in the precedence CLAUDE.md sets
+        # out: **a named beats-driven stop list wins over a ladder** (TODO 36d).
         #
         # Both count *beats*, not seconds - the tempo already decides the
         # timing, so what a colour adds is an accent ("every 4th beat"), and a
-        # seconds-based version would drift against the tempo the moment you
-        # tapped a new one. Both also change who drives the light: normally the
-        # device animates the pulse and the host only sends a period, but a
-        # colour per beat has to come from the host, so the loop grows a beat
-        # clock below whenever either is in play.
+        # seconds-based version would drift the moment you tapped a new tempo.
+        # Both also change who drives the light: normally the device animates
+        # the pulse and the host only sends a period, but a colour per beat has
+        # to come from the host, so the loop grows a beat clock below whenever
+        # either is in play.
         beat_seq = driven_look(LEDState.METRONOME, "beats")
         beat_cycle = sequencer.span_total(beat_seq) if beat_seq is not None else 0.0
         if beat_seq is not None and beat_cycle <= 0:
@@ -1354,11 +1251,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
             With anything painting per beat - a ladder or a beats-driven stop
             list - the period is *not* pushed: the beat clock already owns the
-            light, and asking the device to also pulse underneath would be two
-            clocks on one light. `per_flash` is still returned, because it is
-            the number of beats the light may mark without crossing the flash
-            floor, and both painters obey that same grouping rather than
-            inventing a second safety rule.
+            light, and pulsing underneath it would be two clocks on one light.
+            `per_flash` still comes back, because it is how many beats the
+            light may mark without crossing the flash floor and both painters
+            obey that same grouping rather than inventing a second rule.
             """
             base = base_look(LEDState.METRONOME)
             period, per_flash = metronome_flash(tempo, cm.config.min_flash_period_s)
@@ -1377,8 +1273,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         status.last_message = f"tap to set the tempo (from {round(behavior.start_bpm)} BPM)"
 
         # Following a DAW's clock, if this mode is configured to. A port that
-        # is not there costs the sync and nothing else: the mode opens as the
-        # tap metronome it has always been, because a practice tool that
+        # is not there costs the sync and nothing else - a practice tool that
         # refuses to run because a DAW is shut is the wrong trade.
         #
         # **This is host-side forever**, not one of the "assumes the host is
@@ -1396,9 +1291,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 status.last_message = f"no MIDI clock ({exc}) - tap to set the tempo"
                 clock = None
 
-        # The beat clock, which only exists when a ladder does. It runs from
-        # `start_bpm` immediately, for the same reason push_tempo does: the
-        # light should already be keeping time before the first tap lands.
+        # The beat clock, which only exists when something paints per beat. It
+        # runs from `start_bpm` immediately, for the same reason push_tempo
+        # does: the light should keep time before the first tap lands.
         beat_no = 0
         beat_step = 60.0 / behavior.start_bpm * per_flash
         next_beat = loop.time() + beat_step if beat_driven else None
@@ -1426,14 +1321,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 # The pulses stopped without a `0xFC` - the DAW was quit,
                 # unplugged or paused mid-stream. Freeze at the last tempo and
                 # say so: a metronome that blanks the moment a cable twitches
-                # is less useful than one that keeps time and tells you it is
-                # on its own now.
+                # is less useful than one that keeps time on its own.
                 if bpm is not None:
                     status.last_message = f"{describe(bpm, per_flash)} (clock stopped)"
                 return
-            # A threshold, not equality: the estimate wanders by a fraction of
-            # a BPM and re-pushing on every wobble would be a radio write
-            # several times a second for a light nobody can see change.
+            # A threshold, not equality - see _CLOCK_BPM_EPSILON.
             if bpm is None or abs(fresh - bpm) >= _CLOCK_BPM_EPSILON:
                 take_tempo(fresh, now)
             status.last_message = (
@@ -1442,8 +1334,6 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             )
 
         if args.demo:
-            # --demo is unattended: no tap will ever arrive, so show it
-            # briefly and exit instead of hanging the smoke test.
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             if clock is not None:
                 clock.stop()
@@ -1451,7 +1341,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         next_poll = loop.time() + _CLOCK_POLL_S if clock is not None else None
         try:
             while True:
-                # Two clocks want waking: the ladder's beat and the tempo poll.
+                # Two clocks want waking: the beat and the tempo poll.
                 # Whichever is sooner sets the timeout, and both are checked on
                 # arrival, so neither can starve the other.
                 deadlines = [d for d in (next_beat, next_poll) if d is not None]
@@ -1466,9 +1356,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                         poll_clock(now)
                     if next_beat is not None and now >= next_beat:
                         # A beat, not a press. Advancing by `per_flash` keeps
-                        # the beat *number* honest at tempos where the light may
-                        # only mark every Nth one - the ladder is read in beats,
-                        # not in flashes.
+                        # the beat *number* honest at tempos where the light
+                        # marks only every Nth one - a painter reads beats, not
+                        # flashes.
                         beat_no += per_flash
                         paint_beat(beat_no)
                         next_beat += beat_step
@@ -1482,12 +1372,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                     # duration comes free from the mode_enter/mode_exit pair,
                     # so "when did I practise, how long, how fast" is a query
                     # rather than a guess.
-                    store.log_event(
-                        behavior.log_as, mode=mode_name, value=round(bpm, 1)
-                    )
-                    _, per_flash = metronome_flash(
-                        bpm, cm.config.min_flash_period_s
-                    )
+                    store.log_event(behavior.log_as, mode=mode_name, value=round(bpm, 1))
+                    _, per_flash = metronome_flash(bpm, cm.config.min_flash_period_s)
                     return ActionResult(
                         True, f"{describe(bpm, per_flash)} over {beats} beats"
                     )
@@ -1524,35 +1410,26 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         from one end of the ramp to the other, so "flash" and "fade over the
         timer" are not two settings fighting over the same light.
 
-        Long press leaves early (a takeover mode must be escapable with a
-        press); any other press acknowledges without stopping the clock, since
-        the time left is already on the status line.
+        Long press leaves early; any other press acknowledges without stopping
+        the clock, since the time left is already on the status line.
 
-        **The ramp is still walked host-side, and knowingly so.** Each colour
-        goes down as an *ephemeral effect* now (ROADMAP D4) rather than by
-        rewriting the TIMING palette entry, so a countdown no longer edits
-        state it does not own and nothing has to be put back afterwards - the
-        look ends by itself at the next plain `set_led`. What it still costs is
-        a radio write every few seconds and a host that is awake to send them;
-        moving the ramp itself onto the device is what fixes that, and this is
-        the shape it moves in.
-
-        TIMING is still the state being shown, because a state is what the
-        status line and the web UI report. Only its appearance is borrowed.
+        **The ramp is walked host-side, and knowingly so**: each colour goes
+        down as an ephemeral effect (ROADMAP D4), which costs a radio write
+        every few seconds and a host awake to send them. Moving the ramp onto
+        the device is what fixes that, and this is the shape it moves in.
+        TIMING stays the state being shown - that is what the status line and
+        the web UI report - and only its appearance is borrowed.
         """
         loop = asyncio.get_running_loop()
         total = behavior.minutes * 60
         deadline = loop.time() + total
         label = behavior.label or mode_name
         # Where the *shape* of the light comes from. A named look wins when the
-        # mode has one - looks exist to be a mode's appearance, so having the
-        # template's own fields quietly override one would make choosing a look
-        # do nothing here. With no look these are the template's fields, which
-        # is what a countdown has always used. A stop-list look has no style
-        # or period to take instead - same non-fatal fallback as base_look,
-        # spelled out here with a warning because, unlike base_look's other
-        # callers, this one only runs once per countdown rather than every
-        # tick, so the cost of saying why is negligible.
+        # mode has one - looks exist to be a mode's appearance, so letting the
+        # template's own fields override one would make choosing a look do
+        # nothing here. A stop-list look has no style or period to take: same
+        # fallback as base_look, warned about here because this runs once per
+        # countdown rather than every tick.
         look = look_for(cm.config, active_mode, LEDState.TIMING)
         if isinstance(look, sequencer.Sequence):
             log.warning(
@@ -1562,17 +1439,16 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             )
             look = None
         style = look.style if look is not None else behavior.style
-        # No floor applied here any more: every effect this loop pushes goes
-        # through set_led, which is the one place that enforces it. Flooring
-        # again would only make this the second place to keep in step.
+        # Unfloored: every effect this loop pushes goes through set_led, the
+        # one place that enforces it.
         period = look.period_s if look is not None else behavior.period_s
         pushed: str | None = None
 
         # A ramp can only be seen through a style that renders `color`. A
-        # rainbow is all the hues by definition and ignores it (see
-        # STYLE_USES_COLOR), so walking a ramp underneath one is invisible *and*
-        # costs a radio write every time it moves. Say so once and stop pushing,
-        # rather than sending colour into a style that discards it.
+        # rainbow is all the hues by definition and ignores it
+        # (STYLE_USES_COLOR), so walking a ramp underneath one is invisible
+        # *and* costs a radio write every time it moves. Say so once, then stop
+        # pushing colour into a style that discards it.
         colour_shows = style in STYLE_USES_COLOR
         if not colour_shows:
             log.info(
@@ -1602,14 +1478,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         def left() -> float:
             return max(0.0, deadline - loop.time())
 
-        # Three things can decide TIMING's colour and only one may run. The
-        # order is **named stop list > ladder > ramp**, and it is the rule this
-        # loop already used, extended rather than replaced: the more explicit
-        # thing wins. The ramp is the template's own default and every
-        # countdown has one; the ladder is off until you turn it on; a
-        # progress-driven look you had to build, name and then point this mode
-        # at is the most deliberate of the three, so it takes precedence over
-        # both (TODO 36d).
+        # Three things can decide TIMING's colour and only one may run:
+        # **named stop list > ladder > ramp**, the ordering CLAUDE.md sets out
+        # (TODO 36d).
         #
         # All three are driven by the same number, and it is *remaining* time
         # rather than elapsed - which is what a countdown is about: the
@@ -1627,9 +1498,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         status.last_mode = mode_name
 
         if args.demo:
-            # --demo is unattended: show the opening colour briefly rather than
-            # sitting here for the whole countdown.
-            (sampling or paint)(0.0)
+            (sampling or paint)(0.0)  # the opening colour, then out
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             return ActionResult(True, f"{label} (demo: {behavior.minutes:g} min)")
 
@@ -1672,16 +1541,15 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         """Hot/Cold: a hue wheel spins, a press stops it, the light says how
         close you got to a target only the button knows.
 
-        **This loop deliberately holds no game state.** Everything about what a
-        press means lives in [hotcold.py](hotcold.py) as a pure step function,
-        and what is left here is the part that genuinely cannot be pure: a
-        clock, a queue, a radio, a die roll and a database. That is the split
-        ROADMAP Stage 3 is heading for, written that way now because a loop
-        shaped like this ports and a loop that reasons about the game does not.
+        **This loop deliberately holds no game state.** What a press means
+        lives in [hotcold.py](hotcold.py) as a pure step function; what is left
+        here is the part that cannot be pure - a clock, a queue, a radio, a die
+        roll and a database. A loop shaped like this survives the Stage-3 move
+        onto the device; one that reasons about the game does not.
 
         One radio write per round, not per frame: the wheel is a single
         `rainbow` effect and the host works out where it has got to
-        arithmetically (see hotcold.phase_at), which is the only reason a
+        arithmetically (hotcold.phase_at), which is the only reason a
         stop-the-spinner game is possible over a fire-and-forget link.
         """
         loop = asyncio.get_running_loop()
@@ -1698,10 +1566,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             latency_s=device.press_latency_s,
         )
         # LISTENING is the state byte and it is honest - the button is waiting
-        # for you to press - but every look below is pushed explicitly, so what
-        # the palette says about LISTENING never shows. Same bargain the
-        # launcher makes: the state is for the status line and for a device too
-        # old for effects.
+        # for you to press - but every look below is pushed explicitly, so the
+        # palette's LISTENING never shows. Same bargain the launcher makes: the
+        # state is for the status line and for a device too old for effects.
         base = base_look(LEDState.LISTENING)
 
         def render(effects, state: hotcold.Game) -> str | None:
@@ -1754,7 +1621,6 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         render(effects, game)
 
         if args.demo:
-            # --demo is unattended: nothing will ever be guessed.
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             return ActionResult(
                 True, f"hot/cold (demo: {behavior.sweep_s:g}s wheel)",
@@ -1775,10 +1641,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             game, effects = hotcold.step(game, hotcold.GUESS, loop.time())
             ended = render(effects, game)
 
-            # Hold the answer up long enough to read it. A press during that is
-            # discarded: it was aimed at a wheel that had already stopped. The
-            # long press is the exception, because "up one level" has to work
-            # from anywhere or it is not a rule people can trust.
+            # Hold the answer up long enough to read it, discarding presses
+            # aimed at a wheel that had already stopped - the long press
+            # excepted, because "up one level" has to work from anywhere.
             until = loop.time() + behavior.reveal_s
             leaving = False
             while (left := until - loop.time()) > 0:
@@ -1811,11 +1676,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         the time until you press is logged.
 
         Same split as run_hotcold - the rules are pure in
-        [reaction.py](reaction.py) and what is here is the clock, the queue,
-        the die roll and the database. The one thing worth reading that module
-        for before believing a number: the multi-tap window is corrected for
-        and the radio's one-way latency is not, so these times compare with
-        each other rather than with a stopwatch.
+        [reaction.py](reaction.py). Read that module before believing a number:
+        the multi-tap window is corrected for and the radio's one-way latency
+        is not, so these times compare with each other rather than with a
+        stopwatch.
         """
         loop = asyncio.get_running_loop()
         game = reaction.Game(
@@ -1827,8 +1691,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         )
         base = base_look(LEDState.LISTENING)
         # None once the light is on: it doubles as "how long until the go
-        # signal" and as "are we still waiting", which is the only piece of
-        # state the driver needs to carry.
+        # signal" and "are we still waiting", the only state this driver holds.
         armed_for: float | None = None
 
         def delay() -> float:
@@ -1867,8 +1730,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                         show(ramp.color_at(behavior.ramp, good))
                         play_sound(Sound.SUCCESS)
                         # `state` is the game *after* the step, so best_ms is
-                        # already this attempt if this attempt was the best.
-                        # The played>1 guard stops the first one crowing.
+                        # already this attempt if it was the best; the played>1
+                        # guard stops the first one crowing.
                         beat_it = state.played > 1 and ms <= (state.best_ms or ms)
                         status.last_message = f"{round(ms)} ms{' - best yet' if beat_it else ''}"
                 elif isinstance(effect, reaction.Score):
@@ -1885,7 +1748,6 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         render(effects, game)
 
         if args.demo:
-            # --demo is unattended: nobody is going to react to anything.
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             return ActionResult(
                 True, "reaction (demo: no attempts)", reaction.tally(game)
@@ -1953,12 +1815,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         **Entering is not a change.** It shows `start_at` without firing that
         position's message, because walking up to your own desk should not
         announce anything - the first *press* is the first announcement. The
-        re-send on double tap is there for the case that follows from it: the
-        receiving end missed one, or was not running yet.
+        re-send on double tap covers what follows from that: the receiving end
+        missed one, or was not running yet.
 
-        This loop holds the button for as long as it is showing, which is the
-        "one foreground app" decision (TODO 15) made visible. Long press is
-        how you get the button back.
+        This loop holds the button for as long as it is showing - the "one
+        foreground app" decision (TODO 15) made visible.
         """
         states = behavior.states
         index = min(behavior.start_at, len(states) - 1)
@@ -1976,8 +1837,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             action = resolve_action(cm.config, state.action)
             if action is None:
                 log.warning(
-                    "signal %r: %s names no action that exists",
-                    mode_name, state.name,
+                    "signal %r: %s names no action that exists", mode_name, state.name
                 )
                 status.last_message = f"{state.name} - no action named {state.action.name!r}"
                 return state.name
@@ -2033,22 +1893,19 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         command past the first cost a trip through the launcher.
 
         **Feedback is per action, not per app.** SUCCESS or ERROR flashes and
-        then the surface's resting light comes back, so the button says whether
-        the DAW took the message and then goes back to waiting - which is why
-        this template needs no LED state of its own.
+        then the surface's resting light comes back, which is why this template
+        needs no LED state of its own.
 
         Long press is not checked against the bindings because it cannot be
-        bound; `_parse_control_body` drops it. That keeps the escape gesture a
-        property of the parser rather than a thing this loop remembers to
-        honour.
+        bound - `_parse_control_body` drops it, keeping the escape gesture a
+        property of the parser rather than of this loop's memory.
 
         **Returns `(result, chosen)` like `run_launcher`**, and for the same
         reason: an `enter_mode` binding makes this a menu page, so it has to be
-        able to name what runs next. `execute()` deliberately cannot do that -
-        it has no idea what a mode is, which is why `handle()` intercepts the
-        same action at the ambient layer instead of passing it on. Four
-        gestures per page and a branch on any of them is what makes a tree of
-        menus cost no new template.
+        able to name what runs next. `execute()` cannot - it has no idea what a
+        mode is, which is why `handle()` intercepts that action at the ambient
+        layer too. Four gestures per page and a branch on any of them is what
+        makes a tree of menus cost no new template.
         """
         set_status("CONTROL")
         status.last_mode = mode_name
@@ -2089,12 +1946,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 play_sound(Sound.ERROR)
                 continue
             if isinstance(action, EnterModeAction):
-                # A branch to another page. Resolved here rather than in
-                # execute() for the reason handle() does the same: a mode is
-                # not a thing an action primitive knows about. Handing the
-                # target back lets enter_takeover close this page before
-                # opening the next, so a menu tree is a sequence of pages and
-                # never a stack that can grow.
+                # A branch to another page, resolved here rather than in
+                # execute() because a mode is not a thing an action primitive
+                # knows about. Handing the target back lets enter_takeover
+                # close this page before opening the next, so a menu tree is a
+                # sequence of pages and never a stack that can grow.
                 target = next(
                     (m for m in cm.config.modes if m.name == action.target), None
                 )
@@ -2139,9 +1995,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             resting()
 
     # Every takeover behaviour, for the two places that ask "is this a mode a
-    # gesture can start". One tuple rather than two isinstance chains that
-    # drift apart - the launcher made that a real risk, since it is the first
-    # thing that both *is* a takeover and *chooses* one.
+    # gesture can start". One tuple rather than two lists that drift apart -
+    # the launcher both *is* a takeover and *chooses* one, which made that real.
     TAKEOVER_BEHAVIORS = (
         AlarmBehavior, StopwatchBehavior, CounterBehavior, PomodoroBehavior,
         MetronomeBehavior, CountdownBehavior, LauncherBehavior, HotColdBehavior,
@@ -2149,12 +2004,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     )
 
     def app_look(target):
-        """The colour `target` should be shown in while a launcher offers it.
-
-        Its own named look for the state it owns, else that state's palette
-        entry, else None. This is what makes the launcher answer "which app"
-        rather than "which mode is running" - and it needs no new config,
-        because a mode already knows what it looks like."""
+        """The colour `target` should be shown in while a launcher offers it:
+        its own named look for the state it owns, else that state's palette
+        entry, else None. It needs no new config, because a mode already knows
+        what it looks like."""
         states = MODE_LED_STATES.get(target.template, ())
         if not states:
             return None
@@ -2169,10 +2022,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         An empty `targets` means every takeover mode in config order, so a
         newly added app shows up without anyone editing a list. Launchers are
         never offered: a launcher that can launch itself is the one shape that
-        turns "replace, don't nest" back into a loop with no user in it.
-
-        A named target that does not exist is warned about *here* rather than
-        at parse time - config order is not dependency order, and a launcher
+        turns "replace, don't nest" back into a loop with no user in it. A
+        named target that does not exist is warned about *here* rather than at
+        parse time - config order is not dependency order, and a launcher
         listed above its apps is the normal way to write one.
         """
         apps = [
@@ -2195,22 +2047,15 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     async def run_launcher(behavior, mode_name: str):
         """Cycle the installed apps and hand one over.
 
-        Returns `(result, chosen)` - the only run_* that returns two things,
-        because it is the only one whose job is to name what runs next. The
-        caller closes this session *before* opening the chosen app's, which is
-        the whole "replace, don't nest" rule.
+        Returns `(result, chosen)` because it is the one run_* whose job is to
+        name what runs next. The caller closes this session *before* opening
+        the chosen app's - the "replace, don't nest" rule.
 
         Short press cycles, **double tap launches, long press leaves**. Fixed
         rather than configurable: this is the one mode whose controls someone
-        has to be able to guess, and a launcher you have to learn defeats the
-        purpose of having one.
-
-        Long press is *out*, never *in*, and that is the point: every other
-        takeover exits on a long press, so it is the closest thing this button
-        has to a universal "up one level". A launcher that launched on long
-        press would be the single place where the escape gesture committed you
-        to something instead - the worst possible exception to a rule you want
-        people to trust without thinking.
+        has to be able to guess. Long press is *out*, never *in* - a launcher
+        that launched on the universal escape gesture would be the one place it
+        committed you to something instead (CLAUDE.md).
         """
         apps = launcher_targets(behavior)
         if not apps:
@@ -2220,10 +2065,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
         def show() -> None:
             target = apps[index]
-            # LISTENING is the state byte, and it is honest: the button is
-            # waiting for you to choose. What you see is the app's own look
-            # pushed over it, so the state only matters to the status line and
-            # to a device too old for effects.
+            # LISTENING is honest - the button is waiting for you to choose -
+            # and the app's own look is pushed over it, so the state only
+            # matters to the status line and to a device too old for effects.
             set_led(LEDState.LISTENING, app_look(target))
             status.last_message = f"{target.name} ({index + 1}/{len(apps)})"
 
@@ -2232,7 +2076,6 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         status.last_mode = mode_name
 
         if args.demo:
-            # --demo is unattended: nothing will ever be chosen.
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             return ActionResult(True, f"launcher (demo: {len(apps)} apps)"), None
 
@@ -2253,19 +2096,18 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     async def enter_takeover(mode) -> None:
         """Run a takeover mode, then drop back to the ambient layer (IDLE).
 
-        **Replace, don't nest.** A launcher names the app that runs next, and
-        this loop closes the launcher's session before opening the app's - so
-        a takeover starting another takeover is a *sequence*, never a stack.
-        That is the rule TODO 0a asked for, and why it beats a depth guard:
-        with no stack there is no depth to overflow, the event log gets one
-        clean mode_enter/mode_exit pair per app instead of nested ones, and
+        **Replace, don't nest** (TODO 0a). A launcher names the app that runs
+        next and this loop closes the launcher's session before opening the
+        app's, so a takeover starting another takeover is a *sequence*, never a
+        stack. That beats a depth guard: no stack means no depth to overflow,
+        the event log gets one clean mode_enter/mode_exit pair per app, and
         leaving an app returns you to where you actually are rather than to a
         menu you had forgotten was underneath it.
 
-        No hop limit, deliberately. Every handoff costs a deliberate long
-        press, so no chain runs without someone driving it - and the one shape
-        that *could* spin unattended, a launcher offering itself, is excluded
-        in `launcher_targets` instead.
+        No hop limit, deliberately: every handoff costs a press, so no chain
+        runs without someone driving it - and the one shape that *could* spin
+        unattended, a launcher offering itself, is excluded in
+        `launcher_targets` instead.
 
         Exception-guarded so a handler bug never kills the main loop.
         """
@@ -2322,12 +2164,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 result = ActionResult(False, f"internal error: {exc}")
                 chosen = None
             store.log_mode_exit(mode.name, entered_at)
-            # After the loop has ended and the session row is closed, and
-            # before the handoff below - so a launcher's chain fires each app's
-            # exit hook before the next app's enter hook, in the order they
-            # actually happened. The app's own numbers ride out with it - see
-            # summary.py; an app with nothing to report passes None and the
-            # hook is exactly what it was before summaries existed.
+            # After the session row is closed and before the handoff below, so
+            # a launcher's chain fires each app's exit hook before the next
+            # app's enter hook, in the order they actually happened. The app's
+            # own numbers ride out with it (summary.py); an app with nothing to
+            # report passes None.
             await fire_hook(mode, "on_exit", result.summary)
             active_mode = None
             status.last_ok = result.ok
@@ -2350,8 +2191,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         )
         # A binding may name a pooled action rather than hold one
         # (config.NamedAction). Undone here, once, before anything below asks
-        # what kind of action it is - which is why the isinstance chain reads
-        # exactly as it did before the pool existed.
+        # what kind of action it is.
         action = resolve_action(cm.config, resolved[1]) if resolved is not None else None
 
         if standby and not isinstance(action, StandbyAction):
@@ -2372,15 +2212,14 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             await fail(f"no mode matches {trigger.value} right now")
         elif action is None:
             # A binding naming a pool entry that is not there. The parser
-            # warned about this at load; this is the same fact at the moment it
-            # costs you something, and it fails the way a missing enter_mode
-            # target does rather than crashing.
+            # warned at load; this is the same fact at the moment it costs you
+            # something, failing the way a missing enter_mode target does.
             status.last_mode = resolved[0].name
             await fail(f"no action named {resolved[1].name!r}")
         elif isinstance(action, StandbyAction):
             # Handled here rather than in execute() for the reason enter_mode
-            # and readout are: what it changes is what the *loop* does with the
-            # next gesture, and that is state only the loop owns.
+            # and readout are: it changes what the *loop* does with the next
+            # gesture, and that is state only the loop owns.
             standby = not standby
             status.last_mode = resolved[0].name
             status.last_ok = True
@@ -2395,12 +2234,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             set_status("STANDBY" if standby else "IDLE")
             return
         elif isinstance(action, EnterModeAction):
-            # A gesture starting a takeover: look the target up by name and,
-            # if it is a takeover mode (alarm/stopwatch/counter), hand off to
-            # enter_takeover (which owns the LED/sound/status and the IDLE drop
-            # and its own BLE response). EnterModeAction is never passed to
-            # execute(). A missing/non-takeover target fails clearly instead of
-            # crashing - the parser deliberately does not pre-validate targets.
+            # A gesture starting a takeover: look the target up by name and
+            # hand off to enter_takeover, which owns the LED/sound/status and
+            # the IDLE drop. EnterModeAction is never passed to execute(). A
+            # missing or non-takeover target fails clearly instead of crashing
+            # - the parser deliberately does not pre-validate targets.
             mode = resolved[0]
             status.last_mode = mode.name
             target = next(
@@ -2415,14 +2253,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             return
         elif isinstance(action, ReadoutAction):
             # A readout's light *is* its feedback (TODO 15/17), so it must not
-            # be preceded or followed by the SUCCESS flash the generic branch
-            # below plays: `set_led` cancels whatever sequence is running on
-            # every call, so a SUCCESS push after this would cut the readout
-            # off mid-count, and pushing THINKING/SUCCESS around a query this
-            # cheap would just flicker before the real answer showed up. So
-            # this is never handed to execute() - same reasoning as the
-            # enter_mode branch above - and returns immediately rather than
-            # falling into the shared SUCCESS/IDLE tail.
+            # be wrapped in the SUCCESS flash the generic branch below plays:
+            # `set_led` cancels the running sequence on every call, so a
+            # SUCCESS push after this would cut the readout off mid-count.
+            # Hence never handed to execute(), and an immediate return rather
+            # than falling into the shared SUCCESS/IDLE tail.
             mode = resolved[0]
             status.last_mode = mode.name
             count = store.count_today(action.event)
@@ -2465,15 +2300,15 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
 
     # Occurrence keys already rung today, so an alarm fires once per minute.
     fired: set[str] = set()
-    # The palette last sent to the device. Editing colours in the web UI (or
-    # a SIGHUP) replaces cm.config wholesale, so the tick below notices and
+    # The palette last sent to the device. Editing colours in the web UI (or a
+    # SIGHUP) replaces cm.config wholesale, so the tick below notices and
     # re-sends - which is why a colour picker updates the real LED live.
     pushed_palette = cm.config.led_palette
-    # Nothing inside one iteration is allowed to end the service. handle() and
-    # the takeover loops already guard their own bodies; this is the backstop
-    # for the rest of an iteration - the store, the scheduler scan, the
-    # palette push - because a button that dies on a locked database is worse
-    # than one that misses a press.
+    # Nothing inside one iteration may end the service. handle() and the
+    # takeover loops guard their own bodies; this is the backstop for the rest
+    # of an iteration - the store, the scheduler scan, the palette push -
+    # because a button that dies on a locked database is worse than one that
+    # misses a press.
     faults = FaultTracker()
 
     try:
@@ -2483,9 +2318,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 await handle(trigger)
             return
 
-        log.info(
-            "AI Button ready (config: %s, %d mode(s))", cm.path, len(cm.config.modes)
-        )
+        log.info("AI Button ready (config: %s, %d mode(s))", cm.path, len(cm.config.modes))
         while not stop.is_set():
             try:
                 trigger = await _wait_for_trigger(
@@ -2512,15 +2345,13 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 if (max_taps := wanted_max_taps()) != device.max_taps:
                     device.set_gesture_config(max_taps)
                     log.info("gestures changed - device now counts %d taps", max_taps)
-                # After every wait (press or tick), check whether a scheduled
-                # alarm is due now and ring it; an alarm preempts the ambient
-                # layer. Prune `fired` to today's keys so it never grows without
-                # bound across days.
+                # After every wait (press or tick), ring whatever is due now;
+                # an alarm preempts the ambient layer. `fired` is pruned to
+                # today's keys so it never grows without bound across days,
+                # matching the trailing "@<date>T<HH:MM>" structurally so a
+                # mode name that embeds a date can't keep a stale key alive.
                 now = clock.now()
                 today_prefix = now.date().isoformat()
-                # Match the trailing "@<date>T<HH:MM>" structurally so a mode
-                # name that happens to embed a date can't keep a stale key
-                # alive.
                 fired = {
                     k for k in fired
                     if k.rsplit("@", 1)[-1].startswith(f"{today_prefix}T")

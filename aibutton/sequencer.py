@@ -1,50 +1,38 @@
 """Stop lists: colours played in order, held for a while each.
 
-[ladder.py](ladder.py) already names the shape this module fills in:
+Three questions, three sibling modules, one light:
 
-    ramp.py     driven by progress 0->1     interpolates between colours
-    a stop list driven by the clock         plays colours in order
-    a ladder    driven by a counter         picks a colour by divisibility
+    ramp.py     driven by progress 0->1   "how far through are you"
+    a stop list driven by the clock       "what happens next"
+    a ladder    driven by a counter       "what time is it"
 
-A ramp answers "how far through are you"; a ladder answers "what time is
-it"; a stop list answers "what happens next" - it is a little playlist of
-colours, each held for `hold_s` after arriving over `fade_s`. That third
-question is genuinely different from the other two (nothing here is a
-fraction of anything, and nothing here divides), which is why this is its
-own module rather than a mode on `ramp` or `ladder`.
+A stop list is a little playlist of colours, each held for `hold_s` after
+arriving over `fade_s`. Nothing in it is a fraction of anything and nothing
+divides, which is why it is not a mode on `ramp` or `ladder`.
 
-Pure by construction, like both of them: no clock, no device, no config.
-`plan_at` is total over its declared domain and answers only "what colour
-right now, and how long is that good for" - a caller supplies elapsed time
-and gets back a colour to push and a number of seconds it may safely wait
-before asking again. Nothing here knows *why* time is passing, which is
-what will let this move onto the device unchanged (CLAUDE.md: "anything
-pure survives the Stage-3 move").
+Pure like both of them: no clock, no device, no config. A caller supplies
+elapsed time and gets back a colour to push and how long that is good for;
+nothing here knows *why* time is passing, which is what lets it move onto the
+device unchanged (CLAUDE.md: "anything pure survives the Stage-3 move").
 
-**A sequence is not an effect.** `config.LedEffect` is one colour and a
-style the *device* animates by itself (breathe, flash, rainbow...); a
-`Sequence` is several colours the *host* walks through one at a time,
-pushing each as a plain solid effect. That is why it cannot go in the
-palette (CLAUDE.md: palette entries ship to the device, unattended - a
-sequence is a schedule, not a byte the firmware can render alone) and why
-driving one is main.py's job, not device.py's.
+**A sequence is not an effect.** `config.LedEffect` is one colour plus a style
+the *device* animates by itself; a `Sequence` is several colours the *host*
+walks through one at a time, pushing each as a plain solid. Hence it cannot go
+in the palette (a palette entry ships to the device and renders unattended - a
+sequence is a schedule) and driving one is main.py's job, not device.py's.
 
-**Fades render stepped, not smooth.** Interpolating continuously would mean
-a colour push every animation frame - fine on the device, dishonest over a
-radio whose whole contract is fire-and-forget (see ble_device.py). Instead
-a fade is cut into steps no shorter than `min_step_s`, each one landing on
-a fresh `mix()` level; a fade shorter than one step degenerates to a single
-hard cut from the previous colour, which is what asking for finer motion
-than the caller is willing to spend on it should mean. Smooth belongs to
-the device, once the device is the one drawing it (ROADMAP D5+).
+**Fades render stepped, not smooth.** Interpolating continuously would mean a
+colour push every animation frame - fine on the device, dishonest over a radio
+whose whole contract is fire-and-forget (see ble_device.py). A fade is cut into
+steps no shorter than `min_step_s`, and one shorter than a single step
+degenerates to a hard cut from the previous colour. Smooth belongs to the
+device once the device is drawing it (ROADMAP D5+); `sample_at` is the one
+deliberate exception, and says why.
 
-Blending is the same straight per-channel RGB lerp as `ramp.mix` and
-firmware/led.py's `_mix` - one *idea* of what a crossfade looks like, kept
-as a second small implementation here rather than an import from ramp.py.
-The two modules are siblings, not a hierarchy: each is a leaf a step in
-CLAUDE.md's dependency graph could drop cleanly, and a four-line lerp is
-cheap enough to duplicate that coupling two leaves together to save it
-would cost more than it saves.
+Blending is the same per-channel RGB lerp as `ramp.mix` and firmware/led.py's
+`_mix`, kept as a second small implementation rather than an import: these are
+sibling leaves in CLAUDE.md's dependency graph, and coupling two of them to
+save a four-line lerp would cost more than it saves.
 """
 
 from __future__ import annotations
@@ -56,16 +44,13 @@ from .device import rgb_bytes
 
 
 # How a fade is shaped between its two colours (TODO 36b). Each maps 0..1 to
-# 0..1, monotonically, with f(0)=0 and f(1)=1 - which is what keeps
-# `_fade_step`'s "never step past the target" guarantee true whichever one is
-# chosen, and what lets `linear` stay a real member rather than a special case.
+# 0..1 monotonically with f(0)=0 and f(1)=1, which is what keeps `_fade_step`'s
+# "never step past the target" guarantee true whichever one is chosen.
 #
-# The synth reading is the useful one: a fade is a segment of an envelope, and
-# "hold red a while, then run fast to yellow" is a long `hold_s` followed by a
-# short `fade_s` shaped `ease_in`. Asymmetric *periodic* motion - a breathe
-# whose peak is narrower than its valley - is deliberately not here: that is a
-# property of a device-rendered style, and approximating it as a stop list is
-# the whole reason this table exists instead of a protocol change (TODO 36).
+# Asymmetric *periodic* motion - a breathe whose peak is narrower than its
+# valley - is deliberately not here: that is a property of a device-rendered
+# style, and approximating it as a stop list is the whole reason this table
+# exists instead of a protocol change (TODO 36).
 CURVES = ("linear", "ease_in", "ease_out", "ease_in_out", "exponential")
 
 # How sharply `exponential` bends. 4.0 is about the steepest that still reads
@@ -100,22 +85,20 @@ def shape(curve: str, level: float) -> float:
 class Stop:
     """One colour: arrive at it over `fade_s`, then hold for `hold_s`.
 
-    Where the fade comes *from* is not this stop's business - it is always
-    the previous stop's colour (or black, for a one-shot's very first stop;
-    or the last stop's colour, for a repeating sequence's - see `Sequence`).
-    That keeps a stop nameable and reorderable without carrying a pointer to
-    whatever happens to precede it.
+    Where the fade comes *from* is the previous stop's colour (or black for a
+    one-shot's first stop, or the last stop's colour for a repeat - see
+    `Sequence`), which keeps a stop nameable and reorderable without carrying
+    a pointer to whatever happens to precede it.
 
     `style`/`period_s` let a stop be *animated* rather than flat - "75%
-    flashing yellow" in one node of a list (TODO 36c). Plain strings and
-    floats rather than a `config.LedEffect`, because this module is a leaf
-    and importing config would invert the dependency the whole file is shaped
-    around; main.py assembles the effect at the point it pushes one.
+    flashing yellow" in one node of a list (TODO 36c). Plain strings and floats
+    rather than a `config.LedEffect`, because this module is a leaf and
+    importing config would invert the dependency the whole file is shaped
+    around; main.py assembles the effect where it pushes one.
 
-    **The style applies to the hold, never to the fade.** A crossfade is
-    always plain solid interpolation: a target that is flashing half-way
-    through arriving at it is not a thing anyone means, and it would also put
-    two clocks on one light - the same reason a ladder tick renders solid.
+    **The style applies to the hold, never to the fade.** A target that is
+    flashing half-way through arriving at it puts two clocks on one light -
+    the same reason a ladder tick renders solid.
     """
 
     color: str           # "#rrggbb", the colour this stop arrives at
@@ -126,39 +109,36 @@ class Stop:
     period_s: float = 1.0   # that style's period, when it has one
 
 
-# What moves a sequence along (TODO 36d). The three answers this module's
-# docstring already named as three separate modules, now one field:
+# What moves a sequence along (TODO 36d):
 #
-#   clock      seconds; walked by `plan_at`, which sleeps between frames
+#   clock      seconds; walked by `plan_at`, which returns a wait
 #   progress   0..1; sampled by `sample_at` from whatever the app is doing
 #   beats      a count; sampled by `sample_at` from a tempo
 #
 # **Walked versus sampled is the real distinction**, not the unit. A
 # clock-driven sequence owns its own position and a caller only has to keep
 # asking; the other two are *parameterised from outside themselves* - a
-# countdown owns its progress, a metronome owns its beat - so nothing can
-# render one without an app underneath supplying the number. That is why a
-# progress-driven look is meaningless on IDLE, and why `config` decides where
-# each drive may be bound rather than this module.
+# countdown owns its progress, a metronome its beat - so nothing can render one
+# without an app underneath supplying the number. That is why a progress-driven
+# look is meaningless on IDLE, and why `config` rather than this module decides
+# where each drive may be bound.
 #
-# For `progress` and `beats` a stop's `hold_s`/`fade_s` are read as *weights*
-# in that unit rather than as seconds; the names keep the `_s` because they
-# are the same fields, and renaming them would be a config break for the one
-# drive that has always been in seconds.
+# For `progress` and `beats` a stop's `hold_s`/`fade_s` are read as *weights* in
+# that unit rather than as seconds; the names keep the `_s` because renaming
+# them would be a config break for the one drive that has always been seconds.
 DRIVES = ("clock", "progress", "beats")
 
 
 @dataclass(frozen=True)
 class Sequence:
-    """An ordered stop list. `repeat=True` loops forever (until the next
-    `set_led`); `repeat=False` plays once and is done.
+    """An ordered stop list. `repeat=True` loops until the next `set_led`;
+    `repeat=False` plays once and is done.
 
-    The two modes disagree about where the *first* stop fades from: a
-    one-shot starts from black (there is nothing behind it to fade from -
-    it is arriving out of nothing, the way a confirmation flash does), and a
-    repeat starts from its own last stop (there is always something behind
-    it - the cycle that just finished), so a repeating sequence never shows
-    a black flicker at the seam where it wraps.
+    The two disagree about where the *first* stop fades from: a one-shot starts
+    from black (it is arriving out of nothing, the way a confirmation flash
+    does) and a repeat starts from its own last stop - the cycle that just
+    finished - so a repeat never shows a black flicker at the seam where it
+    wraps.
     """
 
     stops: tuple[Stop, ...]
@@ -169,10 +149,8 @@ class Sequence:
 def mix(first: str, second: str, level: float) -> str:
     """`level` 0..1 walks from `first` to `second`, component by component.
 
-    Duplicated from `ramp.mix` rather than imported - see the module
-    docstring. Kept byte-for-byte the same algorithm on purpose (it is what
-    "a crossfade" means, here and in firmware/led.py's `_mix`), just not the
-    same *symbol*.
+    Duplicated from `ramp.mix` rather than imported - see the module docstring.
+    Deliberately the same algorithm, just not the same *symbol*.
     """
     start, end = rgb_bytes(first), rgb_bytes(second)
     return "#" + "".join(
@@ -184,16 +162,15 @@ def _fade_step(t_in_fade: float, fade_s: float, min_step_s: float) -> tuple[floa
     """(interpolation level to show now, seconds until the next step) at
     `t_in_fade` seconds into a fade of length `fade_s`.
 
-    The level shown for a step is the level *at its start*, held flat for
-    the step's whole width - so the very first instant of a fade shows the
-    untouched starting colour (level 0.0 exactly) and the fade only ever
-    steps *toward* the target, never past it. The exact target colour
-    appears the instant the fade ends, from the hold that follows - see
-    `plan_at` - never as an interpolated near-miss.
+    A step shows the level *at its start*, held flat for its whole width - so
+    the first instant of a fade shows the untouched starting colour (level 0.0
+    exactly) and the fade only ever steps *toward* the target, never past it.
+    The exact target appears the instant the fade ends, from the hold that
+    follows (see `plan_at`), never as an interpolated near-miss.
 
     `min_step_s <= 0` collapses the fade to one step: a floor of zero is no
-    floor, which degenerates to the coarsest possible stepping (one hard cut
-    at the end) rather than to a division by it.
+    floor, which degenerates to the coarsest possible stepping rather than to a
+    division by it.
     """
     step_len = min_step_s if min_step_s > 0 else fade_s
     steps = max(1, math.ceil(fade_s / step_len - 1e-9))
@@ -207,10 +184,9 @@ def _fade_step(t_in_fade: float, fade_s: float, min_step_s: float) -> tuple[floa
 class Frame:
     """What to show at one instant: a colour, and how it moves.
 
-    Returned by `plan_at` rather than a bare colour string because a stop may
-    now be animated (`Stop.style`). Still only ever *one* effect's worth of
-    state - the caller pushes it and forgets it, which is what keeps this
-    module free of any idea that a device exists.
+    A `Frame` rather than a bare colour string because a stop may be animated
+    (`Stop.style`) - but still only ever *one* effect's worth of state, which
+    is what keeps this module free of any idea that a device exists.
     """
 
     color: str
@@ -259,30 +235,23 @@ def plan_at(
     """What to show `elapsed_s` into `seq`, and how long that is good for.
 
     Returns `(frame, next_change_s)`:
-      - `frame` is the `Frame` to push now, or `None` if a one-shot has
-        already finished (`elapsed_s` at or past its total length). Mid-fade
-        it is always a plain solid at the interpolated colour; during a hold
-        it carries that stop's own style (see `Stop`).
-      - `next_change_s` is how long the caller may wait before calling again
-        - not necessarily until the colour visibly *changes* (a hold reports
-        the time left in the hold, even though nothing moves during it), but
-        long enough that nothing worth showing happens sooner. `None` only
-        when `color` is `None`: a finished one-shot has nothing left to wait
-        for.
+      - `frame` is what to push now, or `None` if a one-shot has already
+        finished. Mid-fade it is always a plain solid at the interpolated
+        colour; during a hold it carries that stop's own style (see `Stop`).
+      - `next_change_s` is how long the caller may wait before calling again -
+        not necessarily until the colour visibly *changes* (a hold reports the
+        time left in it, even though nothing moves), but long enough that
+        nothing worth showing happens sooner. `None` only when `frame` is.
 
-    Total over its domain, like `ramp.color_at` and `ladder.color_at`:
-    negative `elapsed_s` is clamped to 0, and an empty `seq.stops` reports
-    `(None, None)` - there is no colour to show and nothing will ever
-    change, which is what a one-shot with no stops means anyway.
+    Total over its domain, like `ramp.color_at` and `ladder.color_at`: negative
+    `elapsed_s` clamps to 0, and an empty `seq.stops` reports `(None, None)`.
 
-    A repeating sequence whose stops all dwell zero (`hold_s == fade_s ==
-    0` throughout) has no timeline to walk - every stop happens at the same
-    instant. Rather than divide by that zero, it holds the last stop's
-    colour and reports `min_step_s` (or 1.0 if that is also non-positive) as
-    the wait, so a caller that sleeps for what it is told never busy-loops.
-    In practice this never happens to a sequence that reached here through
-    `main.set_led`: `config.sequence_safe` has already floored every stop
-    that could repeat.
+    A repeating sequence whose stops all dwell zero has no timeline to walk -
+    every stop happens at the same instant. Rather than divide by that zero it
+    holds the last stop's colour and reports `min_step_s` (or 1.0 if that is
+    also non-positive) as the wait, so a caller that sleeps for what it is told
+    never busy-loops. Anything that arrived here through `main.set_led` has
+    already been floored by `config.sequence_safe`.
     """
     if elapsed_s < 0:
         elapsed_s = 0.0
@@ -307,8 +276,8 @@ def plan_at(
     for span in spans:
         if t < span.fade_at + span.fade_s:
             level, remaining = _fade_step(t - span.fade_at, span.fade_s, min_step_s)
-            # Solid, always: the curve shapes *which* colour this step lands
-            # on, and the stop's own style waits for the hold it belongs to.
+            # Solid, always: the curve shapes *which* colour this step lands on,
+            # and the stop's own style waits for the hold it belongs to.
             return (
                 Frame(mix(span.from_color, span.to_color, shape(span.curve, level))),
                 remaining,
@@ -320,10 +289,9 @@ def plan_at(
             )
 
     # Floating-point can land `t` exactly on `total` (a repeat's modulo, or a
-    # one-shot's last hold ending in a zero-width final stop) - the cycle
-    # just completed. The last stop's colour is still the honest answer;
-    # there is nothing more to wait for at *this* elapsed time; the next
-    # call is what advances it.
+    # one-shot's last hold ending in a zero-width final stop). The last stop's
+    # colour is still the honest answer, nothing is left to wait for at *this*
+    # elapsed time, and the next call is what advances it.
     last = spans[-1]
     return Frame(last.to_color, last.style, last.period_s), 0.0
 
@@ -333,8 +301,8 @@ def span_total(seq: Sequence) -> float:
     fractions for `progress`, beats for `beats`.
 
     Exposed because a *sampled* sequence needs it and a walked one does not:
-    `sample_at` has to turn "40% of the way through" into a position on a
-    timeline whose length only this module knows.
+    `sample_at` has to turn "40% through" into a position on a timeline whose
+    length only this module knows.
     """
     return _spans(seq)[1]
 
@@ -345,31 +313,27 @@ def sample_at(seq: Sequence, position: float) -> Frame | None:
 
     `plan_at` answers "what now, and how long may I sleep" - the question a
     caller with a clock asks. This answers only "what at this point", which is
-    the question a caller with a *progress bar* asks: a countdown 40% through
-    has no business sleeping on the stop list's schedule, it already has its
-    own tick and simply wants the colour that belongs to 40%.
-
-    That is also why no wait comes back. Nothing here can say when the next
-    frame is due, because that depends on how fast the app's own number moves,
-    which is the app's business and not this module's.
+    what a caller with a *progress bar* asks: a countdown 40% through already
+    has its own tick and simply wants the colour that belongs to 40%. That is
+    also why no wait comes back - when the next frame is due depends on how
+    fast the app's own number moves, which is the app's business.
 
     **Fades interpolate continuously here, and that is the one place this
     disagrees with `plan_at` on purpose.** The 50 ms stepping exists because a
     walked sequence pushes every frame over a radio, so promising motion finer
-    than the radio can carry would be dishonest. A sampled sequence pushes
-    only when the app ticks - the app's rate *is* the rate - and it is the
-    caller that decides whether a frame is worth sending (`main.sampled_paint`
-    drops one that has not visibly moved). Quantising on top of that would
-    lose gradient for nothing: a 1 s countdown tick against a 0.05 s step is
-    already twenty times coarser than the floor it would be obeying.
+    than the radio can carry would be dishonest. A sampled sequence pushes only
+    when the app ticks - the app's rate *is* the rate - and the caller decides
+    whether a frame is worth sending (`main.sampled_paint` drops one that has
+    not visibly moved). Quantising on top of that would lose gradient for
+    nothing: a 1 s countdown tick against a 0.05 s step is already twenty times
+    coarser than the floor it would be obeying.
 
     Out-of-range positions are handled rather than rejected, and how depends on
     `repeat`: a repeating sequence wraps (which is what makes `beats` useful -
     a four-beat pattern over an eight-beat bar), a one-shot clamps to its ends.
     Clamping rather than returning `None` is the other difference from
     `plan_at`: a progress bar that reaches 1.0 should show the last stop, not
-    go dark, because "finished" is a state a countdown *holds* rather than
-    passes through.
+    go dark, because "finished" is a state a countdown *holds*.
     """
     if not seq.stops:
         return None
@@ -384,8 +348,7 @@ def sample_at(seq: Sequence, position: float) -> Frame | None:
     for span in spans:
         if span.fade_s > 0 and t < span.fade_at + span.fade_s:
             level = shape(span.curve, (t - span.fade_at) / span.fade_s)
-            # Solid through a fade, exactly as `plan_at` renders one: the curve
-            # decides which colour, and the stop's own style waits for its hold.
+            # Solid through a fade, exactly as `plan_at` renders one.
             return Frame(mix(span.from_color, span.to_color, level))
         if t < span.hold_at + span.hold_s:
             return Frame(span.to_color, span.style, span.period_s)
@@ -397,11 +360,10 @@ def sample_at(seq: Sequence, position: float) -> Frame | None:
 # --- readout: a value played as blinks (TODO 15 and 17) --------------------
 #
 # TODO 17's finding is why this looks the way it does: one LED has three
-# channels, and only one of them - count/rhythm - is good at *exact*
-# integers; hue is good at proportion, not digits. So a readout is blinks,
-# not colours, and it "does not depend on telling colours apart at all" -
-# which is what lets it survive this build's measured ring colour cast, a
-# warm room, and a colourblind reader (see hardware gotchas in CLAUDE.md).
+# channels, and only count/rhythm is good at *exact* integers - hue is good at
+# proportion, not digits. So a readout is blinks, not colours, which is what
+# lets it survive this build's measured ring colour cast, a warm room, and a
+# colourblind reader (see hardware gotchas in CLAUDE.md).
 
 _READOUT_TENS_ON_S = 0.5
 _READOUT_TENS_OFF_S = 0.35
@@ -415,9 +377,9 @@ _BLACK = "#000000"
 
 
 def _digit_pulses(count: int, color: str, on_s: float, off_s: float) -> list[Stop]:
-    """`count` hard-cut pulses of `color`, `on_s` each, separated by `off_s`
-    of black - with no trailing gap after the last pulse, so whatever comes
-    next (the group gap, or the end of the sequence) decides what follows."""
+    """`count` hard-cut pulses of `color`, `on_s` each, separated by `off_s` of
+    black - no trailing gap after the last pulse, so whatever comes next (the
+    group gap, or the end of the sequence) decides what follows."""
     stops: list[Stop] = []
     for i in range(count):
         stops.append(Stop(color, hold_s=on_s))
@@ -433,23 +395,19 @@ def readout(
     units digit as quick ones in `units_color` - 27 is two slow, then seven
     quick, reading like an abacus with no legend needed.
 
-    `value` is clamped to 0..99 (a caller that cares may also say so - this
-    only returns the `Sequence`). 0 is a special case: a single dim neutral
-    blink (`_READOUT_ZERO_COLOR`, matching neither digit's colour) rather
-    than zero pulses, so "counted zero" reads differently from "nothing
-    happened" - a button that just sat there dark.
+    `value` is clamped to 0..99. 0 is a special case: a single dim neutral blink
+    (`_READOUT_ZERO_COLOR`, matching neither digit's colour) rather than zero
+    pulses, so "counted zero" reads differently from "nothing happened".
 
-    A zero *digit* contributes none of its pulses, and the group gap between
-    the two digit groups only appears when both groups have at least one
-    pulse to separate - so a zero tens digit ("7") starts straight into the
-    quick pulses with no leading pause, and a zero units digit ("20") ends
-    after the slow pulses with no trailing gap to nothing.
+    A zero *digit* contributes no pulses, and the group gap appears only when
+    both groups have a pulse to separate - so "7" starts straight into the quick
+    pulses with no leading pause, and "20" ends after the slow ones with no
+    trailing gap to nothing.
 
-    One-shot, always (`repeat=False`): a readout is a value at a moment, not
-    something to loop. Every stop's dwell (`hold_s + fade_s`, though nothing
-    here fades) clears `SAFE_MIN_PERIOD_S / 2` (~0.167s) by construction, so
-    it never needs `config.sequence_safe`'s floor to save it - that gate
-    still runs centrally in `main.set_led`, this just doesn't lean on it.
+    One-shot, always: a readout is a value at a moment, not something to loop.
+    Every stop's dwell clears `SAFE_MIN_PERIOD_S / 2` (~0.167s) by construction,
+    so it never leans on `config.sequence_safe`'s floor - which still runs
+    centrally in `main.set_led`.
     """
     value = max(0, min(_READOUT_MAX, value))
     if value == 0:

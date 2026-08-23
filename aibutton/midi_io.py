@@ -3,32 +3,26 @@
 [midi.py](midi.py) says what to send and [midi_clock.py](midi_clock.py) says
 what an arriving tempo means; this module is the only place that touches a
 port. The split is the one [osc.py](osc.py) makes against `actions.py`, in its
-own module for a reason that only showed up when the code was written: there
-turned out to be **two** ways to reach a MIDI port and neither is available
-everywhere, so the choice needs somewhere to live that is not an action
-executor.
+own module because there turned out to be **two** ways to reach a MIDI port and
+neither is available everywhere - a choice that needs somewhere to live that is
+not an action executor.
 
-**It was `midi_out.py` until the metronome needed to listen.** Sending and
-receiving are not symmetrical - output is a call, input is a *callback on
-someone else's thread* - but they share the backend question, and answering
-that question twice in two modules would have been the drift this codebase
-keeps testing for.
+Sending and receiving are not symmetrical - output is a call, input is a
+*callback on someone else's thread* - but they share the backend question, and
+answering it twice in two modules would be the drift this codebase keeps
+testing for.
 
 **Windows needs no dependency.** `winmm.dll` has shipped with every Windows
 since the 90s and `midiOutShortMsg` exists precisely to send a three-byte
 channel-voice message. It is reachable from `ctypes`, so on the platform this
-project actually runs on, MIDI costs nothing to install. That is not a
-workaround - `python-rtmidi` calls the same API one layer down, which its own
-error strings admit by naming `MidiOutWinMM`.
+project actually runs on, MIDI costs nothing to install - and that is not a
+workaround: `python-rtmidi` calls the same API one layer down, which its own
+error strings admit by naming `MidiOutWinMM`. (CLAUDE.md keeps this as the
+worked example of checking what the platform already has before taking a
+dependency: rtmidi publishes no wheel for Python 3.14 and its source build
+fails here.)
 
-**The dependency was tried first and could not be installed.** TODO 22 decided
-to accept `python-rtmidi`; what that decision did not know is that it publishes
-no wheel for Python 3.14 and its source build fails on this machine inside
-meson's own temp-directory cleanup. It is still supported here, because it is
-the only route on Linux and macOS and someone will eventually run this on one.
-But it is no longer the route, and nothing has to be installed to use MIDI on
-Windows.
-
+rtmidi is still supported, because it is the only route on Linux and macOS.
 **Both backends can be absent**, and that is a normal state rather than an
 error: a Linux host with no rtmidi loses the `midi` action and keeps the
 service, exactly as the LED and buzzer degrade to Null backends in the firmware
@@ -102,9 +96,9 @@ class _MidiOutCaps(ctypes.Structure):
 
 
 class _MidiInCaps(ctypes.Structure):
-    """MIDIINCAPSW. Shorter than the output one - an input has no voices, no
-    notes and no channel mask, so the struct genuinely differs and cannot be
-    shared however similar the first four fields look."""
+    """MIDIINCAPSW. Genuinely shorter than the output one - an input has no
+    voices, no notes and no channel mask - so it cannot be shared however
+    similar the first four fields look."""
 
     _fields_ = [
         ("wMid", ctypes.c_ushort),
@@ -296,12 +290,9 @@ class _RtMidi:
 
 
 def _choose():
-    """The first backend that loads. Windows first, deliberately.
-
-    Preferring winmm where both exist is not a downgrade: rtmidi's Windows
-    implementation is a wrapper over this same API, so choosing it directly
-    removes a layer rather than settling for less.
-    """
+    """The first backend that loads. Windows first, deliberately: rtmidi's
+    Windows implementation wraps this same API, so choosing winmm directly
+    removes a layer rather than settling for less."""
     candidates = []
     if sys.platform == "win32":
         candidates.append(_WinMM)
@@ -325,11 +316,12 @@ def backend_name() -> str | None:
     return _BACKEND.name if _BACKEND else None
 
 
+_NO_BACKEND = "no MIDI backend: install python-rtmidi, or run on Windows"
+
+
 def ports() -> list[str]:
     if _BACKEND is None:
-        raise MidiUnavailable(
-            "no MIDI backend: install python-rtmidi, or run on Windows"
-        )
+        raise MidiUnavailable(_NO_BACKEND)
     return _BACKEND.ports()
 
 
@@ -338,9 +330,7 @@ def in_ports() -> list[str]:
     a machine commonly has different counts of each, so an index from one is
     meaningless against the other."""
     if _BACKEND is None:
-        raise MidiUnavailable(
-            "no MIDI backend: install python-rtmidi, or run on Windows"
-        )
+        raise MidiUnavailable(_NO_BACKEND)
     return _BACKEND.in_ports()
 
 
@@ -348,17 +338,17 @@ class ClockListener:
     """Timestamps MIDI clock pulses arriving on a port.
 
     **The whole design constraint is the thread.** The backend calls
-    `_on_message` from a driver thread that is not the event loop and is not
-    running Python otherwise, so that method does the least work that could
-    possibly be useful: a `perf_counter()` and a `deque.append`, both of which
-    are atomic enough to need no lock. Anything heavier - deciding a tempo,
-    touching the config, driving an LED - happens on the loop when someone
-    calls `bpm()`. Doing arithmetic in the callback would put a garbage
-    collection between two pulses of somebody's take.
+    `_on_message` from a driver thread that is not the event loop, so that
+    method does the least work that could possibly be useful: a
+    `perf_counter()` and a `deque.append`, both atomic enough to need no lock.
+    Anything heavier - deciding a tempo, touching the config, driving an LED -
+    happens on the loop when someone calls `bpm()`. Doing arithmetic in the
+    callback would put a garbage collection between two pulses of somebody's
+    take.
 
-    `deque(maxlen=...)` is doing real work here: it bounds memory with no
-    trimming logic on the hot path, and a listener left running for an hour
-    holds one beat of timestamps rather than 86,000.
+    `deque(maxlen=...)` is doing real work: it bounds memory with no trimming
+    logic on the hot path, so an hour-long listener holds one beat of
+    timestamps rather than 86,000.
     """
 
     def __init__(self, port: str = "", window: int = midi_clock.DEFAULT_WINDOW):

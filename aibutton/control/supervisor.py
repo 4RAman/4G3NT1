@@ -58,10 +58,9 @@ def service_command(python: str, config: Path, *, ble: bool = True) -> list[str]
     the child's stdout as it goes: block buffering would hold whole startup
     messages back until something else filled the buffer.
 
-    `--ble` is the default here even though it is opt-in on the command
-    line: someone running the control panel has a button, and a panel whose
-    Start button silently launches a simulated one is worse than useless.
-    dev.ps1 remains the no-hardware path.
+    `--ble` is the default here even though it is opt-in on the command line
+    (CLAUDE.md): someone running the control panel has a button, and a panel
+    whose Start silently launches a simulated one is worse than useless.
     """
     argv = [python, "-u", "-m", "aibutton.main"]
     if ble:
@@ -168,8 +167,8 @@ class Supervisor:
 
         Files rather than the API on purpose: the scene list has to work with
         the service stopped, which is exactly when you want to line one up for
-        the next start. Cached briefly because this reads every scene file and
-        the tray polls once a second - `now` is a parameter so the cache is
+        the next start. Cached briefly because this reads every scene file
+        against a once-a-second poll; `now` is a parameter so the cache is
         testable without waiting.
         """
         now = time.monotonic() if now is None else now
@@ -276,11 +275,10 @@ class Supervisor:
     def _ask_to_stop(self) -> bool:
         """Ask over HTTP. True if the service accepted.
 
-        This is the *only* polite option on Windows for a tray app: SIGTERM
-        is never delivered between processes there, and CTRL_BREAK_EVENT
-        needs a console, which a child spawned with CREATE_NO_WINDOW (by a
-        parent that is itself consoleless) does not have. Signals below are
-        kept for POSIX and for a service started from a terminal.
+        The *only* polite option on Windows for a tray app (CLAUDE.md):
+        CTRL_BREAK_EVENT needs a console, which a child spawned with
+        CREATE_NO_WINDOW by a consoleless parent does not have. The signals
+        below are for POSIX and for a service started from a terminal.
         """
         url = status_url(self.config)
         if url is None:
@@ -295,11 +293,10 @@ class Supervisor:
         """Ask the service to shut down the way Ctrl+C would, so its takeover
         loops close open timers and silence a ringing alarm, then escalate.
 
-        The politeness is worth the wait but is not worth hanging on: each
-        step has its own deadline and the last one always succeeds. A hard
-        kill is survivable by design - the single-instance lock is released
-        by the OS and the event store commits per write - it just skips the
-        device's goodbye.
+        The politeness is worth the wait but not worth hanging on: each step
+        has its own deadline and the last one always succeeds. A hard kill is
+        survivable by design - the OS drops the run lock, the store commits per
+        write - it just skips the device's goodbye.
         """
         proc = self._proc
         if proc is None or proc.poll() is not None:

@@ -1,36 +1,35 @@
 # Gesture detection: N taps and a long press.
 #
-# A port of TriggerDetector from aibutton/button.py, which is the spec.
-# The algorithm is unchanged line for line; only the Python dialect differs
-# (no enum - events are the host's TriggerType *values*, the strings that
+# A port of TriggerDetector from aibutton/button.py, which is the spec. The
+# algorithm is unchanged line for line; only the Python dialect differs (no enum
+# - events are the host's TriggerType *values*, the strings that
 # protocol.gesture_payload turns into wire bytes - and no type hints).
 #
-# tests/test_trigger_port.py drives this class and the host's through the
-# same event scripts and requires identical output at every step. Fix a
-# timing bug in one and you must fix it in the other, or that test fails.
+# tests/test_trigger_port.py drives this class and the host's through the same
+# event scripts and requires identical output at every step. Fix a timing bug in
+# one and you must fix it in the other, or that test fails.
 #
 # Timing rules
 # ------------
-# - long_press fires *while held*, as soon as the hold reaches 1.0 s
-#   (better feedback than waiting for release); the release is consumed.
+# - long_press fires *while held*, as soon as the hold reaches 1.0 s (better
+#   feedback than waiting for release); the release is consumed.
 # - a burst of taps is presses less than 0.4 s apart. It emits as soon as it
 #   reaches `max_taps` - there is nothing longer to wait for - and otherwise
 #   when the window closes with no further tap.
-# - so at max_taps=2, which is the default and what an unconfigured button
-#   does, this is exactly the behaviour it has always had: a double tap
-#   fires the instant the second press lands, and a single tap waits out the
-#   window to prove it is not a double. Worst-case added latency: 0.4 s.
 #
-# What max_taps costs, and why the host sets it. Counting to three means a
-# double tap can no longer fire on contact - it has to outlive the window to
-# prove it is not the start of a triple. That is a real change in how the
-# button feels, so it is paid only by a button that actually has a triple
-# bound to something: the host derives max_taps from the config and writes it
-# over GESTURE_CONFIG (ROADMAP D5).
+# What max_taps costs, and why the host sets it rather than a config. At 2, the
+# default and what an unconfigured button does, this is the behaviour it has
+# always had: a double tap fires the instant the second press lands, and only a
+# single waits out the window to prove it is not a double (worst-case added
+# latency 0.4 s). Counting to 3 means a double tap can no longer fire on contact
+# either - it has to outlive the window to prove it is not the start of a
+# triple. That is a real change in how the button feels, so it is paid only by a
+# button that has a triple bound to something: the host derives max_taps from
+# the config and writes it over GESTURE_CONFIG (ROADMAP D5).
 #
-# The caller owns debounce and the clock: main.py debounces the pin and
-# feeds seconds that only ever increase (ticks_ms() wraps; a raw
-# ticks_ms()/1000 would make the detector emit nonsense every ~12 days).
+# The caller owns debounce and the clock: main.py debounces the pin and feeds
+# seconds that only ever increase (ticks_ms() wraps; a raw ticks_ms()/1000 would
+# make the detector emit nonsense every ~12 days).
 
 import protocol
 

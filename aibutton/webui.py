@@ -29,11 +29,9 @@ fallback warnings are returned to the caller, so the editor can show
 what was actually accepted.
 
 With a scene active, `PUT /api/config` writes the *scene* file rather than
-config.json (`ConfigManager.write_path`) - only the scene pointer lives in
-config.json, so the two files never hold two copies of the same modes list.
-Anything a scene changes that is only read at startup comes back as
-`needs_restart`, because a switch that reloads cleanly and then quietly does
-nothing is the worst answer available.
+config.json (`ConfigManager.write_path`). Anything a scene changes that is only
+read at startup comes back as `needs_restart`, because a switch that reloads
+cleanly and then quietly does nothing is the worst answer available.
 
 No auth: this binds to the LAN like any homelab device. Front it with a
 reverse proxy if it ever needs to face an untrusted network.
@@ -76,10 +74,10 @@ from .store import EventStore
 log = logging.getLogger(__name__)
 
 # Config keys the service only reads once, at startup: the store and its lock
-# are opened, the web server is bound and the BLE name is scanned for before
-# any of this can change. A scene that changes one of them reloads perfectly
-# and then appears to do nothing, so every scene response says which ones
-# differ from what the process actually started with.
+# are opened, the web server bound and the BLE name scanned for before any of
+# this can change. A scene that changes one reloads perfectly and then appears
+# to do nothing, so every scene response says which ones differ from what the
+# process actually started with.
 _STARTUP_ONLY = ("ble_device_name", "database_path", "web_enabled", "web_host", "web_port")
 
 # One row's columns, in the order the export writes them. Mirrors what
@@ -88,9 +86,8 @@ _STARTUP_ONLY = ("ble_device_name", "database_path", "web_enabled", "web_host", 
 # spreadsheet.
 _EVENT_FIELDS = ("ts", "kind", "name", "duration_s", "mode", "value")
 # The most rows any single request will return. A ceiling rather than
-# pagination because this log is a few rows a day - the number exists so a
-# hand-made query cannot ask the service to build a 200 MB string, not because
-# anyone is expected to reach it.
+# pagination because this log is a few rows a day: it exists so a hand-made
+# query cannot ask the service to build a 200 MB string.
 _EVENT_EXPORT_MAX = 10000
 
 # Windows' registry sometimes maps .js to text/plain, which browsers reject
@@ -133,13 +130,6 @@ def _effect_dict(effect):
         "color2": effect.color2,
         "period_s": effect.period_s,
     }
-
-
-def _parse_with_warnings(raw: dict):
-    """The parser's complaints, captured for the editor. Lives in config.py
-    now that the scenes CLI needs the same thing offline - one parser, one
-    place its warnings are collected."""
-    return parse_with_warnings(raw)
 
 
 def _read_raw(path: str):
@@ -209,11 +199,10 @@ def _scene_state(ctx: WebContext, warnings: list[str] | None = None) -> dict:
 def _scene_file_body(body: dict, name: str | None) -> dict:
     """What actually gets written to a scene file.
 
-    The editor posts the effective config, which carries a `scenes` block;
-    that block belongs to config.json alone (a scene repointing the active
-    scene is a loop - see scenes.merge), so it is dropped here rather than
-    written and then ignored on every load. `name` leads because these files
-    are read by humans.
+    The editor posts the effective config, which carries a `scenes` block; that
+    block belongs to config.json alone (a scene repointing the active scene is
+    a loop - see scenes.merge), so it is dropped here rather than written and
+    then ignored on every load. `name` leads because humans read these files.
     """
     payload = {key: value for key, value in body.items() if key != "scenes"}
     return {"name": name, **payload} if name else payload
@@ -223,7 +212,7 @@ def _write_scene(ctx: WebContext, path: Path, payload: dict) -> list[str]:
     """Write a scene and return the warnings it would load with. Validation is
     against the *merged* result, since that is what the service will run."""
     base = _read_raw(ctx.cm.path) or {}
-    _, warnings = _parse_with_warnings(scenes.merge(base, payload))
+    _, warnings = parse_with_warnings(scenes.merge(base, payload))
     try:
         scenes.write_json(path, payload)
     except OSError as exc:
@@ -265,10 +254,6 @@ def create_app(ctx: WebContext) -> FastAPI:
             "uptime_s": int(time.time() - s.started_at),
             "config_path": ctx.cm.path,
             "mode_count": len(cfg.modes),
-            # Which mode would answer each gesture if you pressed right now.
-            # Resolved with the loop's own resolve(), not a second copy of the
-            # rules in JavaScript: "who handles this press" is a host decision,
-            # and the editor only marks what the host reports.
             "active_modes": _active_modes(ctx),
             "last_trigger": s.last_trigger,
             "last_mode": s.last_mode,
@@ -281,11 +266,11 @@ def create_app(ctx: WebContext) -> FastAPI:
             # False while a real button is out of range or unplugged - the
             # app keeps running, so the UI has to say why nothing lights up.
             "device_connected": ctx.device.connected,
-            # What the button said it is when we last connected. Worth showing
-            # because it answers the two questions a silent button raises:
-            # which firmware is on it, and does it even have the part you are
-            # waiting to see or hear. protocol_version 0 means it predates
-            # DEVICE_INFO and these are assumptions, not answers.
+            # What the button said it is when we last connected - the two
+            # questions a silent button raises: which firmware is on it, and
+            # does it even have the part you are waiting to see or hear.
+            # protocol_version 0 means it predates DEVICE_INFO, so these are
+            # assumptions rather than answers.
             "device_info": {
                 "protocol_version": ctx.device.info.protocol_version,
                 "firmware": ctx.device.info.firmware,
@@ -299,17 +284,16 @@ def create_app(ctx: WebContext) -> FastAPI:
             "clock_override": ctx.clock.overridden,
             "led_state": s.led_state,
             # The one-off look a takeover mode is pushing, if any (a metronome's
-            # live tempo, a countdown's ramp colour). Sent separately from the
-            # palette because that is what it is on the wire: something shown,
-            # not something stored. Null the rest of the time, and the virtual
-            # device falls back to the palette.
+            # live tempo, a countdown's ramp colour). Separate from the palette
+            # because that is what it is on the wire: something shown, not
+            # something stored. Null otherwise, and the virtual device falls
+            # back to the palette.
             "led_effect": _effect_dict(s.led_effect),
             "last_sound": s.last_sound,
             "sound_seq": s.sound_seq,
-            # Small enough to ride along on the status poll, and doing so is
-            # what keeps the virtual device honest: it renders the palette the
-            # hardware was actually sent (ctx.device.palette), not the config
-            # snapshot.
+            # Rides along on the status poll, which is what keeps the virtual
+            # device honest: it renders the palette the hardware was actually
+            # sent (ctx.device.palette), not the config snapshot.
             "led_palette": {
                 name: _effect_dict(e) for name, e in ctx.device.palette.items()
             },
@@ -320,7 +304,7 @@ def create_app(ctx: WebContext) -> FastAPI:
         raw = _read_raw(ctx.cm.path)
         warnings: list[str] = []
         if isinstance(raw, dict):
-            _, warnings = _parse_with_warnings(raw)
+            _, warnings = parse_with_warnings(raw)
         return {
             "path": ctx.cm.path,
             # Where a Save actually lands - the active scene's file, when
@@ -345,7 +329,7 @@ def create_app(ctx: WebContext) -> FastAPI:
             payload = _scene_file_body(body, existing.get("name"))
             warnings = _write_scene(ctx, path, payload)
         else:
-            _, warnings = _parse_with_warnings(body)
+            _, warnings = parse_with_warnings(body)
             payload = body
             try:
                 scenes.write_json(path, payload)
@@ -443,7 +427,7 @@ def create_app(ctx: WebContext) -> FastAPI:
         # The palette is pushed by the main loop's tick when it changes, so
         # nothing to do here; the LED follows within a second of the switch.
         log.info("scene switched to %r", loaded.scene_id or "none")
-        _, warnings = _parse_with_warnings(_read_raw(ctx.cm.write_path) or {})
+        _, warnings = parse_with_warnings(_read_raw(ctx.cm.write_path) or {})
         return _scene_state(ctx, warnings if loaded.scene_id is None else [])
 
     @app.delete("/api/scenes/{scene_id}")
@@ -466,16 +450,11 @@ def create_app(ctx: WebContext) -> FastAPI:
     async def stop_service():
         """Shut the service down the way Ctrl+C would.
 
-        This exists because Windows has no way for one process to ask
-        another to stop politely: SIGTERM is never delivered across
-        processes, and console control events need a console the tray
-        control panel does not have. The alternative is `TerminateProcess`,
+        The polite stop on Windows, which has no way for one process to ask
+        another to stop (CLAUDE.md). The alternative is `TerminateProcess`,
         which skips the run loop's cleanup - open timers left dangling and a
-        ringing alarm left ringing on the device.
-
-        No new exposure worth noting: this API already lets any caller
-        rewrite the whole config (see this module's header - it is
-        unauthenticated by design and expects a trusted network).
+        ringing alarm left ringing on the device. No new exposure: this API
+        can already rewrite the whole config (see the header).
         """
         if ctx.on_stop is None:
             raise HTTPException(503, "this service was not started with a stop hook")
@@ -487,7 +466,7 @@ def create_app(ctx: WebContext) -> FastAPI:
         """Dry-run the parser without writing or reloading - the config
         menu calls this to preview what would be accepted (and which keys
         would fall back) before the user commits a Save."""
-        cfg, warnings = _parse_with_warnings(body)
+        cfg, warnings = parse_with_warnings(body)
         return {"effective": as_dict(cfg), "warnings": warnings}
 
     @app.post("/api/config/reload")
@@ -501,16 +480,14 @@ def create_app(ctx: WebContext) -> FastAPI:
         same answer the midi action's `send()` and the metronome's
         `ClockListener.start()` would resolve a typed name against.
 
-        `out` is what the midi action sends to; `in` is what the metronome's
-        clock listens on - two separate, separately-indexed lists, exactly
-        as midi_io keeps them (a machine commonly has different counts of
-        each).
+        `out` is what the midi action sends to, `in` what the metronome's clock
+        listens on: two separately-indexed lists, exactly as midi_io keeps them
+        (a machine commonly has different counts of each).
 
-        Optional by construction, the same rule as colorEngine.js's
-        showLook: midi_io is optional-at-import and both its backends can be
-        absent (no rtmidi, not Windows), which is a normal state rather than
-        an error - so this never 500s, it answers with empty lists and a
-        note the port field can show instead of a suggestion.
+        Optional by construction, the same rule as colorEngine.js's showLook:
+        both midi_io backends can be absent (no rtmidi, not Windows), which is
+        a normal state rather than an error - so this never 500s, it answers
+        with empty lists and a note the port field can show.
         """
         try:
             return {"available": True, "out": midi_io.ports(), "in": midi_io.in_ports(), "note": None}
@@ -518,10 +495,9 @@ def create_app(ctx: WebContext) -> FastAPI:
             return {"available": False, "out": [], "in": [], "note": str(exc)}
 
     def _events(limit: int, kind, name, mode, since, until) -> list[dict]:
-        """The filtered log as dicts. Shared by the JSON endpoint and the
-        export so the file you download is by construction the table you were
-        looking at - two queries with two filter implementations would be two
-        answers to the same question."""
+        """The filtered log as dicts. Shared by the JSON endpoint and the export
+        so the file you download is by construction the table you were looking
+        at, rather than a second filter implementation's answer."""
         rows = ctx.store.recent(
             limit=min(max(limit, 1), _EVENT_EXPORT_MAX),
             kind=kind, name=name, mode=mode, since=since, until=until,
@@ -561,10 +537,9 @@ def create_app(ctx: WebContext) -> FastAPI:
     ):
         """The same rows as /api/events, as a download.
 
-        The default limit is the ceiling rather than 50: an export is asking
-        for the log, and silently handing back the most recent page of it
-        would be the kind of quiet wrong answer that is only noticed much
-        later, in a spreadsheet.
+        The default limit is the ceiling rather than 50: an export asks for the
+        log, and silently handing back its most recent page is the kind of
+        quiet wrong answer only noticed much later, in a spreadsheet.
         """
         if format not in ("csv", "json"):
             raise HTTPException(422, f"unknown format {format!r} - csv or json")
@@ -630,11 +605,10 @@ def create_app(ctx: WebContext) -> FastAPI:
     async def dev_led(body: dict = Body(...)):
         """Show one look on the real LED right now, without saving it.
 
-        What every colour picker's live preview posts to (colorEngine.js).
-        It needs no new device method because
-        "show this look" is already what an ephemeral effect means - the same
-        call `run_metronome` makes - so this is the seam being used, not
-        widened.
+        What every colour picker's live preview posts to (colorEngine.js). It
+        needs no new device method: "show this look" is already what an
+        ephemeral effect means - the same call `run_metronome` makes - so this
+        is the seam being used, not widened.
 
         Nothing is written and nothing is remembered: the next press, mode
         change or palette edit repaints from the config, which is what makes
@@ -645,19 +619,12 @@ def create_app(ctx: WebContext) -> FastAPI:
         device too old for effects falls back to rendering - and what the
         status line reports either way. IDLE is the harmless default.
 
-        Same exposure as the rest of this API: it can already rewrite the whole
-        config, so being able to light the LED adds nothing (see the header).
-
-        A `stops` body (a sequence look) parses through the same rules as
-        everywhere else a look is read (`parse_look_with_warnings`, shared
-        with the named-look pool), so a broken sequence is rejected here the
-        same way it would be on save. It does not *animate*, though: doing
-        that safely needs the same cancellable background task main.set_led
-        owns, walking the plan behind `sequence_safe` - CLAUDE.md's "ONE
-        gate" for that floor is main.py's Sequence branch, and this
-        stateless preview endpoint has nowhere to keep a task between
-        requests without becoming a second one. Until that exists, a
-        sequence previews as its first stop's colour: enough to confirm it
+        A `stops` body parses through `parse_look_with_warnings`, shared with
+        the named-look pool, so a broken sequence is rejected here exactly as
+        it would be on save. It does not *animate*: that needs the cancellable
+        task main.set_led owns behind `sequence_safe`, and a stateless preview
+        endpoint has nowhere to keep one without becoming a second gate. So a
+        sequence previews as its first stop's colour - enough to confirm it
         parsed, not what it will look like playing.
         """
         raw_state = body.get("state", LEDState.IDLE.value)
@@ -677,18 +644,16 @@ def create_app(ctx: WebContext) -> FastAPI:
                 ]
                 effect = LedEffect(style="solid", color=effect.stops[0].color)
 
-        # This pushes a look at the real LED, so it is subject to the same flash
-        # floor as anything the run loop pushes - a preview that could strobe
-        # past the configured limit would be a hole in the floor rather than a
-        # way to check it. What comes back is the floored effect, so the page
-        # reports what is actually on the light rather than what was asked for.
+        # A preview that could strobe past the configured limit would be a hole
+        # in the flash floor rather than a way to check it. The floored effect
+        # is what comes back, so the page reports what is on the light rather
+        # than what was asked for.
         effect = flash_safe(effect, ctx.cm.config.min_flash_period_s)
         ctx.device.set_led(state, effect)
         # Mirrors the tail of main.set_led rather than calling it: that one
-        # resolves the *active mode's* look, and the whole point here is to
-        # assert a literal one. The status fields are what the dashboard and
-        # the virtual device render from, so a test that skipped them would be
-        # invisible on a mock.
+        # resolves the *active mode's* look, and the point here is to assert a
+        # literal one. These fields are what the dashboard and the virtual
+        # device render from.
         ctx.status.led_state = state.value
         ctx.status.led_effect = effect
         return {

@@ -18,16 +18,10 @@ So "even and odd seconds are different colours" needs no notion of parity: a
 rung at 2s catches the even ones and a rung at 1s catches whatever is left.
 Rungs compose by division, and the ladder is read top down.
 
-**This is a third structure, not a variation on the other two**, and the
-distinction is worth keeping:
-
-    ramp.py     driven by progress 0->1     interpolates between colours
-    a stop list driven by the clock         plays colours in order
-    a ladder    driven by a counter         picks a colour by divisibility
-
-A ramp answers "how far through are you"; a ladder answers "what time is it".
-Neither can express the other - modular arithmetic is not interpolation - which
-is why this is its own module rather than a mode on `ramp`.
+**This is a third structure, not a variation on the other two** - the table of
+all three is in [sequencer.py](sequencer.py). Modular arithmetic is not
+interpolation, so neither a ramp nor a stop list can express a ladder, which is
+why this is its own module rather than a mode on `ramp`.
 
 Pure by construction: no clock, no device, no config. Nothing here knows what
 is being timed, which is what lets a stopwatch, a countdown and a metronome
@@ -40,10 +34,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # Rungs are matched by division, and floating-point seconds do not divide
-# exactly - 0.1 * 3 is not 0.30000000000000004's equal, and `2.0 % 0.5` can
-# land on 0.4999999999999998. Everything is therefore compared in whole
-# milliseconds, which is finer than any interval anyone would set and coarse
-# enough that the arithmetic is exact.
+# exactly - `2.0 % 0.5` can land on 0.4999999999999998. Everything is compared
+# in whole milliseconds instead: finer than any interval anyone would set, and
+# coarse enough that the arithmetic is exact.
 _MS = 1000
 # How far off a boundary a tick may be and still count as landing on it. One
 # millisecond absorbs the rounding in converting a float number of seconds,

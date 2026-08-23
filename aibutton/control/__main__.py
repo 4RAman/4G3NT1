@@ -43,9 +43,8 @@ def main(argv: list[str] | None = None) -> None:
         # advice a lot of people cannot act on.
         if ask_to_show(config):
             return
-        # It holds the lock but will not answer: wedged, not merely running.
-        # Saying "look in the tray" here is what made this so confusing to
-        # diagnose - there was nothing in the tray to look at.
+        # It holds the lock but will not answer: wedged, not merely running -
+        # and "look in the tray" would point at nothing.
         _not_answering(str(exc))
         return
 
@@ -61,12 +60,11 @@ def main(argv: list[str] | None = None) -> None:
 def _not_answering(detail: str) -> None:
     """Report a panel that holds the lock but will not talk.
 
-    **Never parented to a withdrawn root.** The previous version created a Tk
-    root, withdrew it, and put a modal `showinfo` on it - which on Windows can
-    render with no taskbar button and no focus, so the process sat forever
-    holding a dialog nobody could see or dismiss. That is the exact failure
-    being reported here, so this shows a real window: mapped, raised, topmost
-    for a moment, and destroyed on a button rather than by a modal loop.
+    **Never parented to a withdrawn root.** On Windows a modal on a withdrawn
+    Tk root can render with no taskbar button and no focus, leaving the process
+    holding a dialog nobody can see or dismiss - which is the exact failure
+    being reported here. So this is a real window: mapped, raised, topmost for
+    a moment, and destroyed on a button rather than by a modal loop.
     """
     message = (
         "The control panel is already running, but it is not responding.\n\n"

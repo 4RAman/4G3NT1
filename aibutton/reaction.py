@@ -2,12 +2,10 @@
 
 Pure by construction and shaped exactly like [hotcold.py](hotcold.py) - a
 total `step` over `(game, event, now)` returning the next game and what the
-driver should do about it. The two games do *not* import each other; what they
-share is the constant below and the idea behind it, both taken from the same
-place.
+driver should do about it. The two games do *not* import each other.
 
 **How honest the number is.** Two corrections are possible and only one of
-them is:
+them is made:
 
 - However late this device's gestures arrive is known and is subtracted
   (`Game.latency_s`, filled in by the driver from
@@ -18,11 +16,10 @@ them is:
   device actually lighting up is *not* known - tens of milliseconds, varying
   with connection interval. It lands as a systematic offset on every reading.
 
-So absolute times here are approximate, and the comparison between your own
-attempts - which is what a reaction timer is actually for - is sound, because
-the unknown offset is the same for all of them. Anything claiming millisecond
-accuracy over this link would be lying; ARCHITECTURE.md's latency budget is
-why that only gets fixed by moving the runtime onto the device.
+So absolute times here are approximate, and comparing your own attempts -
+which is what a reaction timer is actually for - is sound, because the unknown
+offset is the same for all of them. ARCHITECTURE.md's latency budget is why
+that only gets fixed by moving the runtime onto the device.
 """
 
 from __future__ import annotations
@@ -103,12 +100,11 @@ def tally(game: Game) -> dict:
     carry out ([summary.py](summary.py)). Shaped exactly like
     [hotcold.py](hotcold.py)'s, and pure for the same reason.
 
-    Zeros rather than missing keys when nothing was timed - the key set has to
-    be the same on every exit because one of the carriers is positional - and
-    `played` is what says whether the times mean anything. `false_starts` is
-    reported even though it is not a time: it is the half of the session the
-    average deliberately leaves out, so a receiver that never saw it would
-    think a scrappy run was a clean one.
+    Zeros rather than missing keys when nothing was timed - the same keys on
+    every exit (CLAUDE.md) - and `played` says whether the times mean anything.
+    `false_starts` is reported even though it is not a time: it is the half of
+    the session the average deliberately leaves out, so a receiver that never
+    saw it would read a scrappy run as a clean one.
     """
     return {
         "played": game.played,

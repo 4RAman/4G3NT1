@@ -293,7 +293,7 @@ tables on both sides agree.
   own.
 - **Presses while disconnected are dropped**, not queued: replaying them
   later would fire modes against the wrong time of day. Offline buffering
-  needs a time sync and is parked (see DESIGN-ESP32.md).
+  needs a time sync and is parked (see TODO.md).
 - **A ringing alarm stops on disconnect.** Nobody is left who could dismiss
   it, and a buzzer that rings until the battery dies is the one failure
   everyone notices.

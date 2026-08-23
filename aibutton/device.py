@@ -1,24 +1,20 @@
 """The host's view of the button hardware - the one seam the ESP32 plugs into.
 
-Everything the app says to hardware goes through `ButtonDevice`, and
-everything hardware says back arrives as a `TriggerType` on its `events`
-queue. That is the whole contract:
-
     in   events: asyncio.Queue[TriggerType]
     out  set_led(state) / play_sound(sound) / start_loop(sound) / stop_loop()
 
 `MockDevice` is in-memory - it backs the web UI's simulate-press buttons and
-virtual device panel. `BLEDevice` ([ble_device.py](ble_device.py)) is the
-real thing.
+virtual device panel. `BLEDevice` ([ble_device.py](ble_device.py)) is the real
+thing.
 
 The three enums below are the *wire vocabulary*: gestures notified up, LED
-states and sound commands written down. Their byte values are pinned at the
-bottom of this module, mirroring
-[firmware/protocol.py](../firmware/protocol.py) -
-[test_protocol.py](../tests/test_protocol.py) fails if the two drift.
+states and sound commands written down. Their byte values are pinned lower
+down, mirroring [firmware/protocol.py](../firmware/protocol.py) -
+[test_protocol.py](../tests/test_protocol.py) fails if the two drift. That file
+documents the wire layouts; this one documents what the host does with them.
 
-Animations and tones render *on the device*; the wire carries the state,
-not the frames.
+Animations and tones render *on the device*; the wire carries the state, not
+the frames.
 """
 
 from __future__ import annotations
@@ -35,25 +31,21 @@ log = logging.getLogger(__name__)
 class TriggerType(Enum):
     """A gesture, as detected on-device and notified to the host.
 
-    Tap counts past five are expressible on the wire and have no member
-    here yet - adding one is a host-side change with no reflash behind it,
-    which is the property parameterised gestures exist to buy (ROADMAP D5).
+    Tap counts past five are expressible on the wire and have no member here
+    yet - adding one is a host-side change with no reflash behind it, which is
+    what parameterised gestures exist to buy (ROADMAP D5).
     """
 
     SHORT_PRESS = "short_press"
     LONG_PRESS = "long_press"
     DOUBLE_TAP = "double_tap"
     TRIPLE_TAP = "triple_tap"
-    # Four was the gap TAP_5 left behind, not a decision: five arrived first,
-    # chosen to be deliberately awkward for a global on/off, and nothing ever
-    # filled in behind it (TODO 28). The names come from firmware/protocol.py's
-    # TAP_NAMES, which already covers 4..9; what a count means to the *host*
-    # is this table, and a count with no member here is dropped rather than
-    # fired - a stray extra tap on a triple should do nothing, not something
-    # else.
     TAP_4 = "tap_4"
-    # Far enough out to be unmistakably deliberate, which is what a global
-    # on/off wants.
+    # Five is far enough out to be unmistakably deliberate, which is what a
+    # global on/off wants (TODO 28). Names come from protocol.TAP_NAMES, which
+    # covers 4..9; what a count means to the *host* is this table, and a count
+    # with no member here is dropped rather than fired - a stray extra tap on a
+    # triple should do nothing, not something else.
     TAP_5 = "tap_5"
 
 
@@ -100,9 +92,9 @@ GESTURE_CONFIG_UUID = "f3641408-00b0-4240-ba50-05ca45bf8abc"
 # --- what the device says it is ---------------------------------------
 #
 # The host asks rather than assumes (ROADMAP D8). PROTOCOL_VERSION is mirrored
-# because both sides must agree on what version 1 *means*; the firmware's own
-# version is read off the device, never mirrored, because a host that
-# hard-coded it would only be describing itself.
+# because both sides must agree what version 1 *means*; the firmware's own
+# version is read off the device, never mirrored - a host that hard-coded it
+# would only be describing itself.
 
 PROTOCOL_VERSION = 1
 
@@ -116,10 +108,9 @@ CAP_MIC = 0x0040
 CAP_OTA = 0x0080
 CAP_EFFECT = 0x0100          # a look can be pushed without allocating an LEDState
 CAP_GESTURE_PARAMS = 0x0200  # gestures carry a parameter; GESTURE_CONFIG is read
-# The rainbow style reads its brightness from the effect's colour. No wire
-# change - those bytes were simply discarded for this style before - but it
-# still earns a bit, because the failure without one is silent: a slider that
-# does nothing on an un-reflashed button is worse than a slider that says why.
+# The rainbow style reads its brightness from the effect's colour. It earns a
+# bit despite being no wire change, because the failure without one is silent -
+# see protocol.CAP_RAINBOW_LEVEL.
 CAP_RAINBOW_LEVEL = 0x0400
 
 CAPABILITY_NAMES = {
@@ -162,11 +153,11 @@ class DeviceInfo:
         ]
 
 
-# What to believe about a device that has no DEVICE_INFO characteristic. The
-# only firmware that predates it is this project's own, which has an LED, a
-# buzzer and palette rendering - so assuming all three keeps an un-reflashed
-# button behaving exactly as it did, rather than going dark and silent the
-# moment the host learns to ask.
+# What to believe about a device with no DEVICE_INFO characteristic. The only
+# firmware that predates it is this project's own, which has an LED, a buzzer
+# and palette rendering - so assuming all three keeps an un-reflashed button
+# behaving exactly as it did, rather than going dark and silent the moment the
+# host learns to ask.
 ASSUMED_INFO = DeviceInfo(
     protocol_version=0,
     firmware_version=(0, 0, 0),
@@ -198,9 +189,7 @@ GESTURE_CODES: dict[TriggerType, int] = {
 }
 GESTURE_BY_CODE = {code: trigger for trigger, code in GESTURE_CODES.items()}
 
-# Kinds that take a parameter byte. HOLD is reserved - the wire can carry a
-# hold level, the detector emits one, and claiming the code now is what keeps
-# that a host-side change later rather than another reflash.
+# Kinds that take a parameter byte. HOLD is reserved - see protocol.py.
 GESTURE_TAP = 0x10
 GESTURE_HOLD = 0x11
 
@@ -226,9 +215,8 @@ def decode_gesture(data) -> TriggerType | None:
 
     Both forms are accepted, and that asymmetry is the point: the host must
     understand everything a device might send, because the device is the half
-    that is hard to update. A one-byte notify is a pre-v1 button (or a v1 one
-    reporting a gesture that has always had a code); two bytes is a kind plus
-    its parameter.
+    that is hard to update. One byte is a pre-v1 button, or a v1 one reporting a
+    gesture that has always had a code; two is a kind plus its parameter.
     """
     if not data:
         return None
@@ -242,17 +230,17 @@ def decode_gesture(data) -> TriggerType | None:
 
 def gesture_config_payload(max_taps: int) -> bytes:
     """The GESTURE_CONFIG write: how long a tap burst the device should look
-    for. Grows by appending, so a device that learns about hold levels reads
-    a longer payload and an older one ignores the tail."""
+    for. Grows by appending, so a device that learns about hold levels reads a
+    longer payload and an older one ignores the tail."""
     return bytes([max(DEFAULT_MAX_TAPS, min(int(max_taps), MAX_TAPS))])
 
 
 def max_taps_for(triggers) -> int:
     """The longest tap burst any of `triggers` needs.
 
-    Derived rather than configured: counting to three costs a double tap its
-    instant response, so a button pays that only once something is actually
-    bound to a triple tap.
+    Derived rather than configured, because counting further costs a double tap
+    its instant response - so a button pays that only once something is actually
+    bound to a triple.
     """
     return max(
         [DEFAULT_MAX_TAPS] + [TAP_COUNTS[t] for t in triggers if t in TAP_COUNTS]
@@ -305,34 +293,28 @@ LED_STYLES = tuple(LED_STYLE_CODES)  # config validation + the web UI's picker
 # fields that would do nothing rather than invite pointless edits.
 STYLE_USES_COLOR = {"solid", "breathe", "flash", "alternate", "fade"}
 STYLE_USES_COLOR2 = {"alternate", "fade"}
-# Styles that read `color` as a *level* rather than as a hue. Rainbow is the
-# only one: it generates its own hues and takes the colour's brightest channel
-# as its brightness. Kept apart from STYLE_USES_COLOR on purpose - the editor
-# has to offer a brightness slider here, not a colour picker, and a mode
-# walking a ramp must know that pushing a colour into this style shows nothing.
+# Styles that read `color` as a *level* rather than a hue. Rainbow is the only
+# one: it generates its own hues and takes the colour's brightest channel as its
+# brightness. Kept apart from STYLE_USES_COLOR on purpose - the editor has to
+# offer a brightness slider here, not a colour picker, and a mode walking a ramp
+# must know that pushing a colour into this style shows nothing.
 STYLE_USES_LEVEL = {"rainbow"}
-# There is deliberately no STYLE_USES_PERIOD. Which styles read `period_s` is
-# declared once, on the editor's own style descriptors (`uses` in schema.js),
-# because the only consumer is the editor deciding which fields to show. A
-# second copy here had no reader and no drift test - an unwatched mirror is
-# worse than no mirror, since the next person to change one side has nothing
-# telling them about the other.
+# There is deliberately no STYLE_USES_PERIOD: the only consumer is the editor
+# deciding which fields to show, so it is declared once on the style descriptors
+# in schema.js. A second copy here would have no reader and no drift test, and
+# an unwatched mirror is worse than no mirror.
 
 # Styles whose period is a hard on/off transition, which is what
 # photosensitivity guidance is actually about. `breathe` and `fade` cross the
-# same distance smoothly and do not strobe the same way, so the floor below
-# does not apply to them - see SAFE_MIN_PERIOD_S.
+# same distance smoothly and do not strobe the same way, so the floor below does
+# not apply to them.
 STYLE_STROBES = {"flash", "alternate"}
 
 # The recommended floor on how often a light may switch: 3 Hz, per WCAG 2.3.1's
 # general-purpose flash threshold. It lives here rather than in config.py
 # because both config and main need it and device.py is the module both may
-# import (config imports device, never the reverse).
-#
-# It is the *default*, not the law: `AppConfig.min_flash_period_s` is a real
-# setting and may be taken lower deliberately. Everything that renders reads
-# the config's effective value; this constant is only what you get when nobody
-# said otherwise.
+# import (config imports device, never the reverse). It is the *default*, not
+# the law - see CLAUDE.md's "The flash floor has one gate, and it is a setting".
 SAFE_MIN_PERIOD_S = 1 / 3
 
 _MAX_PERIOD_CS = 0xFFFF  # the wire carries centiseconds in two bytes
@@ -351,10 +333,9 @@ def rgb_bytes(color: str) -> bytes:
 
 
 def effect_payload(effect) -> bytes:
-    """The nine bytes describing a look - the LED_EFFECT write, and the tail
-    of a palette entry. `effect` is duck-typed on
-    .style/.color/.color2/.period_s (config.LedEffect) so this module stays
-    free of config imports."""
+    """The nine bytes describing a look - the LED_EFFECT write, and the tail of
+    a palette entry. `effect` is duck-typed on .style/.color/.color2/.period_s
+    (config.LedEffect) so this module stays free of config imports."""
     period_cs = max(1, min(int(round(effect.period_s * 100)), _MAX_PERIOD_CS))
     return bytes(
         [
@@ -388,23 +369,15 @@ class ButtonDevice(ABC):
         # what it read off the wire.
         self.info: DeviceInfo = ASSUMED_INFO
         # How much earlier than its arrival a gesture from this device actually
-        # happened. An attribute for `info`'s reason: it is device state the
-        # host reads and never asserts, so nothing has to be implemented to
-        # satisfy it.
+        # happened - an attribute for `info`'s reason, and the correction games
+        # subtract (see CLAUDE.md, "A gesture happened earlier than it arrived").
         #
         # Zero here because an *injected* gesture (`press` below, which is what
         # the web UI's simulate buttons and the tests use) is delivered the
-        # instant it is made. A real detector is the case that is late: a
-        # single press is held back until the multi-tap window closes to prove
-        # it is not a double, unconditionally, since `max_taps` floors at 2.
-        # BLEDevice sets it accordingly.
-        #
-        # Only two things read it, both games, and both would be visibly wrong
-        # without it - a reaction timer would score every attempt as a false
-        # start. The known gap: simulate-press *into a real device* borrows the
-        # radio's figure and reads early. That is a debugging path, and the
-        # alternative is a per-event latency the whole queue would have to
-        # carry.
+        # instant it is made; a real detector is the late case, and BLEDevice
+        # sets this accordingly. Known gap: simulate-press *into a real device*
+        # borrows the radio's figure and reads early. That is a debugging path,
+        # and the alternative is a per-event latency the whole queue would carry.
         self.press_latency_s: float = 0.0
 
     def press(self, trigger: TriggerType) -> None:
@@ -416,19 +389,13 @@ class ButtonDevice(ABC):
 
     @abstractmethod
     def set_led(self, state: LEDState, effect=None) -> None:
-        """Show `state`, optionally wearing `effect` instead of its palette
-        entry.
+        """Show `state`, optionally wearing `effect` instead of its palette entry.
 
         The optional look is how a mode gets its own appearance without
-        allocating a global `LEDState` (ROADMAP D4). It is *ephemeral*: not
-        stored, not named, and gone at the next set_led. That is deliberately
-        an argument rather than a fifth method - it is the same assertion the
-        seam already makes ("show this"), carrying more detail, so it widens
-        nothing.
-
-        `state` is still required, and still means something, because it is
-        what the web UI and the status line report and what a device without
-        the capability falls back to rendering.
+        allocating a global `LEDState` (ROADMAP D4); it is *ephemeral* - not
+        stored, not named, gone at the next set_led. `state` stays required and
+        still means something, being what the web UI and the status line report
+        and what a device without the capability falls back to rendering.
         """
 
     @abstractmethod
@@ -444,10 +411,10 @@ class ButtonDevice(ABC):
     def set_palette(self, palette: dict) -> None:
         """Tell the device what each LED state should look like.
 
-        Called on startup and whenever the config changes, so the palette is
-        host state the device is told about - exactly like the LED state
-        itself. Devices that render locally (MockDevice, whose LED is the
-        browser) just remember it.
+        Called on startup and on every config change, so the palette is host
+        state the device is told about - exactly like the LED state itself.
+        Devices that render locally (MockDevice, whose LED is the browser) just
+        remember it.
         """
         self.palette = palette
 
@@ -455,9 +422,9 @@ class ButtonDevice(ABC):
         """Tell the device how long a tap burst to look for.
 
         Device state the host asserts, exactly like the palette, and derived
-        from what the config actually binds rather than configured by hand -
-        see `max_taps_for`. A device that cannot be told keeps its default of
-        2, which is the behaviour it has always had.
+        from what the config binds rather than configured by hand - see
+        `max_taps_for`. A device that cannot be told keeps its default of 2,
+        which is the behaviour it has always had.
         """
         self.max_taps = max(DEFAULT_MAX_TAPS, min(int(max_taps), MAX_TAPS))
 
@@ -478,13 +445,13 @@ class ButtonDevice(ABC):
 
 
 class MockDevice(ButtonDevice):
-    """In-memory ButtonDevice: presses are injected rather than detected,
-    and feedback is recorded rather than shown.
+    """In-memory ButtonDevice: presses are injected rather than detected, and
+    feedback is recorded rather than shown.
 
     This is the whole of dev mode. The web UI's simulate-press buttons call
-    press(); its virtual device panel renders the LED state and plays the
-    tones in the browser (main.py mirrors both into DeviceStatus). The
-    attributes below are that same state, for tests to assert against.
+    press(); its virtual device panel renders the LED state and plays the tones
+    in the browser (main.py mirrors both into DeviceStatus). The attributes
+    below are that same state, for tests to assert against.
     """
 
     def __init__(self) -> None:
@@ -497,9 +464,8 @@ class MockDevice(ButtonDevice):
         self.last_sound: Sound | None = None
         self.looping: Sound | None = None
         # The mock's hardware is the browser, which renders the LED and plays
-        # the tones - so it genuinely has all of these, and says so rather
-        # than inheriting the "assume the worst case is fine" default. It
-        # counts taps in Python, so gesture parameters are free too.
+        # the tones, so it genuinely has all of these rather than inheriting
+        # ASSUMED_INFO. Taps are counted in Python, so params are free too.
         self.info = DeviceInfo(
             protocol_version=PROTOCOL_VERSION,
             capabilities=(

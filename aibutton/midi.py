@@ -1,17 +1,16 @@
 """MIDI channel-voice message encoding - the wire format, and nothing else.
 
 MIDI is what a DAW listens on when it is listening for a physical control.
-Studio One is the case that forced this: PreSonus document control surfaces
-over MIDI / Mackie Control and Studio One Remote speaks their own UCNet, so
-there is no OSC listener to point [osc.py](osc.py) at. TouchOSC's own
-documented route into a DAW is a bridge converting OSC *to* MIDI, which is the
-same admission from the other side.
+Studio One is the case that forced it: PreSonus document control surfaces over
+MIDI / Mackie Control and Studio One Remote speaks their own UCNet, so there is
+no OSC listener to point [osc.py](osc.py) at. TouchOSC's own documented route
+into a DAW is a bridge converting OSC *to* MIDI - the same admission from the
+other side.
 
 **No ports here**, for the reason [osc.py](osc.py) has no sockets and
-[device.py](device.py) has no radio: encoding is the half worth testing
-against a table, and the half that runs anywhere. Getting the bytes to a port
-is [midi_io.py](midi_io.py), which has its own problem to solve - there are
-two ways to reach a MIDI port and neither exists on every platform.
+[device.py](device.py) has no radio: encoding is the half worth testing against
+a table, and the half that runs anywhere. Getting the bytes to a port is
+[midi_io.py](midi_io.py).
 
 **Three bytes, and the useful part is which three.** A channel-voice message
 is a status byte carrying the message kind in its high nibble and the channel
@@ -57,13 +56,12 @@ def message(kind: str, channel: int, number: int, value: int) -> bytes:
 
     Total by construction, the way `osc.message` is: out-of-range numbers are
     clamped and an unknown kind falls back to note-on, because the alternative
-    is a press that raises in the middle of an action and logs a traceback
-    where a light should have come on. The editor and `_parse_action` both
+    is a press that raises mid-action. The editor and `_parse_action` both
     validate up front, so this is the second line of defence.
 
-    Clamping rather than wrapping is the same call `osc.py` makes on int32:
-    a value of 200 arriving as 127 looks like "it went to the top", where the
-    modulo would send 72 and look like the button inventing numbers.
+    Clamping rather than wrapping is the same call `osc.py` makes on int32: 200
+    arriving as 127 looks like "it went to the top", where the modulo would send
+    72 and look like the button inventing numbers.
     """
     status = _STATUS.get(kind, _STATUS[NOTE_ON])
     wire_channel = _clamp(channel, CHANNEL_MIN, CHANNEL_MAX) - 1

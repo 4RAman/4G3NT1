@@ -1,15 +1,14 @@
 // Renders and edits a single mode, always fully open: name → template
 // <select> (swaps the template body) → activation <select> (swaps the
-// activation body). menu.js's master/detail Modes tab shows one of these at
-// a time in its detail pane, plus - only for the mode being saved-checked -
-// a throwaway instance built purely to call validate(). Either way there is
-// only ever one on screen, so this component has no collapse state of its
-// own. It composes its fields from the widget factory and its
-// template/activation choices from the schema registries, so it knows
-// nothing about specific template, activation, action, or field kinds
-// (Dependency Inversion). It mutates the mode object in place and reports
-// edits, moves, and removal through injected handlers - it does not own the
-// modes list.
+// activation body). Only ever one is on screen (menu.js's detail pane), so
+// this has no collapse state of its own; a second, never-attached instance
+// exists only to run validate() over a mode that is not selected.
+//
+// Fields come from the widget factory and the template/activation choices
+// from the schema registries, so it knows nothing about specific template,
+// activation, action or field kinds (Dependency Inversion). It mutates the
+// mode object in place and reports edits, moves and removal through injected
+// handlers - it does not own the modes list.
 
 import { el, clear } from './dom.js';
 import {
@@ -44,19 +43,15 @@ export class ModeEditor {
   }
 
   // Context handed to dynamic widgets (e.g. the enter_mode target select).
-  // `getModes` returns the sibling modes so an options function can list
-  // them; menu.js injects the provider, so this editor never reaches into
-  // the modes list itself (Dependency Inversion). `api` rides along for
-  // widgets whose suggestions come from the service (the MIDI port
-  // datalist) - optional by construction, absent in the offline editor.
+  // `api` rides along for widgets whose suggestions come from the service
+  // (the MIDI port datalist) - optional by construction, absent offline.
   _fieldCtx() {
     return { getModes: this.handlers.getModes || (() => []), api: this.handlers.api };
   }
 
   /** The named-action pool, as `{name: action}`. Read through the handler for
-   *  the same reason `getModes` is: this editor does not know where the pool
-   *  lives, and an editor built off-screen to run validators (menu.js's
-   *  _collectErrors) may be handed none at all. */
+   *  the same reason `getModes` is - and an editor built off-screen purely to
+   *  run validators may be handed none at all. */
   _actionPool() {
     return (this.handlers.getActions ? this.handlers.getActions() : null) || {};
   }
@@ -112,24 +107,13 @@ export class ModeEditor {
       wrap.hidden = true;
       return wrap;
     }
-    const pool = this.handlers.getLooks?.() || {};
-    const names = Object.keys(pool).sort();
-
     wrap.append(el('span', { className: 'fld-label', textContent: 'How it looks' }));
     for (const key of states) {
       const state = LED_STATE_BY_KEY[key] || { key, label: key, meaning: '' };
-      const select = el('select', { className: 'inp' }, [
-        el('option', { value: '', textContent: '- standard colour -' }),
-        ...names.map((n) => el('option', { value: n, textContent: n })),
-      ]);
-      const chosen = this.mode.looks?.[key] || '';
-      // A look deleted from the pool leaves a dangling name. Show it rather
-      // than silently snapping to the standard colour - the Python parser
-      // warns about exactly this, and the two should agree.
-      if (chosen && !names.includes(chosen)) {
-        select.append(el('option', { value: chosen, textContent: `${chosen} (missing)` }));
-      }
-      select.value = chosen;
+      const select = el('select', {
+        className: 'inp',
+        onchange: () => { setLook(select.value); paint(); this._changed(); },
+      });
 
       const swatch = el('span', { className: 'palette-swatch' });
       const summary = el('span', { className: 'palette-summary' });
@@ -189,28 +173,23 @@ export class ModeEditor {
         // is offered only when there is something to escape.
         const others = sharedBy(select.value);
         if (others) {
-          const copy = el('button', {
-            type: 'button',
-            textContent: `Make a copy just for this mode`,
-          });
-          copy.addEventListener('click', () => {
-            const name = this.handlers.addLook?.(select.value, effect);
-            if (!name) return;
-            rebuildOptions(name);
-            setLook(name);
-            paint();
-            this._changed();
-          });
           editorSlot.append(el('div', { className: 'looks-shared' }, [
             el('span', {
               className: 'menu-hint',
               textContent: `Shared with ${others} other mode${others > 1 ? 's' : ''} - editing changes it for all of them.`,
             }),
-            copy,
+            el('button', {
+              type: 'button',
+              textContent: 'Make a copy just for this mode',
+              onclick: () => adopt(this.handlers.addLook?.(select.value, effect)),
+            }),
           ]));
         }
       };
 
+      // A look deleted from the pool leaves a dangling name. It stays listed,
+      // marked, rather than silently snapping to the standard colour - the
+      // Python parser warns about exactly this, and the two should agree.
       const rebuildOptions = (selected) => {
         const current = Object.keys(this.handlers.getLooks?.() || {}).sort();
         clear(select);
@@ -222,34 +201,34 @@ export class ModeEditor {
         select.value = selected || '';
       };
 
-      select.addEventListener('change', () => {
-        setLook(select.value);
+      // Point this state at a look that has just been added to the pool.
+      const adopt = (name) => {
+        if (!name) return;
+        rebuildOptions(name);
+        setLook(name);
         paint();
         this._changed();
-      });
+      };
 
       // Making a look from a preset, without going anywhere. This is the path
       // that replaces "add one in the Lights tab first" - the pool still owns
       // it afterwards, so nothing about the shared-look model changes.
-      const fromPreset = el('select', { className: 'inp' }, [
+      const fromPreset = el('select', {
+        className: 'inp',
+        onchange: () => {
+          const preset = LOOK_PRESETS.find((p) => p.id === fromPreset.value);
+          fromPreset.value = '';
+          if (preset) adopt(this.handlers.addLook?.(preset.label, preset.effect));
+        },
+      }, [
         el('option', { value: '', textContent: 'New look from a preset…' }),
         ...LOOK_PRESET_GROUPS.map((group) => el('optgroup', { label: group },
           LOOK_PRESETS.filter((p) => p.group === group).map(
             (p) => el('option', { value: p.id, textContent: p.label }),
           ))),
       ]);
-      fromPreset.addEventListener('change', () => {
-        const preset = LOOK_PRESETS.find((p) => p.id === fromPreset.value);
-        fromPreset.value = '';
-        if (!preset) return;
-        const name = this.handlers.addLook?.(preset.label, preset.effect);
-        if (!name) return;
-        rebuildOptions(name);
-        setLook(name);
-        paint();
-        this._changed();
-      });
 
+      rebuildOptions(this.mode.looks?.[key] || '');
       paint();
       wrap.append(el('div', { className: 'looks-pick' }, [
         el('span', { className: 'palette-name', textContent: state.label }),
@@ -262,11 +241,10 @@ export class ModeEditor {
   /**
    * The mode's lifecycle hooks - one action as the session starts, one as it
    * ends. Rendered by `_gesture`, because a hook *is* a binding and only what
-   * triggers it differs, which is also why adding these costs no new widget.
+   * triggers it differs, which is why adding these cost no new widget.
    *
    * Takeover-only: an everyday mode is never entered or left, so a hook on one
-   * could never fire - the Python parser says exactly that as a warning, and
-   * this is the same fact one step earlier.
+   * could never fire - the same fact the parser warns about, one step earlier.
    */
   _hooks() {
     const descriptor = TEMPLATE_BY_TYPE[this.mode.template];
@@ -276,9 +254,9 @@ export class ModeEditor {
       // would appear the moment it was switched on.
       return el('div', { hidden: true });
     }
-    // `gestures` for the layout, because that is literally what this row
-    // holds - a stack of gesture-rows - and inventing a second class that
-    // copied its four properties would be a rule waiting to drift.
+    // `gestures` for the layout, because that is literally what this row holds
+    // - a stack of gesture-rows - and a second class copying its four
+    // properties would be a rule waiting to drift.
     const wrap = el('div', { className: 'gestures hooks-row', 'data-tier': 'tinker' }, [
       el('span', { className: 'fld-label', textContent: 'Around the session' }),
     ]);
@@ -325,11 +303,11 @@ export class ModeEditor {
   }
 
   // Whether *this* mode is the last ambient (actions-template) mode with an
-  // Always activation. Recomputed from the live sibling list every time it's
-  // asked, never cached: config.py's `_ensure_ambient_always` treats the same
-  // invariant as structural rather than a stored flag, for the same reason -
-  // a cached or stored answer can go stale the moment a sibling mode changes,
-  // or be edited away exactly like the mode it was meant to protect.
+  // Always activation. Recomputed from the live sibling list every time,
+  // never cached - the same reason config.py's `_ensure_ambient_always`
+  // treats it as structural rather than a stored flag: a stored answer goes
+  // stale the moment a sibling changes, and can be edited away exactly like
+  // the mode it was meant to protect.
   _isOnlyAmbientAlways() {
     const isAmbientAlways = (m) => m.template === 'actions' && m.activation?.type === 'always';
     if (!isAmbientAlways(this.mode)) return false;
@@ -341,23 +319,16 @@ export class ModeEditor {
     const name = el('input', {
       type: 'text', className: 'inp mode-name',
       value: this.mode.name || '', placeholder: 'Mode name',
-    });
-    name.addEventListener('input', () => {
-      this.mode.name = name.value;
-      this._changed();
+      oninput: () => { this.mode.name = name.value; this._changed(); },
     });
 
     // Filled in by setActive() from the host's own resolution - this is the
     // one place "which mode is actually in charge right now?" gets answered.
     this.activeEl = el('span', { className: 'mode-active', hidden: true });
 
-    const btn = (text, title, cls, fn, disabled = false) => {
-      const b = el('button', {
-        type: 'button', className: `mini ${cls}`, textContent: text, title, disabled,
-      });
-      b.addEventListener('click', fn);
-      return b;
-    };
+    const btn = (text, title, className, onclick, disabled = false) => el('button', {
+      type: 'button', className: `mini ${className}`, textContent: text, title, onclick, disabled,
+    });
     // Reorder arrows only where order decides anything: everyday modes are
     // read top to bottom, takeover modes are found by name.
     const reorder = this.handlers.canReorder === false ? [] : [
@@ -390,16 +361,14 @@ export class ModeEditor {
   // --- template picker (swaps the template body) ---------------------------
 
   _templatePicker() {
-    const select = el('select', { className: 'inp' },
-      TEMPLATES.map((t) => el('option', { value: t.type, textContent: t.label })));
+    const select = el('select', {
+      className: 'inp',
+      onchange: () => this._switchTemplate(select.value),
+    }, TEMPLATES.map((t) => el('option', { value: t.type, textContent: t.label })));
     select.value = this.mode.template || TEMPLATES[0].type;
 
     this.templateBody = el('div', { className: 'tpl-body' });
     this._buildTemplateBody();
-
-    select.addEventListener('change', () => {
-      this._switchTemplate(select.value);
-    });
 
     return el('div', { className: 'pick-row' }, [
       el('div', { className: 'pick-head' }, [
@@ -411,9 +380,8 @@ export class ModeEditor {
   }
 
   // Replace template fields, then re-pin the activation to one this template
-  // allows (clears + rebuilds the activation picker if it became invalid).
-  // Switching to stopwatch/counter therefore re-pins activation to `manual`,
-  // since `manual` is their only allowed activation.
+  // allows - switching to stopwatch or counter lands on `manual`, their only
+  // allowed one.
   _switchTemplate(type) {
     const descriptor = TEMPLATE_BY_TYPE[type];
     if (!descriptor) return;
@@ -425,11 +393,10 @@ export class ModeEditor {
       'looks']) {
       delete this.mode[key];
     }
-    // Hooks are the mode's own and survive a swap between takeovers - what
-    // they do does not depend on the template. An everyday mode is never
-    // entered or left, though, so one moved onto that template could only be
-    // dead weight the parser warns about; drop it where it stops meaning
-    // anything, rather than keeping it somewhere it can never be seen.
+    // Hooks are the mode's own and survive a swap between takeovers: what they
+    // do does not depend on the template. An everyday mode is never entered or
+    // left, though, so one moved there could only be dead weight the parser
+    // warns about - drop it where it stops meaning anything.
     if (descriptor.nature !== 'takeover') {
       for (const hook of MODE_HOOKS) delete this.mode[hook.key];
     }
@@ -451,10 +418,8 @@ export class ModeEditor {
     const descriptor = TEMPLATE_BY_TYPE[this.mode.template] || TEMPLATES[0];
     if (descriptor.body === 'actions') {
       // Which gestures, and whether there is an unless-logged rule, are the
-      // descriptor's business - a control surface offers four gestures because
-      // its long press is the way out, and has no daily stand-down because it
-      // is not on unless you opened it. Both are data rather than a branch on
-      // template name, so a third gesture-mapped template costs nothing here.
+      // descriptor's business - both data rather than a branch on template
+      // name, so a third gesture-mapped template costs nothing here.
       this.templateBody.append(this._gestures(descriptor));
       if (descriptor.unlessLogged !== false) this.templateBody.append(this._unlessLogged());
     }
@@ -474,9 +439,15 @@ export class ModeEditor {
   _activationPicker() {
     const tplDescriptor = TEMPLATE_BY_TYPE[this.mode.template] || TEMPLATES[0];
     const allowed = new Set(tplDescriptor.allowedActivations);
-    const select = el('select', { className: 'inp' },
-      ACTIVATIONS.filter((a) => allowed.has(a.type))
-        .map((a) => el('option', { value: a.type, textContent: a.label })));
+    const select = el('select', {
+      className: 'inp',
+      onchange: () => {
+        this.mode.activation = ACTIVATION_BY_TYPE[select.value].defaults();
+        this._build();
+        this._changed();
+      },
+    }, ACTIVATIONS.filter((a) => allowed.has(a.type))
+      .map((a) => el('option', { value: a.type, textContent: a.label })));
     select.value = this.mode.activation?.type || tplDescriptor.allowedActivations[0];
 
     // Same refusal as the delete button, same reason: switching this mode's
@@ -490,12 +461,6 @@ export class ModeEditor {
 
     this.activationBody = el('div', { className: 'act-body' });
     this._buildActivationBody();
-
-    select.addEventListener('change', () => {
-      this.mode.activation = ACTIVATION_BY_TYPE[select.value].defaults();
-      this._build();
-      this._changed();
-    });
 
     return el('div', { className: 'pick-row' }, [
       el('div', { className: 'pick-head' }, [
@@ -520,21 +485,19 @@ export class ModeEditor {
   // window: optional [HH:MM, HH:MM] between range (may cross midnight).
   _window(activation) {
     const has = Array.isArray(activation.between);
-    const toggle = el('input', { type: 'checkbox', checked: has });
-    const start = el('input', { type: 'time', className: 'inp', value: has ? activation.between[0] : '' });
-    const end = el('input', { type: 'time', className: 'inp', value: has ? activation.between[1] : '' });
-    const err = el('span', { className: 'fld-err' });
-    start.disabled = end.disabled = !has;
-
     const sync = () => {
       if (toggle.checked) activation.between = [start.value, end.value];
       else delete activation.between;
       start.disabled = end.disabled = !toggle.checked;
       this._changed();
     };
-    toggle.addEventListener('change', sync);
-    start.addEventListener('input', sync);
-    end.addEventListener('input', sync);
+    const toggle = el('input', { type: 'checkbox', checked: has, onchange: sync });
+    const time = (value) => el('input', {
+      type: 'time', className: 'inp', value, disabled: !has, oninput: sync,
+    });
+    const start = time(has ? activation.between[0] : '');
+    const end = time(has ? activation.between[1] : '');
+    const err = el('span', { className: 'fld-err' });
 
     this._validators.push(() => {
       const bad = toggle.checked && (!start.value || !end.value);
@@ -550,12 +513,11 @@ export class ModeEditor {
 
   // schedule: a single fire time (required).
   _scheduleTime(activation) {
-    const input = el('input', { type: 'time', className: 'inp', value: activation.at || '' });
-    const err = el('span', { className: 'fld-err' });
-    input.addEventListener('input', () => {
-      activation.at = input.value;
-      this._changed();
+    const input = el('input', {
+      type: 'time', className: 'inp', value: activation.at || '',
+      oninput: () => { activation.at = input.value; this._changed(); },
     });
+    const err = el('span', { className: 'fld-err' });
     this._validators.push(() => {
       const bad = !input.value;
       err.textContent = bad ? 'Set a time' : '';
@@ -574,13 +536,15 @@ export class ModeEditor {
       el('span', { className: 'scope-lbl', textContent: 'On days' }),
     ]);
     for (const day of DAYS) {
-      const cb = el('input', { type: 'checkbox', checked: chosen.has(day.key) });
-      cb.addEventListener('change', () => {
-        if (cb.checked) chosen.add(day.key);
-        else chosen.delete(day.key);
-        if (chosen.size) activation.days = DAYS.filter((d) => chosen.has(d.key)).map((d) => d.key);
-        else delete activation.days;
-        this._changed();
+      const cb = el('input', {
+        type: 'checkbox', checked: chosen.has(day.key),
+        onchange: () => {
+          if (cb.checked) chosen.add(day.key);
+          else chosen.delete(day.key);
+          if (chosen.size) activation.days = DAYS.filter((d) => chosen.has(d.key)).map((d) => d.key);
+          else delete activation.days;
+          this._changed();
+        },
       });
       row.append(el('label', { className: 'day-pill' }, [cb, el('span', { textContent: day.label })]));
     }
@@ -593,12 +557,12 @@ export class ModeEditor {
     const input = el('input', {
       type: 'text', className: 'inp',
       value: this.mode.unless_logged_today || '', placeholder: 'event name (optional)',
-    });
-    input.addEventListener('input', () => {
-      const value = input.value.trim();
-      if (value) this.mode.unless_logged_today = value;
-      else delete this.mode.unless_logged_today;
-      this._changed();
+      oninput: () => {
+        const value = input.value.trim();
+        if (value) this.mode.unless_logged_today = value;
+        else delete this.mode.unless_logged_today;
+        this._changed();
+      },
     });
     return el('div', { className: 'scope-row' }, [
       el('span', { className: 'scope-lbl', textContent: 'Skip if already logged today' }),
@@ -627,15 +591,26 @@ export class ModeEditor {
     const offered = gesture.actions
       ? ACTIONS.filter((a) => gesture.actions.includes(a.type))
       : ACTIONS;
-    const select = el('select', { className: 'inp' }, [
+    const select = el('select', {
+      className: 'inp',
+      onchange: () => {
+        if (!select.value) delete this.mode[gesture.key];
+        // An empty name rather than a guessed one: picking the pool's first
+        // entry for someone would bind a gesture to an action they never
+        // chose, and the validator below stops an empty one being saved.
+        else if (select.value === NAMED) this.mode[gesture.key] = '';
+        else this.mode[gesture.key] = ACTION_BY_TYPE[select.value].defaults();
+        buildFields();
+        this._changed();
+      },
+    }, [
       el('option', { value: '', textContent: '- do nothing -' }),
       ...offered.map((a) => el('option', { value: a.type, textContent: a.label })),
       el('option', { value: NAMED, textContent: 'Use a named action' }),
     ]);
-    // A string binding is a pool reference (config.py's NamedAction). Reading
-    // it as `?.action` - which is what this line used to do - would show it as
-    // "do nothing" and then delete it on Save, so the string case is checked
-    // first everywhere the binding is inspected in this method.
+    // A string binding is a pool reference (config.py's NamedAction). Read as
+    // `?.action` it would show as "do nothing" and then be deleted on Save, so
+    // the string case is checked first everywhere this method inspects one.
     const isNamed = (value) => typeof value === 'string';
     select.value = isNamed(this.mode[gesture.key])
       ? NAMED
@@ -674,17 +649,6 @@ export class ModeEditor {
       }
     };
 
-    select.addEventListener('change', () => {
-      if (!select.value) delete this.mode[gesture.key];
-      // An empty name rather than a guessed one: picking the pool's first
-      // entry for someone would bind a gesture to an action they never chose,
-      // and the validator below is what stops an empty one being saved.
-      else if (select.value === NAMED) this.mode[gesture.key] = '';
-      else this.mode[gesture.key] = ACTION_BY_TYPE[select.value].defaults();
-      buildFields();
-      this._changed();
-    });
-
     this._validators.push(() => {
       for (const validate of fieldValidators) {
         const error = validate();
@@ -714,23 +678,23 @@ export class ModeEditor {
     const current = this.mode[gesture.key];
     const options = [el('option', { value: '', textContent: '- pick one -' })];
     // A name whose pool entry has been deleted stays listed and stays
-    // selected, marked. The pool is edited elsewhere, and silently repointing
-    // this gesture at some other action is exactly the rewrite the dangling
-    // name is designed to prevent - the deletion should be visible here and
-    // fixed deliberately.
+    // selected, marked: silently repointing this gesture at some other action
+    // is exactly the rewrite a dangling name is designed to prevent.
     if (current && !names.includes(current)) {
       options.push(el('option', { value: current, textContent: `${current} (missing)` }));
     }
     options.push(...names.map((n) => el('option', { value: n, textContent: n })));
 
-    const pick = el('select', { className: 'inp' }, options);
-    pick.value = current || '';
     const err = el('span', { className: 'fld-err' });
-    pick.addEventListener('change', () => {
-      this.mode[gesture.key] = pick.value;
-      err.textContent = '';
-      this._changed();
-    });
+    const pick = el('select', {
+      className: 'inp',
+      onchange: () => {
+        this.mode[gesture.key] = pick.value;
+        err.textContent = '';
+        this._changed();
+      },
+    }, options);
+    pick.value = current || '';
 
     const hint = names.length
       ? 'Edited once in the Actions pool - every gesture naming it changes together.'

@@ -17,30 +17,57 @@ function errLine() {
   return el('span', { className: 'fld-err' });
 }
 
+const hintLine = (spec) => (spec.hint
+  ? el('span', { className: 'fld-hint', 'data-help': true, textContent: spec.hint })
+  : null);
+
+// Two independent attributes on the same node, and neither toggle may imply
+// the other (TODO 14): `data-help` marks tutorial copy that the page's Tips
+// toggle reveals (help.js), `data-tier="tinker"` marks a field that Tinker
+// reveals at all. A field is 'basic' by simply not carrying the second.
+const tierAttr = (spec) => (spec.tier === 'tinker' ? { 'data-tier': 'tinker' } : {});
+
 // Standard layout: label text above the control, optional hint + error below.
-// The hint carries `data-help`: it's tutorial copy, hidden unless the page's
-// Tips toggle (see help.js) is on, so a form full of fields reads as short
-// labels by default rather than a paragraph per field.
-//
-// `data-tier`: the other, independent axis (TODO 14). A field defaults to
-// 'basic' by simply not carrying the attribute - only 'tinker' fields are
-// marked, and help.js hides `[data-tier="tinker"]` the same way it hides
-// `[data-help]`. Two separate attributes on the same node is the whole
-// mechanism: Tips decides whether the hint below is readable, Tinker decides
-// whether the field exists on screen at all, and neither toggle can imply
-// the other.
 function wrap(spec, control, errEl) {
-  const tier = spec.tier === 'tinker' ? { 'data-tier': 'tinker' } : {};
-  return el('label', { className: 'fld', ...tier }, [
+  return el('label', { className: 'fld', ...tierAttr(spec) }, [
     el('span', { className: 'fld-label', textContent: spec.label }),
     control,
-    spec.hint ? el('span', { className: 'fld-hint', 'data-help': true, textContent: spec.hint }) : null,
+    hintLine(spec),
     errEl,
   ]);
 }
 
-function requiredError(spec, value) {
-  return spec.required && !String(value ?? '').trim() ? `${spec.label} is required` : null;
+// The one rule the three text-shaped widgets share: full label in the message
+// the form collects, one short word in the field itself.
+const requiredValidator = (spec, obj, err) => () => {
+  const msg = spec.required && !String(obj[spec.key] ?? '').trim()
+    ? `${spec.label} is required` : null;
+  err.textContent = msg ? 'Required' : '';
+  return msg;
+};
+
+// A slider and a typed box bound to the same value (TODO 27) - one key, not
+// two fields, because a descriptor could forget to keep two copies in step.
+// Dragging cannot leave the range, so typing may not either: `clamp` is
+// applied on the way in, and the box is re-shown from the slider once typing
+// stops so a clamped entry does not sit there looking accepted verbatim.
+function sliderPair({ min, max, step, start, clamp, set }) {
+  const slider = el('input', {
+    type: 'range', className: 'inp inp-range', min, max, step, value: start,
+    oninput: () => { set(Number(slider.value)); number.value = slider.value; },
+  });
+  const number = el('input', {
+    type: 'number', className: 'inp inp-range-num', min, max, step, value: start,
+    oninput: () => {
+      // A mid-typing box ("", "-", "0.") is not a value yet - leave it alone
+      // rather than fighting the keystroke that is about to make it one.
+      if (number.value === '') return;
+      const parsed = Number(number.value);
+      if (Number.isFinite(parsed)) set(clamp(parsed));
+    },
+    onchange: () => { number.value = slider.value; },
+  });
+  return { slider, number };
 }
 
 // A numeric bound may be a plain number or a function of `ctx`, resolved at
@@ -55,10 +82,9 @@ function bound(spec, name, ctx) {
 }
 
 // Which api method (and which field of its JSON) a `suggest` name pulls
-// from - a table entry rather than a branch, so the midi action's `port`
-// (output) and the metronome's `clock_port` (input) can share one mechanism
-// while asking for different lists (Open/Closed). See webui.py's
-// /api/midi/ports and api.js's midiPorts().
+// from - a table rather than a branch, so the midi action's `port` (output)
+// and the metronome's `clock_port` (input) share one mechanism while asking
+// for different lists (Open/Closed). See webui.py's /api/midi/ports.
 const SUGGEST_SOURCES = {
   midi_out: { method: 'midiPorts', field: 'out' },
   midi_in: { method: 'midiPorts', field: 'in' },
@@ -67,18 +93,16 @@ const SUGGEST_SOURCES = {
 let _suggestSeq = 0;
 
 // Layers a <datalist> onto a text `input`, fed by the service - free text
-// stays first-class (a port plugged in after the page loaded still types in
-// fine; a <datalist> only ever offers, never restricts). Optional by
-// construction, the same rule as colorEngine.js's showLook: no `ctx.api`, no
-// matching method on it (the offline editor's FileApi has none), or a
-// failed call all leave the plain input exactly as it already was, rather
-// than surfacing an error - a missing suggestion is not a broken field.
+// stays first-class, since a <datalist> only ever offers and never restricts.
+// Optional by construction, the same rule as colorEngine.js's showLook: no
+// `ctx.api`, no matching method on it (the offline editor's FileApi has none),
+// or a failed call all leave the plain input as it was - a missing suggestion
+// is not a broken field.
 //
 // Returns a DocumentFragment holding [input, datalist] so the caller's DOM
-// shape does not change: appending a fragment moves its children in place
-// of itself, so the datalist rides along as an invisible sibling of the
-// input rather than adding a wrapping element around it. Returns null when
-// `spec.suggest` does not apply, so the caller falls back to the bare input.
+// shape does not change: appending a fragment moves its children in place of
+// itself, so the datalist rides along as an invisible sibling rather than
+// wrapping the input. Null when `spec.suggest` does not apply.
 function attachSuggestions(spec, input, ctx) {
   const source = spec.suggest && SUGGEST_SOURCES[spec.suggest];
   if (!source || typeof ctx?.api?.[source.method] !== 'function') return null;
@@ -104,19 +128,12 @@ function textInput(type, spec, obj, onInput, ctx) {
     className: 'inp',
     value: obj[spec.key] ?? '',
     placeholder: spec.placeholder || '',
+    oninput: () => { obj[spec.key] = input.value; onInput(); },
   });
   const err = errLine();
-  input.addEventListener('input', () => {
-    obj[spec.key] = input.value;
-    onInput();
-  });
   return {
     el: wrap(spec, attachSuggestions(spec, input, ctx) ?? input, err),
-    validate() {
-      const msg = requiredError(spec, obj[spec.key]);
-      err.textContent = msg ? 'Required' : '';
-      return msg;
-    },
+    validate: requiredValidator(spec, obj, err),
   };
 }
 
@@ -124,26 +141,32 @@ const WIDGETS = {
   text: (spec, obj, onInput, ctx) => textInput('text', spec, obj, onInput, ctx),
 
   // A length of time, stored in seconds and shown in whichever unit reads
-  // better. Seconds are canonical because the same field has to express a
-  // 25-minute focus block and a 20-second Tabata interval, and `0.333` is not
-  // a way to write twenty seconds. Making the *unit* a display choice is what
-  // lets one field serve both without either looking absurd.
-  //
-  // The unit is inferred, not stored: a whole number of minutes shows as
-  // minutes, anything else as seconds. So 1500 opens as "25 min" and 40 opens
-  // as "40 sec" with nothing recorded anywhere about which it "is".
+  // better. Seconds are canonical because one field has to express a 25-minute
+  // focus block and a 20-second Tabata interval, and `0.333` is not a way to
+  // write twenty seconds. The unit is inferred rather than stored - a whole
+  // number of minutes shows as minutes - so 1500 opens as "25 min" and 40 as
+  // "40 sec" with nothing recorded about which it "is".
   duration(spec, obj, onInput, ctx) {
     const stored = () => Number(obj[spec.key] ?? 0);
     let unit = stored() >= 60 && stored() % 60 === 0 ? 60 : 1;
 
     const input = el('input', {
       type: 'number', className: 'inp', step: 'any', value: String(stored() / unit),
+      oninput: () => { obj[spec.key] = Number(input.value) * unit; onInput(); },
     });
     const units = el('select', { className: 'inp inp-unit' }, [
       el('option', { value: '1', textContent: 'sec' }),
       el('option', { value: '60', textContent: 'min' }),
     ]);
     units.value = String(unit);
+    units.onchange = () => {
+      // Convert the display, never the value: switching sec/min is a change
+      // of how long you are looking at, not a change of how long it is.
+      const seconds = stored();
+      unit = Number(units.value);
+      input.value = String(seconds / unit);
+      applyMin();
+    };
 
     const min = bound(spec, 'min', ctx);
     const applyMin = () => {
@@ -152,19 +175,6 @@ const WIDGETS = {
     applyMin();
 
     const err = errLine();
-    input.addEventListener('input', () => {
-      obj[spec.key] = Number(input.value) * unit;
-      onInput();
-    });
-    units.addEventListener('change', () => {
-      // Convert the display, never the value: switching sec/min is a change
-      // of how long you are looking at, not a change of how long it is.
-      const seconds = stored();
-      unit = Number(units.value);
-      input.value = String(seconds / unit);
-      applyMin();
-    });
-
     return {
       el: wrap(spec, el('div', { className: 'row-tight' }, [input, units]), err),
       // The floor is the descriptor's to declare, not this widget's to assume.
@@ -195,22 +205,17 @@ const WIDGETS = {
   },
 
   // A template inserter rather than a field: it writes *sibling* keys on the
-  // object being edited and stores nothing under its own key, so nothing has
-  // to round-trip through the parser to remember which one you picked. That
-  // is deliberate - "I started from Slack" is not a property of the webhook,
-  // it is how the webhook got filled in, and persisting it would be a config
-  // surface that only ever restates what the URL already says.
+  // object being edited and stores nothing under its own key. "I started from
+  // Slack" is not a property of the webhook, it is how the webhook got filled
+  // in, so nothing has to round-trip through the parser to remember it.
   //
-  // Which keys it writes is the preset's own business (`set`), not this
-  // widget's. It used to assign `url` and `payload` by name, which made a
-  // generic-looking widget silently webhook-only; the DAW command picker on
-  // the midi action is the second user and writes three entirely different
-  // keys. Adding a third should need a table entry and no code here.
+  // Which keys it writes is the preset's own business (`set`), never named
+  // here - the webhook picker and the DAW command picker write entirely
+  // different ones, and a third should cost a table entry and no code.
   //
   // It needs `ctx.rebuild` because the fields it overwrites already exist in
-  // the DOM with their old values. Callers that do not supply one get a
-  // picker that still writes the object and simply does not redraw, which is
-  // the honest degradation - no caller silently loses data.
+  // the DOM with their old values. A caller with none still gets correct data
+  // and a stale view, which is the honest degradation.
   preset(spec, obj, onInput, ctx) {
     const presets = typeof spec.presets === 'function' ? spec.presets() : (spec.presets || []);
     // Grouped into <optgroup> when the entries say so, flat when they do not.
@@ -247,7 +252,7 @@ const WIDGETS = {
       note.textContent = remembered.hint || '';
     }
 
-    select.addEventListener('change', () => {
+    select.onchange = () => {
       const chosen = presets.find((p) => p.id === select.value);
       if (!chosen) {
         delete obj[spec.key];
@@ -268,7 +273,7 @@ const WIDGETS = {
       // them. A caller with no rebuild still gets correct data, just a stale
       // view - which is why this degrades rather than throwing.
       if (ctx && typeof ctx.rebuild === 'function') ctx.rebuild();
-    });
+    };
 
     return {
       el: el('div', {}, [wrap(spec, select, errLine()), note]),
@@ -282,34 +287,26 @@ const WIDGETS = {
       rows: 3,
       value: obj[spec.key] ?? '',
       placeholder: spec.placeholder || '',
+      oninput: () => { obj[spec.key] = input.value; onInput(); },
     });
     const err = errLine();
-    input.addEventListener('input', () => {
-      obj[spec.key] = input.value;
-      onInput();
-    });
-    return {
-      el: wrap(spec, input, err),
-      validate() {
-        const msg = requiredError(spec, obj[spec.key]);
-        err.textContent = msg ? 'Required' : '';
-        return msg;
-      },
-    };
+    return { el: wrap(spec, input, err), validate: requiredValidator(spec, obj, err) };
   },
 
   number(spec, obj, onInput, ctx) {
     const min = bound(spec, 'min', ctx);
     const max = bound(spec, 'max', ctx);
-    const input = el('input', { type: 'number', className: 'inp', value: obj[spec.key] ?? '' });
+    const input = el('input', {
+      type: 'number', className: 'inp', value: obj[spec.key] ?? '',
+      oninput: () => {
+        obj[spec.key] = input.value === '' ? '' : Number(input.value);
+        onInput();
+      },
+    });
     if (min != null) input.min = min;
     if (max != null) input.max = max;
     if (spec.step != null) input.step = spec.step;
     const err = errLine();
-    input.addEventListener('input', () => {
-      obj[spec.key] = input.value === '' ? '' : Number(input.value);
-      onInput();
-    });
     return {
       el: wrap(spec, input, err),
       validate() {
@@ -324,14 +321,6 @@ const WIDGETS = {
     };
   },
 
-  // A slider with a typed number beside it, both bound to the same key
-  // (TODO 27) - not a second field, because a template descriptor could
-  // forget to keep two copies in step. For a flash period the *shape* of the
-  // value still matters more than the digits - you are choosing a rate you
-  // can picture - so the slider stays the primary control and the box is
-  // clamped on commit exactly where dragging already stops: typing 0.02
-  // cannot leave the field holding a value dragging could never reach.
-  //
   // The floor is a live bound (`bound` above), not a constant: it comes from
   // the config's min_flash_period_s, so raising the setting immediately widens
   // both controls instead of leaving one of them lying about what will be
@@ -340,7 +329,6 @@ const WIDGETS = {
   // reciprocal of the number anyone reasons in.
   range(spec, obj, onInput, ctx) {
     const min = bound(spec, 'min', ctx) ?? 0;
-    const step = spec.step ?? 1;
     const start = Number(obj[spec.key] ?? min);
     // The ceiling stretches to fit a value that is already above it. `max` is
     // chosen so the range people actually use is draggable, and a config
@@ -349,49 +337,26 @@ const WIDGETS = {
     const max = Math.max(bound(spec, 'max', ctx) ?? 100,
       Number.isFinite(start) ? start : 0);
     const clamp = (value) => Math.min(max, Math.max(min, value));
-    const slider = el('input', {
-      type: 'range', className: 'inp inp-range',
-      min, max, step,
-      value: Number.isFinite(start) ? clamp(start) : min,
-    });
-    const number = el('input', {
-      type: 'number', className: 'inp inp-range-num',
-      min, max, step,
-      value: slider.value,
-    });
     const readout = el('span', { className: 'fld-readout' });
     const err = errLine();
 
     const show = () => {
       const value = Number(obj[spec.key]);
-      if (!Number.isFinite(value)) {
-        readout.textContent = '-';
-        return;
-      }
-      readout.textContent = spec.describe ? spec.describe(value) : String(value);
+      readout.textContent = Number.isFinite(value)
+        ? (spec.describe ? spec.describe(value) : String(value))
+        : '-';
     };
 
-    const set = (value) => {
-      obj[spec.key] = value;
-      slider.value = value;
-      show();
-      onInput();
-    };
-
-    slider.addEventListener('input', () => {
-      set(Number(slider.value));
-      number.value = slider.value;
+    const { slider, number } = sliderPair({
+      min, max, step: spec.step ?? 1, clamp,
+      start: Number.isFinite(start) ? clamp(start) : min,
+      set: (value) => {
+        obj[spec.key] = value;
+        slider.value = value;
+        show();
+        onInput();
+      },
     });
-    number.addEventListener('input', () => {
-      // A mid-typing box ("", "-", "0.") is not a value yet - leave it alone
-      // rather than fighting the keystroke that is about to make it one.
-      if (number.value === '') return;
-      const parsed = Number(number.value);
-      if (Number.isFinite(parsed)) set(clamp(parsed));
-    });
-    // Once typing stops, show what actually got stored - so a floored value
-    // does not sit in the box looking like it was accepted verbatim.
-    number.addEventListener('change', () => { number.value = slider.value; });
     show();
 
     return {
@@ -419,23 +384,14 @@ const WIDGETS = {
   // { el, validate } contract.
   select(spec, obj, onInput, ctx) {
     const options = typeof spec.options === 'function' ? (spec.options(ctx) || []) : (spec.options || []);
-    const input = el('select', { className: 'inp' },
-      options.map((o) => el('option', { value: o.value, textContent: o.label })));
+    const input = el('select', {
+      className: 'inp',
+      onchange: () => { obj[spec.key] = input.value; onInput(); },
+    }, options.map((o) => el('option', { value: o.value, textContent: o.label })));
     // Reflect the current value even if it is not (yet) in the list.
     input.value = obj[spec.key] ?? '';
     const err = errLine();
-    input.addEventListener('change', () => {
-      obj[spec.key] = input.value;
-      onInput();
-    });
-    return {
-      el: wrap(spec, input, err),
-      validate() {
-        const msg = requiredError(spec, obj[spec.key]);
-        err.textContent = msg ? 'Required' : '';
-        return msg;
-      },
-    };
+    return { el: wrap(spec, input, err), validate: requiredValidator(spec, obj, err) };
   },
 
   // A colour swatch you can click to open the OS picker, with the hex value
@@ -443,14 +399,16 @@ const WIDGETS = {
   // visible and copyable rather than hidden behind a colour well.
   color(spec, obj, onInput) {
     const current = obj[spec.key] || '#000000';
-    const input = el('input', { type: 'color', className: 'inp inp-color', value: current });
+    const input = el('input', {
+      type: 'color', className: 'inp inp-color', value: current,
+      oninput: () => {
+        obj[spec.key] = input.value;
+        hex.textContent = input.value;
+        onInput();
+      },
+    });
     const hex = el('span', { className: 'fld-hex', textContent: current });
     const err = errLine();
-    input.addEventListener('input', () => {
-      obj[spec.key] = input.value;
-      hex.textContent = input.value;
-      onInput();
-    });
     return {
       el: wrap(spec, el('span', { className: 'color-row' }, [input, hex]), err),
       validate() {
@@ -474,37 +432,22 @@ const WIDGETS = {
   // already refuses to leave, so typing 0 cannot get there either.
   level(spec, obj, onInput) {
     const start = levelPercent(obj[spec.key]);
-    const clamp = (value) => Math.min(100, Math.max(1, value));
-    const slider = el('input', {
-      type: 'range', className: 'inp inp-range', min: 1, max: 100, step: 1,
-      value: start,
-    });
-    const number = el('input', {
-      type: 'number', className: 'inp inp-range-num', min: 1, max: 100, step: 1,
-      value: start,
-    });
     const readout = el('span', { className: 'fld-readout', textContent: `${start}%` });
     const err = errLine();
 
-    const set = (percent) => {
-      obj[spec.key] = levelHex(percent);
-      slider.value = percent;
-      readout.textContent = `${percent}%`;
-      onInput();
-    };
-
-    slider.addEventListener('input', () => {
-      set(Number(slider.value));
-      number.value = slider.value;
+    const { slider, number } = sliderPair({
+      min: 1, max: 100, step: 1, start,
+      // A whole percent, same as the slider's step: the bounds are the
+      // widget's own, so unlike `range` there is no descriptor to read them
+      // from and nothing to round against.
+      clamp: (value) => Math.min(100, Math.max(1, Math.round(value))),
+      set: (percent) => {
+        obj[spec.key] = levelHex(percent);
+        slider.value = percent;
+        readout.textContent = `${percent}%`;
+        onInput();
+      },
     });
-    number.addEventListener('input', () => {
-      if (number.value === '') return;
-      const parsed = Number(number.value);
-      // A whole percent, same as the slider's step - not the general `range`
-      // clamp, because a level has no descriptor bounds to read.
-      if (Number.isFinite(parsed)) set(clamp(Math.round(parsed)));
-    });
-    number.addEventListener('change', () => { number.value = slider.value; });
 
     return {
       el: wrap(spec, el('span', { className: 'range-row' }, [slider, number, readout]), err),
@@ -513,17 +456,13 @@ const WIDGETS = {
   },
 
   // A colour ramp: an ordered list of stops, each a colour pinned somewhere
-  // between the start (0%) and the end (100%). Mirrors ramp.py's Stop, and
-  // what config.py's parser accepts.
+  // between the start (0%) and the end (100%). Mirrors ramp.py's Stop.
   //
   // The position is editable rather than implied, because "hold this colour
-  // for longer" is most of the point of a ramp - an evenly spread list is the
-  // easy case, not the only one. A gradient strip sits above the rows so the
-  // thing being edited is the thing you see.
-  //
-  // Adding or removing re-spaces the ramp *only when it was already evenly
-  // spaced*. That way the common case (a list of colours) stays tidy on its
-  // own, and a hand-tuned ramp is never silently flattened by a click.
+  // for longer" is most of the point of a ramp. Adding or removing re-spaces
+  // the ramp *only when it was already evenly spaced*, so the common case (a
+  // list of colours) stays tidy and a hand-tuned ramp is never flattened by a
+  // click.
   ramp(spec, obj, onInput) {
     const preview = el('div', { className: 'ramp-preview' });
     const rows = el('div', { className: 'ramp-rows' });
@@ -576,36 +515,20 @@ const WIDGETS = {
       stops.forEach((stop, index) => {
         const swatch = el('input', {
           type: 'color', className: 'inp inp-color', value: stop.color,
-        });
-        swatch.addEventListener('input', () => {
-          stop.color = swatch.value;
-          commit();
-          paint();
+          oninput: () => { stop.color = swatch.value; commit(); paint(); },
         });
 
         const at = el('input', {
           type: 'number', className: 'inp ramp-at', min: 0, max: 100, step: 1,
           value: Math.round(stop.at * 100),
-        });
-        at.addEventListener('input', () => {
-          const percent = Number(at.value);
-          if (Number.isFinite(percent)) {
-            stop.at = Math.min(100, Math.max(0, percent)) / 100;
-            commit();
-            paint();
-          }
-        });
-
-        const remove = el('button', {
-          type: 'button', className: 'mini danger', textContent: '×',
-          title: 'Remove this colour',
-        });
-        remove.addEventListener('click', () => {
-          const wasEven = evenlySpaced();
-          stops.splice(index, 1);
-          if (wasEven) respace();
-          commit();
-          render();
+          oninput: () => {
+            const percent = Number(at.value);
+            if (Number.isFinite(percent)) {
+              stop.at = Math.min(100, Math.max(0, percent)) / 100;
+              commit();
+              paint();
+            }
+          },
         });
 
         rows.append(el('div', { className: 'ramp-row' }, [
@@ -614,22 +537,31 @@ const WIDGETS = {
           el('span', { className: 'ramp-pct', textContent: '%' }),
           // Never offer to remove the last one - an empty ramp is not a thing
           // you can mean, and the parser would just hand back the default.
-          stops.length > 1 ? remove : null,
+          stops.length > 1 ? el('button', {
+            type: 'button', className: 'mini danger', textContent: '×',
+            title: 'Remove this colour',
+            onclick: () => {
+              const wasEven = evenlySpaced();
+              stops.splice(index, 1);
+              if (wasEven) respace();
+              commit();
+              render();
+            },
+          }) : null,
         ]));
       });
 
-      const add = el('button', {
+      rows.append(el('button', {
         type: 'button', className: 'mini', textContent: '+ Colour',
-      });
-      add.addEventListener('click', () => {
-        const wasEven = evenlySpaced();
-        const last = stops[stops.length - 1];
-        stops.push({ color: last ? last.color : '#ffffff', at: 1 });
-        if (wasEven) respace();
-        commit();
-        render();
-      });
-      rows.append(add);
+        onclick: () => {
+          const wasEven = evenlySpaced();
+          const last = stops[stops.length - 1];
+          stops.push({ color: last ? last.color : '#ffffff', at: 1 });
+          if (wasEven) respace();
+          commit();
+          render();
+        },
+      }));
       paint();
     };
 
@@ -650,17 +582,13 @@ const WIDGETS = {
   },
 
   // A subdivision ladder: intervals paired with colours, read top down, where
-  // the largest interval dividing the current time wins. Mirrors ladder.py and
-  // what config.py's _parse_ladder accepts.
+  // the largest interval dividing the current time wins. Mirrors ladder.py.
   //
   // Rows are kept sorted longest-first because that is the order the thing
-  // *reads* in - the ten-second colour is the headline and the one-second
-  // colour is the background - and because "largest matching wins" is
-  // impossible to reason about in an arbitrary order.
-  //
-  // The preview is a strip of the first cycle rather than a gradient: a ladder
-  // is a sequence of discrete flashes, and drawing it as a blend would
-  // misrepresent the one thing it does.
+  // *reads* in, and because "largest matching wins" is impossible to reason
+  // about in an arbitrary order. The preview is a strip of the first cycle
+  // rather than a gradient: a ladder is a run of discrete flashes, and drawing
+  // it as a blend would misrepresent the one thing it does.
   ladder(spec, obj, onInput) {
     const err = errLine();
     const rows = el('div', { className: 'ladder-rows' });
@@ -724,25 +652,14 @@ const WIDGETS = {
         const every = el('input', {
           type: 'number', className: 'inp ladder-every',
           min: 0.1, step: 0.1, value: rung.every_s,
+          oninput: () => {
+            const seconds = Number(every.value);
+            if (seconds > 0) { rung.every_s = seconds; commit(); paint(); }
+          },
         });
-        every.addEventListener('input', () => {
-          const seconds = Number(every.value);
-          if (seconds > 0) { rung.every_s = seconds; commit(); paint(); }
-        });
-
         const swatch = el('input', {
           type: 'color', className: 'inp inp-color', value: rung.color,
-        });
-        swatch.addEventListener('input', () => {
-          rung.color = swatch.value; commit(); paint();
-        });
-
-        const remove = el('button', {
-          type: 'button', className: 'mini danger', textContent: '×',
-          title: 'Remove this interval',
-        });
-        remove.addEventListener('click', () => {
-          value.rungs.splice(index, 1); commit(); render();
+          oninput: () => { rung.color = swatch.value; commit(); paint(); },
         });
 
         rows.append(el('div', { className: 'ladder-row' }, [
@@ -752,40 +669,49 @@ const WIDGETS = {
           // and what it counts is declared on the descriptor.
           el('span', { className: 'ladder-lbl', textContent: spec.unit ?? 's' }),
           swatch,
-          remove,
+          el('button', {
+            type: 'button', className: 'mini danger', textContent: '×',
+            title: 'Remove this interval',
+            onclick: () => { value.rungs.splice(index, 1); commit(); render(); },
+          }),
         ]));
       });
 
-      const add = el('button', { type: 'button', className: 'mini', textContent: '+ Interval' });
-      add.addEventListener('click', () => {
-        const shortest = value.rungs.length
-          ? Math.min(...value.rungs.map((r) => r.every_s)) : 2;
-        value.rungs.push({ every_s: Math.max(0.1, shortest / 2), color: '#ffffff' });
-        commit();
-        render();
-      });
-      rows.append(add);
+      rows.append(el('button', {
+        type: 'button', className: 'mini', textContent: '+ Interval',
+        onclick: () => {
+          const shortest = value.rungs.length
+            ? Math.min(...value.rungs.map((r) => r.every_s)) : 2;
+          value.rungs.push({ every_s: Math.max(0.1, shortest / 2), color: '#ffffff' });
+          commit();
+          render();
+        },
+      }));
       paint();
     };
 
-    const enabled = el('input', { type: 'checkbox', checked: value.enabled });
-    enabled.addEventListener('change', () => {
-      value.enabled = enabled.checked;
-      body.hidden = !value.enabled;  // off is the default; hide the detail
-      commit();
+    const enabled = el('input', {
+      type: 'checkbox', checked: value.enabled,
+      onchange: () => {
+        value.enabled = enabled.checked;
+        body.hidden = !value.enabled;  // off is the default; hide the detail
+        commit();
+      },
     });
 
     const tick = el('input', {
       type: 'number', className: 'inp ladder-every',
       min: 0.05, step: 0.05, value: value.tick_s,
-    });
-    tick.addEventListener('input', () => {
-      const seconds = Number(tick.value);
-      if (seconds > 0) { value.tick_s = seconds; commit(); paint(); }
+      oninput: () => {
+        const seconds = Number(tick.value);
+        if (seconds > 0) { value.tick_s = seconds; commit(); paint(); }
+      },
     });
 
-    const base = el('input', { type: 'color', className: 'inp inp-color', value: value.base });
-    base.addEventListener('input', () => { value.base = base.value; commit(); paint(); });
+    const base = el('input', {
+      type: 'color', className: 'inp inp-color', value: value.base,
+      oninput: () => { value.base = base.value; commit(); paint(); },
+    });
 
     // No tick row where the cadence is not the mode's to set - the metronome's
     // tempo is tapped in, so offering a tick there would be a control that
@@ -797,18 +723,12 @@ const WIDGETS = {
     // This split is inherent to the widget's own layout rather than a fact
     // about any one mode's ladder field, so it is marked here directly
     // instead of threading a second tier through `spec`.
+    const lbl = (text) => el('span', { className: 'ladder-lbl', textContent: text });
     body.append(
-      spec.showTick === false
-        ? el('div', { className: 'ladder-row', 'data-tier': 'tinker' }, [
-            el('span', { className: 'ladder-lbl', textContent: 'off-beat' }),
-            base,
-          ])
-        : el('div', { className: 'ladder-row', 'data-tier': 'tinker' }, [
-            el('span', { className: 'ladder-lbl', textContent: 'tick' }),
-            tick,
-            el('span', { className: 'ladder-lbl', textContent: 's, off-beat' }),
-            base,
-          ]),
+      el('div', { className: 'ladder-row', 'data-tier': 'tinker' },
+        spec.showTick === false
+          ? [lbl('off-beat'), base]
+          : [lbl('tick'), tick, lbl('s, off-beat'), base]),
       rows,
       preview,
     );
@@ -821,9 +741,7 @@ const WIDGETS = {
           enabled,
           el('span', { className: 'fld-label', textContent: spec.label }),
         ]),
-        spec.hint
-          ? el('span', { className: 'fld-hint', 'data-help': true, textContent: spec.hint })
-          : null,
+        hintLine(spec),
         body,
         err,
       ]),
@@ -836,22 +754,21 @@ const WIDGETS = {
     };
   },
 
+  // Its own label rather than wrap(): a checkbox reads left of its text, not
+  // above it.
   checkbox(spec, obj, onInput) {
-    const input = el('input', { type: 'checkbox', checked: !!obj[spec.key] });
-    input.addEventListener('change', () => {
-      obj[spec.key] = input.checked;
-      onInput();
+    const input = el('input', {
+      type: 'checkbox', checked: !!obj[spec.key],
+      onchange: () => { obj[spec.key] = input.checked; onInput(); },
     });
-    // Own label rather than wrap() (a checkbox reads left of its text, not
-    // above it), so the same data-tier marking wrap() does has to be repeated
-    // here rather than shared.
-    const tier = spec.tier === 'tinker' ? { 'data-tier': 'tinker' } : {};
-    const node = el('label', { className: 'fld fld-check', ...tier }, [
-      input,
-      el('span', { className: 'fld-label', textContent: spec.label }),
-      spec.hint ? el('span', { className: 'fld-hint', 'data-help': true, textContent: spec.hint }) : null,
-    ]);
-    return { el: node, validate: () => null };
+    return {
+      el: el('label', { className: 'fld fld-check', ...tierAttr(spec) }, [
+        input,
+        el('span', { className: 'fld-label', textContent: spec.label }),
+        hintLine(spec),
+      ]),
+      validate: () => null,
+    };
   },
 
   json(spec, obj, onInput) {
@@ -861,6 +778,7 @@ const WIDGETS = {
       rows: 4,
       value: current && Object.keys(current).length ? JSON.stringify(current, null, 2) : '',
       placeholder: '{ }',
+      oninput: () => { parse(); onInput(); },
     });
     const err = errLine();
     const parse = () => {
@@ -883,10 +801,6 @@ const WIDGETS = {
         return `${spec.label}: invalid JSON`;
       }
     };
-    input.addEventListener('input', () => {
-      parse();
-      onInput();
-    });
     return { el: wrap(spec, input, err), validate: parse };
   },
 };

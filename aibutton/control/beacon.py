@@ -1,19 +1,17 @@
 """A way for a second launch to say "show yourself" to the first.
 
-The problem this solves is specific and was a real wedge: the panel lives in
-the tray, Windows hides new tray icons in an overflow flyout by default, and
-the old second-launch path put up a modal dialog telling you to go and look for
-an icon you could not see. Worse, that dialog was parented to a *withdrawn*
-Tk root, which on Windows renders with no taskbar button and no focus - so the
-second process sat there forever holding an invisible modal, and the panel
-looked like it had hung.
+Three situations used to look identical - already running, wedged, and running
+but invisible - because the panel lives in the tray and Windows hides new tray
+icons in an overflow flyout. **Never parent a dialog to a withdrawn Tk root**:
+on Windows it renders with no taskbar button and no focus, so the second
+process sat forever holding an invisible modal and the panel looked hung.
 
 So: a running panel listens on a loopback socket and a second launch connects
 to it. If it answers, it raises its own window and the newcomer exits quietly,
 which is what every other single-instance desktop app does. **If it does not
 answer, that is information too** - the holder is wedged rather than merely
-already-running, and the caller can say so and offer to end it instead of
-insisting everything is fine.
+already-running, and the caller says so and names the PID instead of insisting
+everything is fine.
 
 Loopback TCP rather than a named pipe or a window message: it is stdlib, it
 works the same on both platforms, and the port file is self-cleaning in the

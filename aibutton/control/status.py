@@ -46,11 +46,11 @@ _LEVEL_TEXT: dict[Level, str] = {
 
 @dataclass(frozen=True)
 class Health:
-    """One snapshot. `process_alive` is what the supervisor knows about a
-    child it started; `responding` is whether the service's own API answered.
-    They are separate because either can be true without the other: a service
-    started from a terminal responds without being our child, and a child that
-    has just been spawned is alive well before it can answer."""
+    """One snapshot. `process_alive` is what the supervisor knows about a child
+    it started, `responding` whether the service's own API answered - separate
+    because either can be true without the other: a service started from a
+    terminal responds without being our child, and a freshly spawned child is
+    alive well before it can answer."""
 
     process_alive: bool = False
     responding: bool = False

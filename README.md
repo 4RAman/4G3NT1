@@ -129,8 +129,9 @@ surfaces those same warnings so the editor shows what was actually accepted.
 
 Where this is going — swappable apps, an untethered button, the decisions
 that get expensive if deferred: [ROADMAP.md](ROADMAP.md), and the target
-design it builds toward, [ARCHITECTURE.md](ARCHITECTURE.md). Design rationale
-and the config schema reference: [DESIGN.md](DESIGN.md). Usage:
+design it builds toward, [ARCHITECTURE.md](ARCHITECTURE.md). Design rationale:
+[DESIGN.md](DESIGN.md) (the config schema itself is declared in
+`aibutton/web/static/schema.js`). Usage:
 [MANUAL.md](MANUAL.md). Contributing (and the principles the code is shaped
 around): [CLAUDE.md](CLAUDE.md).
 

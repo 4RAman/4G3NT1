@@ -2,8 +2,8 @@
 
 This manual describes the **minimum viable product**: a single physical button
 whose meaning changes with the **mode** it is in. It is the complete usage
-reference and a validation target for the build — the architecture and phasing
-behind it live in [DESIGN.md](DESIGN.md).
+reference and a validation target for the build — the rationale behind the
+mode machine is in [DESIGN.md](DESIGN.md).
 
 ---
 

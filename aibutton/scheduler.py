@@ -12,12 +12,10 @@ action - never auto-fired here.
 
 **What makes a mode scheduled is its activation, not its behaviour.** So the
 scan matches `ScheduleActivation` and lets the *parser* decide which templates
-may carry one (`_ALLOWED_ACTIVATIONS` in config.py). That is why adding the
-reminders template needed no change here: a second `due_reminder` would have
-been the same twenty lines with one isinstance swapped, and the third
-scheduled template would have made it three copies. `due_alarm` keeps its name
-and now takes an optional filter for the one caller that does care which kind
-it got.
+may carry one (`_ALLOWED_ACTIVATIONS` in config.py) - which is why a new
+scheduled template costs nothing here, where a `due_<template>` per template
+would have been the same twenty lines with one isinstance swapped. `due_alarm`
+takes an optional filter for the one caller that cares which kind it got.
 
 A scheduled mode is **due** when:
 

@@ -35,10 +35,8 @@ POLL_MS = 1000
 # and re-reads each item's text/visibility, so the slots exist up front and
 # the unused ones hide themselves.
 _STATUS_SLOTS = 6
-# Scene slots, for the same reason and by the same trick: a list that changes
-# length has to be fixed slots that hide themselves. Eight is past the point
-# where a flat radio list stops being a good way to choose anyway - the web UI
-# is where a large collection gets managed.
+# Scene slots, by the same trick. Eight is already past the point where a flat
+# radio list is a good way to choose - the web UI manages a large collection.
 _SCENE_SLOTS = 8
 
 
@@ -353,11 +351,9 @@ class ControlPanel:
 
         threading.Thread(target=self._icon.run, daemon=True, name="tray").start()
         self._tk.after(0, self._tick)
-        # Shown by default, because a tray icon is not discoverable on Windows:
-        # new ones go into the hidden overflow flyout, so a panel that only
-        # ever lived there looked to its owner like nothing had launched.
-        # Closing the window still just hides it, so anyone who wants it out of
-        # the way says so once and the pref remembers.
+        # Shown by default: Windows files new tray icons into a hidden overflow
+        # flyout, so a panel that only ever lived there looks to its owner like
+        # nothing launched. See `toggle_show_on_start`.
         if load_prefs(self.config).get("show_on_start", True):
             self._tk.after(0, self.show_window)
         self._tk.mainloop()

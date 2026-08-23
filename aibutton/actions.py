@@ -1,29 +1,28 @@
-"""Executors for the log/timer_toggle/webhook action primitives.
+"""Executors for the log/timer_toggle/webhook/osc/midi action primitives.
 
-execute() returns an ActionResult instead of raising for expected
-failures (a webhook 5xx or unreachable host) - main.py maps ok/not-ok
-onto the LED and sound without caring which primitive ran.
+execute() returns an ActionResult instead of raising for expected failures (a
+webhook 5xx or unreachable host) - main.py maps ok/not-ok onto the LED and
+sound without caring which primitive ran.
 
-The webhook primitive is the entire IFTTT/Make/n8n/Home Assistant
-integration surface: anything smarter than these primitives should live
-on the receiving end of a webhook, not in the button - AI included.
+The webhook primitive is the entire IFTTT/Make/n8n/Home Assistant integration
+surface: anything smarter than these primitives should live on the receiving
+end of a webhook, not in the button - AI included.
 
-The osc primitive is the same idea pointed at music and show-control
-software, which listens on UDP rather than HTTP. It is a separate action
-rather than a webhook setting because the two differ in kind: one is a
-request with an answer, the other is a datagram that either leaves or
-does not. See [osc.py](osc.py).
+The osc primitive is the same idea pointed at music and show-control software,
+which listens on UDP rather than HTTP. It is a separate action rather than a
+webhook setting because the two differ in kind: one is a request with an
+answer, the other is a datagram that either leaves or does not. See
+[osc.py](osc.py).
 
-The midi primitive is its sibling for the software that does not speak OSC -
-Studio One being the case that forced it. Its two halves are elsewhere for the
-same reason osc's encoder is: [midi.py](midi.py) says what to send and
-[midi_io.py](midi_io.py) gets it to a port, the latter because there turned
-out to be two ways to do that and neither works everywhere. What is left here
-is the mapping onto ok/not-ok, which is all this module ever does.
+The midi primitive is its sibling for software that does not speak OSC. Its
+two halves are elsewhere for the same reason osc's encoder is:
+[midi.py](midi.py) says what to send and [midi_io.py](midi_io.py) gets it to a
+port - the latter because there are two ways to do that and neither works
+everywhere. What is left here is the mapping onto ok/not-ok.
 
-Alarm modes are *not* handled here: ringing until dismissed/snoozed needs
-the LED/sound/button-event loop that only main.py's run() owns (its
-ring_alarm), so alarms fire via the scheduler, never through execute().
+Alarm modes are *not* handled here: ringing until dismissed/snoozed needs the
+LED/sound/button-event loop that only main.py's run() owns (its ring_alarm), so
+alarms fire via the scheduler, never through execute().
 """
 
 from __future__ import annotations
@@ -56,11 +55,10 @@ WEBHOOK_TIMEOUT_S = 5.0
 class ActionResult:
     ok: bool
     message: str  # human-readable; shown in the web UI / REST status
-    # What a takeover reports about the session it just ended - a flat dict of
-    # scalars, contents chosen per app ([summary.py](summary.py)). The same
-    # result as `message`, written for a machine instead of a person, and the
-    # thing an `on_exit` hook carries outward. None is what every action and
-    # most apps return: nothing to report, and nothing costs anything.
+    # What a takeover reports about the session it just ended - `message`
+    # written for a machine, and what an `on_exit` hook carries outward
+    # ([summary.py](summary.py)). None for every action and most apps: nothing
+    # to report costs nothing.
     summary: Mapping[str, object] | None = None
 
 
@@ -118,13 +116,13 @@ async def execute(
     """Run one action.
 
     `session` is the summary the app just ended reported, already through
-    [summary.py](summary.py)'s gate - so it is flat, scalar and bounded by the
-    time it arrives here, and this module never validates it again. Only the
-    two carriers that can express structured data read it: a webhook merges it
-    into the payload, an OSC message appends it to the arguments. The others
-    ignore it on purpose - a log row is one event name and a MIDI message is
-    three bytes, and stuffing numbers into either would be inventing an
-    encoding nobody asked for.
+    [summary.py](summary.py)'s gate - flat, scalar and bounded by the time it
+    arrives here, so this module never validates it again. Only the two
+    carriers that can express structured data read it: a webhook merges it into
+    the payload, an OSC message appends it to the arguments. The others ignore
+    it on purpose - a log row is one event name and a MIDI message is three
+    bytes, and stuffing numbers into either would invent an encoding nobody
+    asked for.
     """
     if isinstance(action, LogAction):
         ts = store.log_event(action.event, mode=mode_name)

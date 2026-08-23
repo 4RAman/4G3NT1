@@ -30,15 +30,13 @@ CREATE TABLE IF NOT EXISTS events (
 )
 """
 
-# `value` is deliberately one untyped numeric slot rather than a column per
-# app. A metronome session's BPM, a counter's tally, a lap number and a sensor
-# reading are all "the number this press produced", and the two alternatives
-# are worse: a column each does not survive third-party apps, and folding the
-# number into `name` breaks count_today/current_streak, which group by exactly
-# that string. What a value *means* is read off `name` and `kind`, the same way
-# `duration_s` already means different things on a timer_stop and a mode_exit.
-#
-# NULL is the normal case: most events are the fact that something happened.
+# `value` is deliberately one untyped numeric slot rather than a column per app.
+# A metronome's BPM, a counter's tally, a lap number and a sensor reading are
+# all "the number this press produced", and both alternatives are worse: a
+# column each does not survive third-party apps, and folding the number into
+# `name` breaks count_today/current_streak, which group by exactly that string.
+# What a value *means* is read off `name` and `kind`, the same way `duration_s`
+# already differs between a timer_stop and a mode_exit. NULL is the normal case.
 
 
 _MEMORY = ":memory:"
@@ -56,10 +54,9 @@ def _utcnow() -> datetime:
 def _like_escape(text: str) -> str:
     """Neutralise LIKE's own wildcards in a user's search text.
 
-    Without this, searching for `100%` matches every row - the string is bound
+    Without this, searching for `100%` matches every row: the string is bound
     safely (so this is not an injection question), but `%` and `_` still mean
-    something to LIKE, and a search box that quietly treats them as operators
-    surprises people."""
+    something to LIKE."""
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
@@ -76,12 +73,10 @@ def _local_day_bounds_utc() -> tuple[str, str]:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """`CREATE TABLE IF NOT EXISTS` only helps a brand-new file - an
-    existing events.db predating a column needs it added by hand, or every
-    insert below fails against the old schema.
-
-    Each column is added independently, so a database from any earlier
-    version catches up in one pass rather than only the most recent one."""
+    """`CREATE TABLE IF NOT EXISTS` only helps a brand-new file - an existing
+    events.db predating a column needs it added by hand, or every insert below
+    fails against the old schema. Each column is added independently, so a
+    database from any earlier version catches up in one pass."""
     columns = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
     if "mode" not in columns:
         conn.execute("ALTER TABLE events ADD COLUMN mode TEXT")
@@ -114,9 +109,8 @@ class EventStore:
         try:
             self._conn = _connect(path)
         except (sqlite3.Error, OSError) as exc:
-            # A button that refuses to start because its logbook is
-            # unwritable is the wrong trade - pressing it still has to do
-            # something. Fall back to an in-memory log and say so loudly.
+            # A button that refuses to start because its logbook is unwritable
+            # is the wrong trade - pressing it still has to do something.
             log.error(
                 "event store: cannot open %s (%s) - logging to memory only, "
                 "history will be lost on exit",
@@ -252,20 +246,19 @@ class EventStore:
         `value` is appended rather than slotted in beside the other nullable
         columns so existing positional reads keep meaning what they meant.
 
-        Every filter is optional and they combine with AND, which is what a
-        filter bar means by having several boxes filled in. `name` is a
+        Every filter is optional and they combine with AND. `name` is a
         substring match because you search a log for "coff" and expect to find
-        "coffee"; `kind` and `mode` are exact, because those come from a
-        fixed list and a substring match on them would be a way to select the
-        wrong thing by accident.
+        "coffee"; `kind` and `mode` are exact, because those come from a fixed
+        list and a substring match on them would select the wrong thing by
+        accident.
 
-        `since`/`until` are UTC ISO strings compared as text. That works
-        because `ts` is stored as UTC ISO-8601, where lexical order *is*
-        chronological order - the property that makes a string column usable
-        as a timeline, and the reason the format is not negotiable.
+        `since`/`until` are UTC ISO strings compared as text, which works
+        because `ts` is stored as UTC ISO-8601 - lexical order *is*
+        chronological order there, and that is why the format is not
+        negotiable.
 
-        Fragments are assembled, values are always bound. The one rule here:
-        nothing a caller supplies is ever interpolated into the SQL.
+        Fragments are assembled, values are always bound: nothing a caller
+        supplies is ever interpolated into the SQL.
         """
         where: list[str] = []
         params: list[object] = []

@@ -1648,836 +1648,438 @@ export const LED_STATE_BY_KEY = Object.fromEntries(LED_STATES.map((s) => [s.key,
 
 // Built-in looks, offered wherever a colour is chosen.
 //
-// **An entry carries an `effect` or a `sequence`, never both** (TODO 36a). The
-// second kind is a stop list, so it is only offered where sequences are
-// allowed (`allowSequence`) - the system palette rows refuse them, because a
-// palette entry ships to the device and renders unattended while a sequence
-// is a schedule only the host can walk. That is the same rule
-// `_parse_palette` enforces on the Python side, applied one step earlier so
-// the picker never shows you something the Save would drop.
+// **An entry carries an `effect` or a `sequence`, never both** (TODO 36a). A
+// sequence is only offered where `allowSequence` says so - the system palette
+// rows refuse them, because a palette entry ships to the device and renders
+// unattended while a sequence is a schedule only the host can walk. Same rule
+// `_parse_palette` enforces, applied one step earlier so the picker never
+// shows you something the Save would drop.
 //
-// **A starting point, never a stored thing.** Picking one copies its effect
-// into whatever you are editing; nothing here lands in config.json unless you
-// save it as a named look. That is why there can be forty of them without
-// anybody's config growing, and why deleting a look you made never disturbs
-// the library it came from.
+// **A starting point, never a stored thing.** Picking one copies its body into
+// whatever you are editing; nothing here reaches config.json unless you save it
+// as a named look. That is why there can be a hundred of them without anybody's
+// config growing, and why deleting a look never disturbs the library.
 //
-// The groups are the useful axis. Nobody wants "all the blues"; they want the
-// one that means *resting*, and the difference between Cooldown and Deep Water
-// is what they are for rather than what hue they are.
+// The groups are the useful axis: nobody wants "all the blues", they want the
+// one that means *resting*. Countdown presets are `progress`-driven and Tempo
+// presets `beats`-driven, so those two only say anything under an app that can
+// supply their number (see DRIVES); everything else runs on the clock.
 //
-// **The sequence half is organised by what drives it, not only by mood.**
-// Countdown presets are `progress`-driven and Tempo presets are `beats`-driven,
-// so those two groups are the ones that only light up under the app that can
-// supply their number (see DRIVES) - offered everywhere, meaningful in one
-// place, which the drive's own hint says. Everything else runs on the clock.
+// Two hardware facts shaped the colours, both from README's gotchas:
+//   - This build's ring measures R:G:B at roughly 1.00 : 0.54 : 0.44 on a 3V3
+//     rail (TODO 0c), so pure blues read dim and anything fading through white
+//     reads warm. Anything that has to be *seen* leans red/amber; the blues are
+//     for calm states where dim is the point. The presets are written to the
+//     numbers, which is the only stable target - judge them on the onboard LED.
+//   - Only `flash` and `alternate` strobe, and those are floored at 3 Hz (WCAG
+//     2.3.1). Every strobing preset here sits at 0.45 s or slower, so the floor
+//     never rewrites one. **A sequence has to clear two floors**: a stop that
+//     strobes obeys that rule, and every stop's dwell (hold + fade) clears half
+//     the floor once the sequence repeats or runs past three stops
+//     (`config.sequence_safe`). 0.2 s is the shortest dwell used below.
 //
-// A third hardware fact joins the two below once a preset has a *gradient* in
-// it: this build's ring measures R:G:B at roughly 1.00 : 0.54 : 0.44 on a 3V3
-// rail (TODO 0c), so any fade through white or blue reads warmer and dimmer on
-// the ring than the numbers say. The presets are written to the numbers, which
-// is the only stable target - judge them on the onboard LED, which renders
-// accurately, and see the hardware state note in TODO.md before filing a
-// colour as a bug.
-//
-// Two hardware facts shaped the choices, both from README's gotchas:
-//   - This build's ring measures R > G > B, so pure blues read dim and white
-//     reads warm. Anything that has to be *seen* leans red/amber; the blues
-//     are here for calm states where dim is the point.
-//   - Only `flash` and `alternate` strobe, and those are floored at 3 Hz
-//     (WCAG 2.3.1). Every strobing preset below sits at 0.45 s or slower, so
-//     the floor never has to rewrite one - test_look_presets.py fails if that
-//     stops being true. **A sequence preset has to clear two floors, not
-//     one**: a stop that strobes obeys the rule above, and every stop's dwell
-//     (hold + fade) clears half the floor once the sequence repeats or runs
-//     past three stops (`config.sequence_safe`). 0.2 s is the shortest dwell
-//     used below, which leaves room at the default 3 Hz setting.
-//
-// The array is deliberately **strict JSON**: test_look_presets.py slices it
-// out and feeds every effect through the real Python parser, so a preset
-// cannot ship a colour the config would reject or a rate it would clamp.
-// Keep comments outside the brackets.
+// The array is deliberately **strict JSON**: test_look_presets.py slices it out
+// and feeds every entry through the real Python parser, so a preset cannot ship
+// a colour the config would reject or a rate it would clamp, and it fails if
+// the two claims above stop being true. Keep comments outside the brackets.
 export const LOOK_PRESETS = [
-  { "id": "deep-water", "label": "Deep Water", "group": "Calm",
-    "effect": { "style": "breathe", "color": "#0044ff", "color2": "#000000", "period_s": 4.5 } },
-  { "id": "moss", "label": "Moss", "group": "Calm",
-    "effect": { "style": "breathe", "color": "#1e8c46", "color2": "#000000", "period_s": 5 } },
-  { "id": "ember", "label": "Ember", "group": "Calm",
-    "effect": { "style": "breathe", "color": "#ff4400", "color2": "#000000", "period_s": 3.5 } },
-  { "id": "candle", "label": "Candle", "group": "Calm",
-    "effect": { "style": "breathe", "color": "#ff7a1a", "color2": "#000000", "period_s": 2.5 } },
-  { "id": "slow-tide", "label": "Slow Tide", "group": "Calm",
-    "effect": { "style": "fade", "color": "#002a55", "color2": "#00a0c0", "period_s": 6 } },
-  { "id": "nightlight", "label": "Nightlight", "group": "Calm",
-    "effect": { "style": "solid", "color": "#180600", "color2": "#000000", "period_s": 1 } },
-  { "id": "dusk", "label": "Dusk", "group": "Calm",
-    "effect": { "style": "fade", "color": "#2a0a40", "color2": "#ff5500", "period_s": 7 } },
+  { "id": "deep-water", "label": "Deep Water", "group": "Calm", "effect": { "style": "breathe", "color": "#0044ff", "color2": "#000000", "period_s": 4.5 } },
+  { "id": "moss", "label": "Moss", "group": "Calm", "effect": { "style": "breathe", "color": "#1e8c46", "color2": "#000000", "period_s": 5 } },
+  { "id": "ember", "label": "Ember", "group": "Calm", "effect": { "style": "breathe", "color": "#ff4400", "color2": "#000000", "period_s": 3.5 } },
+  { "id": "candle", "label": "Candle", "group": "Calm", "effect": { "style": "breathe", "color": "#ff7a1a", "color2": "#000000", "period_s": 2.5 } },
+  { "id": "slow-tide", "label": "Slow Tide", "group": "Calm", "effect": { "style": "fade", "color": "#002a55", "color2": "#00a0c0", "period_s": 6 } },
+  { "id": "nightlight", "label": "Nightlight", "group": "Calm", "effect": { "style": "solid", "color": "#180600", "color2": "#000000", "period_s": 1 } },
+  { "id": "dusk", "label": "Dusk", "group": "Calm", "effect": { "style": "fade", "color": "#2a0a40", "color2": "#ff5500", "period_s": 7 } },
 
-  { "id": "deep-work", "label": "Deep Work", "group": "Focus",
-    "effect": { "style": "solid", "color": "#00a866", "color2": "#000000", "period_s": 1 } },
-  { "id": "flow", "label": "Flow", "group": "Focus",
-    "effect": { "style": "breathe", "color": "#00d488", "color2": "#000000", "period_s": 6 } },
-  { "id": "amber-desk", "label": "Amber Desk", "group": "Focus",
-    "effect": { "style": "solid", "color": "#ffa000", "color2": "#000000", "period_s": 1 } },
-  { "id": "tunnel", "label": "Tunnel", "group": "Focus",
-    "effect": { "style": "fade", "color": "#001a0d", "color2": "#00ff77", "period_s": 4 } },
-  { "id": "lantern", "label": "Lantern", "group": "Focus",
-    "effect": { "style": "breathe", "color": "#ffc040", "color2": "#000000", "period_s": 4 } },
+  { "id": "deep-work", "label": "Deep Work", "group": "Focus", "effect": { "style": "solid", "color": "#00a866", "color2": "#000000", "period_s": 1 } },
+  { "id": "flow", "label": "Flow", "group": "Focus", "effect": { "style": "breathe", "color": "#00d488", "color2": "#000000", "period_s": 6 } },
+  { "id": "amber-desk", "label": "Amber Desk", "group": "Focus", "effect": { "style": "solid", "color": "#ffa000", "color2": "#000000", "period_s": 1 } },
+  { "id": "tunnel", "label": "Tunnel", "group": "Focus", "effect": { "style": "fade", "color": "#001a0d", "color2": "#00ff77", "period_s": 4 } },
+  { "id": "lantern", "label": "Lantern", "group": "Focus", "effect": { "style": "breathe", "color": "#ffc040", "color2": "#000000", "period_s": 4 } },
 
-  { "id": "cooldown", "label": "Cooldown", "group": "Rest",
-    "effect": { "style": "breathe", "color": "#00a8ff", "color2": "#000000", "period_s": 4 } },
-  { "id": "meadow", "label": "Meadow", "group": "Rest",
-    "effect": { "style": "fade", "color": "#6ac432", "color2": "#ffe95c", "period_s": 5 } },
-  { "id": "warm-down", "label": "Warm Down", "group": "Rest",
-    "effect": { "style": "fade", "color": "#ff8a00", "color2": "#3a1a00", "period_s": 5 } },
-  { "id": "tea", "label": "Tea", "group": "Rest",
-    "effect": { "style": "breathe", "color": "#b25a1e", "color2": "#000000", "period_s": 3 } },
+  { "id": "cooldown", "label": "Cooldown", "group": "Rest", "effect": { "style": "breathe", "color": "#00a8ff", "color2": "#000000", "period_s": 4 } },
+  { "id": "meadow", "label": "Meadow", "group": "Rest", "effect": { "style": "fade", "color": "#6ac432", "color2": "#ffe95c", "period_s": 5 } },
+  { "id": "warm-down", "label": "Warm Down", "group": "Rest", "effect": { "style": "fade", "color": "#ff8a00", "color2": "#3a1a00", "period_s": 5 } },
+  { "id": "tea", "label": "Tea", "group": "Rest", "effect": { "style": "breathe", "color": "#b25a1e", "color2": "#000000", "period_s": 3 } },
 
-  { "id": "klaxon", "label": "Klaxon", "group": "Alert",
-    "effect": { "style": "flash", "color": "#ff0000", "color2": "#000000", "period_s": 0.5 } },
-  { "id": "beacon", "label": "Beacon", "group": "Alert",
-    "effect": { "style": "flash", "color": "#ff6a00", "color2": "#000000", "period_s": 0.9 } },
-  { "id": "hazard", "label": "Hazard", "group": "Alert",
-    "effect": { "style": "alternate", "color": "#ffc400", "color2": "#000000", "period_s": 0.6 } },
-  { "id": "siren", "label": "Siren", "group": "Alert",
-    "effect": { "style": "alternate", "color": "#ff0000", "color2": "#0033ff", "period_s": 0.45 } },
-  { "id": "red-alert", "label": "Red Alert", "group": "Alert",
-    "effect": { "style": "breathe", "color": "#ff0000", "color2": "#000000", "period_s": 1.2 } },
-  { "id": "last-call", "label": "Last Call", "group": "Alert",
-    "effect": { "style": "flash", "color": "#ff0044", "color2": "#000000", "period_s": 0.6 } },
+  { "id": "klaxon", "label": "Klaxon", "group": "Alert", "effect": { "style": "flash", "color": "#ff0000", "color2": "#000000", "period_s": 0.5 } },
+  { "id": "beacon", "label": "Beacon", "group": "Alert", "effect": { "style": "flash", "color": "#ff6a00", "color2": "#000000", "period_s": 0.9 } },
+  { "id": "hazard", "label": "Hazard", "group": "Alert", "effect": { "style": "alternate", "color": "#ffc400", "color2": "#000000", "period_s": 0.6 } },
+  { "id": "siren", "label": "Siren", "group": "Alert", "effect": { "style": "alternate", "color": "#ff0000", "color2": "#0033ff", "period_s": 0.45 } },
+  { "id": "red-alert", "label": "Red Alert", "group": "Alert", "effect": { "style": "breathe", "color": "#ff0000", "color2": "#000000", "period_s": 1.2 } },
+  { "id": "last-call", "label": "Last Call", "group": "Alert", "effect": { "style": "flash", "color": "#ff0044", "color2": "#000000", "period_s": 0.6 } },
 
-  { "id": "green-light", "label": "Green Light", "group": "Done",
-    "effect": { "style": "solid", "color": "#00ff2a", "color2": "#000000", "period_s": 1 } },
-  { "id": "applause", "label": "Applause", "group": "Done",
-    "effect": { "style": "rainbow", "color": "#ffffff", "color2": "#000000", "period_s": 0.7 } },
-  { "id": "confetti", "label": "Confetti", "group": "Done",
-    "effect": { "style": "rainbow", "color": "#ffffff", "color2": "#000000", "period_s": 1.4 } },
-  { "id": "sunrise", "label": "Sunrise", "group": "Done",
-    "effect": { "style": "fade", "color": "#ff1a00", "color2": "#ffd400", "period_s": 4.5 } },
+  { "id": "green-light", "label": "Green Light", "group": "Done", "effect": { "style": "solid", "color": "#00ff2a", "color2": "#000000", "period_s": 1 } },
+  { "id": "applause", "label": "Applause", "group": "Done", "effect": { "style": "rainbow", "color": "#ffffff", "color2": "#000000", "period_s": 0.7 } },
+  { "id": "confetti", "label": "Confetti", "group": "Done", "effect": { "style": "rainbow", "color": "#ffffff", "color2": "#000000", "period_s": 1.4 } },
+  { "id": "sunrise", "label": "Sunrise", "group": "Done", "effect": { "style": "fade", "color": "#ff1a00", "color2": "#ffd400", "period_s": 4.5 } },
 
-  { "id": "on-air", "label": "On Air", "group": "Status",
-    "effect": { "style": "solid", "color": "#ff0000", "color2": "#000000", "period_s": 1 } },
-  { "id": "standby", "label": "Standby", "group": "Status",
-    "effect": { "style": "solid", "color": "#ffa000", "color2": "#000000", "period_s": 1 } },
-  { "id": "clear", "label": "Clear", "group": "Status",
-    "effect": { "style": "solid", "color": "#00e04a", "color2": "#000000", "period_s": 1 } },
-  { "id": "do-not-disturb", "label": "Do Not Disturb", "group": "Status",
-    "effect": { "style": "breathe", "color": "#ff0033", "color2": "#000000", "period_s": 3 } },
+  { "id": "on-air", "label": "On Air", "group": "Status", "effect": { "style": "solid", "color": "#ff0000", "color2": "#000000", "period_s": 1 } },
+  { "id": "standby", "label": "Standby", "group": "Status", "effect": { "style": "solid", "color": "#ffa000", "color2": "#000000", "period_s": 1 } },
+  { "id": "clear", "label": "Clear", "group": "Status", "effect": { "style": "solid", "color": "#00e04a", "color2": "#000000", "period_s": 1 } },
+  { "id": "do-not-disturb", "label": "Do Not Disturb", "group": "Status", "effect": { "style": "breathe", "color": "#ff0033", "color2": "#000000", "period_s": 3 } },
 
-  { "id": "downbeat", "label": "Downbeat", "group": "Time",
-    "effect": { "style": "flash", "color": "#ffffff", "color2": "#000000", "period_s": 0.5 } },
-  { "id": "tick", "label": "Tick", "group": "Time",
-    "effect": { "style": "flash", "color": "#00e5ff", "color2": "#000000", "period_s": 0.5 } },
-  { "id": "pulse", "label": "Pulse", "group": "Time",
-    "effect": { "style": "breathe", "color": "#ff00aa", "color2": "#000000", "period_s": 1 } },
+  { "id": "downbeat", "label": "Downbeat", "group": "Time", "effect": { "style": "flash", "color": "#ffffff", "color2": "#000000", "period_s": 0.5 } },
+  { "id": "tick", "label": "Tick", "group": "Time", "effect": { "style": "flash", "color": "#00e5ff", "color2": "#000000", "period_s": 0.5 } },
+  { "id": "pulse", "label": "Pulse", "group": "Time", "effect": { "style": "breathe", "color": "#ff00aa", "color2": "#000000", "period_s": 1 } },
 
-  { "id": "disco", "label": "Disco", "group": "Play",
-    "effect": { "style": "rainbow", "color": "#ffffff", "color2": "#000000", "period_s": 0.5 } },
-  { "id": "lava-lamp", "label": "Lava Lamp", "group": "Play",
-    "effect": { "style": "fade", "color": "#ff0066", "color2": "#ffb400", "period_s": 7 } },
-  { "id": "cyberpunk", "label": "Cyberpunk", "group": "Play",
-    "effect": { "style": "alternate", "color": "#ff00ff", "color2": "#00ffff", "period_s": 0.7 } },
-  { "id": "firefly", "label": "Firefly", "group": "Play",
-    "effect": { "style": "breathe", "color": "#b6ff00", "color2": "#000000", "period_s": 2.2 } },
+  { "id": "disco", "label": "Disco", "group": "Play", "effect": { "style": "rainbow", "color": "#ffffff", "color2": "#000000", "period_s": 0.5 } },
+  { "id": "lava-lamp", "label": "Lava Lamp", "group": "Play", "effect": { "style": "fade", "color": "#ff0066", "color2": "#ffb400", "period_s": 7 } },
+  { "id": "cyberpunk", "label": "Cyberpunk", "group": "Play", "effect": { "style": "alternate", "color": "#ff00ff", "color2": "#00ffff", "period_s": 0.7 } },
+  { "id": "firefly", "label": "Firefly", "group": "Play", "effect": { "style": "breathe", "color": "#b6ff00", "color2": "#000000", "period_s": 2.2 } },
 
-  { "id": "three-cheers", "label": "Three Cheers", "group": "Patterns",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#00ff2a", "hold_s": 0.9, "fade_s": 0, "style": "flash", "period_s": 0.45 }
-    ] } },
-  { "id": "sunrise-run", "label": "Sunrise Run", "group": "Patterns",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ff1a00", "hold_s": 1.1, "fade_s": 0 },
-      { "color": "#ffd400", "hold_s": 0.4, "fade_s": 0.7, "curve": "exponential" },
-      { "color": "#00ff2a", "hold_s": 0.6, "fade_s": 0.9, "curve": "linear" }
-    ] } },
-  { "id": "heartbeat", "label": "Heartbeat", "group": "Patterns",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff0033", "hold_s": 0.17, "fade_s": 0 },
-      { "color": "#2a0008", "hold_s": 0.17, "fade_s": 0.17, "curve": "ease_out" },
-      { "color": "#ff0033", "hold_s": 0.17, "fade_s": 0 },
-      { "color": "#0a0002", "hold_s": 0.75, "fade_s": 0.34, "curve": "ease_out" }
-    ] } },
-  { "id": "nope", "label": "Nope", "group": "Patterns",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ff0000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#200000", "hold_s": 0.18, "fade_s": 0 },
-      { "color": "#ff0000", "hold_s": 0.55, "fade_s": 0 }
-    ] } },
-  { "id": "wake-up", "label": "Wake Up", "group": "Patterns",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#100800", "hold_s": 0.4, "fade_s": 1.8, "curve": "ease_in" },
-      { "color": "#ffb400", "hold_s": 0.6, "fade_s": 1.2, "curve": "ease_in_out" },
-      { "color": "#100800", "hold_s": 0.4, "fade_s": 1.6, "curve": "ease_out" }
-    ] } },
+  { "id": "three-cheers", "label": "Three Cheers", "group": "Patterns", "sequence": { "repeat": false, "stops": [
+    { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#00ff2a", "hold_s": 0.9, "fade_s": 0, "style": "flash", "period_s": 0.45 } ] } },
+  { "id": "sunrise-run", "label": "Sunrise Run", "group": "Patterns", "sequence": { "repeat": false, "stops": [
+    { "color": "#ff1a00", "hold_s": 1.1, "fade_s": 0 }, { "color": "#ffd400", "hold_s": 0.4, "fade_s": 0.7, "curve": "exponential" },
+    { "color": "#00ff2a", "hold_s": 0.6, "fade_s": 0.9, "curve": "linear" } ] } },
+  { "id": "heartbeat", "label": "Heartbeat", "group": "Patterns", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff0033", "hold_s": 0.17, "fade_s": 0 }, { "color": "#2a0008", "hold_s": 0.17, "fade_s": 0.17, "curve": "ease_out" },
+    { "color": "#ff0033", "hold_s": 0.17, "fade_s": 0 }, { "color": "#0a0002", "hold_s": 0.75, "fade_s": 0.34, "curve": "ease_out" } ] } },
+  { "id": "nope", "label": "Nope", "group": "Patterns", "sequence": { "repeat": false, "stops": [
+    { "color": "#ff0000", "hold_s": 0.2, "fade_s": 0 }, { "color": "#200000", "hold_s": 0.18, "fade_s": 0 },
+    { "color": "#ff0000", "hold_s": 0.55, "fade_s": 0 } ] } },
+  { "id": "wake-up", "label": "Wake Up", "group": "Patterns", "sequence": { "repeat": true, "stops": [
+    { "color": "#100800", "hold_s": 0.4, "fade_s": 1.8, "curve": "ease_in" },
+    { "color": "#ffb400", "hold_s": 0.6, "fade_s": 1.2, "curve": "ease_in_out" },
+    { "color": "#100800", "hold_s": 0.4, "fade_s": 1.6, "curve": "ease_out" } ] } },
 
-  { "id": "yes-tick", "label": "Yes", "group": "Confirm",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#00ff2a", "hold_s": 0.1, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.08, "fade_s": 0 },
-      { "color": "#00ff2a", "hold_s": 0.5, "fade_s": 0 }
-    ] } },
-  { "id": "no-buzz", "label": "No", "group": "Confirm",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ff0000", "hold_s": 0.14, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.1, "fade_s": 0 },
-      { "color": "#ff0000", "hold_s": 0.45, "fade_s": 0 }
-    ] } },
-  { "id": "maybe", "label": "Maybe", "group": "Confirm",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ffb400", "hold_s": 0.25, "fade_s": 0.25, "curve": "ease_out" },
-      { "color": "#ffb400", "hold_s": 0.6, "fade_s": 0 }
-    ] } },
-  { "id": "got-it", "label": "Got It", "group": "Confirm",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ffffff", "hold_s": 0.07, "fade_s": 0 },
-      { "color": "#00ff2a", "hold_s": 0.7, "fade_s": 0.18, "curve": "ease_out" }
-    ] } },
-  { "id": "saved", "label": "Saved", "group": "Confirm",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#00331a", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#00e05a", "hold_s": 0.8, "fade_s": 0.5, "curve": "ease_out" }
-    ] } },
-  { "id": "sent", "label": "Sent", "group": "Confirm",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#00e5ff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#003844", "hold_s": 0.25, "fade_s": 0.5, "curve": "ease_in" },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 }
-    ] } },
-  { "id": "undone", "label": "Undone", "group": "Confirm",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ffb400", "hold_s": 0.5, "fade_s": 0.3, "curve": "ease_in" },
-      { "color": "#241400", "hold_s": 0.3, "fade_s": 0.4, "curve": "ease_out" }
-    ] } },
-  { "id": "denied", "label": "Denied", "group": "Confirm",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ff0022", "hold_s": 0.9, "fade_s": 0, "style": "flash", "period_s": 0.45 }
-    ] } },
-  { "id": "queued", "label": "Queued", "group": "Confirm",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#3a6bff", "hold_s": 0.3, "fade_s": 0.35, "curve": "ease_in_out" },
-      { "color": "#08122e", "hold_s": 0.3, "fade_s": 0.35, "curve": "ease_in_out" }
-    ] } },
-  { "id": "copied", "label": "Copied", "group": "Confirm",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ffffff", "hold_s": 0.09, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.09, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.3, "fade_s": 0 }
-    ] } },
+  { "id": "yes-tick", "label": "Yes", "group": "Confirm", "sequence": { "repeat": false, "stops": [
+    { "color": "#00ff2a", "hold_s": 0.1, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.08, "fade_s": 0 },
+    { "color": "#00ff2a", "hold_s": 0.5, "fade_s": 0 } ] } },
+  { "id": "no-buzz", "label": "No", "group": "Confirm", "sequence": { "repeat": false, "stops": [
+    { "color": "#ff0000", "hold_s": 0.14, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.1, "fade_s": 0 },
+    { "color": "#ff0000", "hold_s": 0.45, "fade_s": 0 } ] } },
+  { "id": "maybe", "label": "Maybe", "group": "Confirm", "sequence": { "repeat": false, "stops": [
+    { "color": "#ffb400", "hold_s": 0.25, "fade_s": 0.25, "curve": "ease_out" }, { "color": "#ffb400", "hold_s": 0.6, "fade_s": 0 } ] } },
+  { "id": "got-it", "label": "Got It", "group": "Confirm", "sequence": { "repeat": false, "stops": [
+    { "color": "#ffffff", "hold_s": 0.07, "fade_s": 0 }, { "color": "#00ff2a", "hold_s": 0.7, "fade_s": 0.18, "curve": "ease_out" } ] } },
+  { "id": "saved", "label": "Saved", "group": "Confirm", "sequence": { "repeat": false, "stops": [
+    { "color": "#00331a", "hold_s": 0.2, "fade_s": 0 }, { "color": "#00e05a", "hold_s": 0.8, "fade_s": 0.5, "curve": "ease_out" } ] } },
+  { "id": "sent", "label": "Sent", "group": "Confirm", "sequence": { "repeat": false, "stops": [
+    { "color": "#00e5ff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#003844", "hold_s": 0.25, "fade_s": 0.5, "curve": "ease_in" },
+    { "color": "#000000", "hold_s": 0.2, "fade_s": 0 } ] } },
+  { "id": "undone", "label": "Undone", "group": "Confirm", "sequence": { "repeat": false, "stops": [
+    { "color": "#ffb400", "hold_s": 0.5, "fade_s": 0.3, "curve": "ease_in" },
+    { "color": "#241400", "hold_s": 0.3, "fade_s": 0.4, "curve": "ease_out" } ] } },
+  { "id": "denied", "label": "Denied", "group": "Confirm", "sequence": { "repeat": false, "stops": [
+    { "color": "#ff0022", "hold_s": 0.9, "fade_s": 0, "style": "flash", "period_s": 0.45 } ] } },
+  { "id": "queued", "label": "Queued", "group": "Confirm", "sequence": { "repeat": false, "stops": [
+    { "color": "#3a6bff", "hold_s": 0.3, "fade_s": 0.35, "curve": "ease_in_out" },
+    { "color": "#08122e", "hold_s": 0.3, "fade_s": 0.35, "curve": "ease_in_out" } ] } },
+  { "id": "copied", "label": "Copied", "group": "Confirm", "sequence": { "repeat": false, "stops": [
+    { "color": "#ffffff", "hold_s": 0.09, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.09, "fade_s": 0 },
+    { "color": "#ffffff", "hold_s": 0.3, "fade_s": 0 } ] } },
 
-  { "id": "burn-down", "label": "Burn Down", "group": "Countdown",
-    "sequence": { "drive": "progress", "repeat": false, "stops": [
-      { "color": "#00ff2a", "hold_s": 3, "fade_s": 0 },
-      { "color": "#ffcc00", "hold_s": 1, "fade_s": 2, "curve": "ease_in" },
-      { "color": "#ff0000", "hold_s": 1, "fade_s": 2, "curve": "exponential" }
-    ] } },
-  { "id": "last-minute", "label": "Last Minute", "group": "Countdown",
-    "sequence": { "drive": "progress", "repeat": false, "stops": [
-      { "color": "#0a3a1a", "hold_s": 5, "fade_s": 0 },
-      { "color": "#ffb400", "hold_s": 1, "fade_s": 1, "curve": "ease_in" },
-      { "color": "#ff0000", "hold_s": 1.2, "fade_s": 0.8, "curve": "exponential", "style": "flash", "period_s": 0.5 }
-    ] } },
-  { "id": "tea-steep", "label": "Tea Steep", "group": "Countdown",
-    "sequence": { "drive": "progress", "repeat": false, "stops": [
-      { "color": "#f2e0b0", "hold_s": 1, "fade_s": 0 },
-      { "color": "#b2711e", "hold_s": 3, "fade_s": 4 },
-      { "color": "#5a2c00", "hold_s": 1, "fade_s": 1, "curve": "ease_out" }
-    ] } },
-  { "id": "fuse", "label": "Fuse", "group": "Countdown",
-    "sequence": { "drive": "progress", "repeat": false, "stops": [
-      { "color": "#2a1400", "hold_s": 4, "fade_s": 0 },
-      { "color": "#ff6a00", "hold_s": 2, "fade_s": 2, "curve": "exponential" },
-      { "color": "#ffffff", "hold_s": 0.6, "fade_s": 0.4, "curve": "exponential" }
-    ] } },
-  { "id": "thaw", "label": "Thaw", "group": "Countdown",
-    "sequence": { "drive": "progress", "repeat": false, "stops": [
-      { "color": "#0044ff", "hold_s": 2, "fade_s": 0 },
-      { "color": "#66ccff", "hold_s": 2, "fade_s": 3, "curve": "ease_in_out" },
-      { "color": "#ffffff", "hold_s": 1, "fade_s": 2, "curve": "ease_out" }
-    ] } },
-  { "id": "traffic", "label": "Traffic Light", "group": "Countdown",
-    "sequence": { "drive": "progress", "repeat": false, "stops": [
-      { "color": "#00c832", "hold_s": 4, "fade_s": 0 },
-      { "color": "#ffb400", "hold_s": 2, "fade_s": 0 },
-      { "color": "#ff0000", "hold_s": 3, "fade_s": 0 }
-    ] } },
-  { "id": "pressure", "label": "Pressure", "group": "Countdown",
-    "sequence": { "drive": "progress", "repeat": false, "stops": [
-      { "color": "#140000", "hold_s": 3, "fade_s": 0 },
-      { "color": "#ff0000", "hold_s": 4, "fade_s": 5, "curve": "exponential" }
-    ] } },
-  { "id": "tide-out", "label": "Tide Out", "group": "Countdown",
-    "sequence": { "drive": "progress", "repeat": false, "stops": [
-      { "color": "#00a0c0", "hold_s": 2, "fade_s": 0 },
-      { "color": "#00506a", "hold_s": 3, "fade_s": 4, "curve": "ease_in_out" },
-      { "color": "#001824", "hold_s": 2, "fade_s": 2, "curve": "ease_out" }
-    ] } },
-  { "id": "oven", "label": "Oven", "group": "Countdown",
-    "sequence": { "drive": "progress", "repeat": false, "stops": [
-      { "color": "#2a0000", "hold_s": 2, "fade_s": 0 },
-      { "color": "#ff3300", "hold_s": 3, "fade_s": 4, "curve": "ease_in" },
-      { "color": "#ffb400", "hold_s": 2, "fade_s": 2, "curve": "ease_out" }
-    ] } },
-  { "id": "runway-lights", "label": "Runway", "group": "Countdown",
-    "sequence": { "drive": "progress", "repeat": false, "stops": [
-      { "color": "#0a1400", "hold_s": 3, "fade_s": 0 },
-      { "color": "#7cff00", "hold_s": 2, "fade_s": 1 },
-      { "color": "#ffffff", "hold_s": 1.5, "fade_s": 1, "curve": "ease_in" }
-    ] } },
+  { "id": "burn-down", "label": "Burn Down", "group": "Countdown", "sequence": { "drive": "progress", "repeat": false, "stops": [
+    { "color": "#00ff2a", "hold_s": 3, "fade_s": 0 }, { "color": "#ffcc00", "hold_s": 1, "fade_s": 2, "curve": "ease_in" },
+    { "color": "#ff0000", "hold_s": 1, "fade_s": 2, "curve": "exponential" } ] } },
+  { "id": "last-minute", "label": "Last Minute", "group": "Countdown", "sequence": { "drive": "progress", "repeat": false, "stops": [
+    { "color": "#0a3a1a", "hold_s": 5, "fade_s": 0 }, { "color": "#ffb400", "hold_s": 1, "fade_s": 1, "curve": "ease_in" },
+    { "color": "#ff0000", "hold_s": 1.2, "fade_s": 0.8, "curve": "exponential", "style": "flash", "period_s": 0.5 } ] } },
+  { "id": "tea-steep", "label": "Tea Steep", "group": "Countdown", "sequence": { "drive": "progress", "repeat": false, "stops": [
+    { "color": "#f2e0b0", "hold_s": 1, "fade_s": 0 }, { "color": "#b2711e", "hold_s": 3, "fade_s": 4 },
+    { "color": "#5a2c00", "hold_s": 1, "fade_s": 1, "curve": "ease_out" } ] } },
+  { "id": "fuse", "label": "Fuse", "group": "Countdown", "sequence": { "drive": "progress", "repeat": false, "stops": [
+    { "color": "#2a1400", "hold_s": 4, "fade_s": 0 }, { "color": "#ff6a00", "hold_s": 2, "fade_s": 2, "curve": "exponential" },
+    { "color": "#ffffff", "hold_s": 0.6, "fade_s": 0.4, "curve": "exponential" } ] } },
+  { "id": "thaw", "label": "Thaw", "group": "Countdown", "sequence": { "drive": "progress", "repeat": false, "stops": [
+    { "color": "#0044ff", "hold_s": 2, "fade_s": 0 }, { "color": "#66ccff", "hold_s": 2, "fade_s": 3, "curve": "ease_in_out" },
+    { "color": "#ffffff", "hold_s": 1, "fade_s": 2, "curve": "ease_out" } ] } },
+  { "id": "traffic", "label": "Traffic Light", "group": "Countdown", "sequence": { "drive": "progress", "repeat": false, "stops": [
+    { "color": "#00c832", "hold_s": 4, "fade_s": 0 }, { "color": "#ffb400", "hold_s": 2, "fade_s": 0 },
+    { "color": "#ff0000", "hold_s": 3, "fade_s": 0 } ] } },
+  { "id": "pressure", "label": "Pressure", "group": "Countdown", "sequence": { "drive": "progress", "repeat": false, "stops": [
+    { "color": "#140000", "hold_s": 3, "fade_s": 0 }, { "color": "#ff0000", "hold_s": 4, "fade_s": 5, "curve": "exponential" } ] } },
+  { "id": "tide-out", "label": "Tide Out", "group": "Countdown", "sequence": { "drive": "progress", "repeat": false, "stops": [
+    { "color": "#00a0c0", "hold_s": 2, "fade_s": 0 }, { "color": "#00506a", "hold_s": 3, "fade_s": 4, "curve": "ease_in_out" },
+    { "color": "#001824", "hold_s": 2, "fade_s": 2, "curve": "ease_out" } ] } },
+  { "id": "oven", "label": "Oven", "group": "Countdown", "sequence": { "drive": "progress", "repeat": false, "stops": [
+    { "color": "#2a0000", "hold_s": 2, "fade_s": 0 }, { "color": "#ff3300", "hold_s": 3, "fade_s": 4, "curve": "ease_in" },
+    { "color": "#ffb400", "hold_s": 2, "fade_s": 2, "curve": "ease_out" } ] } },
+  { "id": "runway-lights", "label": "Runway", "group": "Countdown", "sequence": { "drive": "progress", "repeat": false, "stops": [
+    { "color": "#0a1400", "hold_s": 3, "fade_s": 0 }, { "color": "#7cff00", "hold_s": 2, "fade_s": 1 },
+    { "color": "#ffffff", "hold_s": 1.5, "fade_s": 1, "curve": "ease_in" } ] } },
 
-  { "id": "downbeat-4", "label": "Downbeat (4)", "group": "Tempo",
-    "sequence": { "drive": "beats", "repeat": true, "stops": [
-      { "color": "#ffffff", "hold_s": 1, "fade_s": 0 },
-      { "color": "#1a1a1a", "hold_s": 3, "fade_s": 0 }
-    ] } },
-  { "id": "waltz-3", "label": "Waltz (3)", "group": "Tempo",
-    "sequence": { "drive": "beats", "repeat": true, "stops": [
-      { "color": "#ff66aa", "hold_s": 1, "fade_s": 0 },
-      { "color": "#2a0d1a", "hold_s": 2, "fade_s": 0 }
-    ] } },
-  { "id": "six-eight", "label": "Six Eight", "group": "Tempo",
-    "sequence": { "drive": "beats", "repeat": true, "stops": [
-      { "color": "#ffd400", "hold_s": 1, "fade_s": 0 },
-      { "color": "#241d00", "hold_s": 2, "fade_s": 0 },
-      { "color": "#ff8a00", "hold_s": 1, "fade_s": 0 },
-      { "color": "#241000", "hold_s": 2, "fade_s": 0 }
-    ] } },
-  { "id": "clave", "label": "Clave (3-2)", "group": "Tempo",
-    "sequence": { "drive": "beats", "repeat": true, "stops": [
-      { "color": "#00e5ff", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#001a1e", "hold_s": 1.25, "fade_s": 0 },
-      { "color": "#00e5ff", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#001a1e", "hold_s": 1.25, "fade_s": 0 },
-      { "color": "#00e5ff", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#001a1e", "hold_s": 1.75, "fade_s": 0 },
-      { "color": "#00e5ff", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#001a1e", "hold_s": 0.75, "fade_s": 0 },
-      { "color": "#00e5ff", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#001a1e", "hold_s": 1.75, "fade_s": 0 }
-    ] } },
-  { "id": "backbeat", "label": "Backbeat (2 & 4)", "group": "Tempo",
-    "sequence": { "drive": "beats", "repeat": true, "stops": [
-      { "color": "#140a00", "hold_s": 1, "fade_s": 0 },
-      { "color": "#ff6a00", "hold_s": 1, "fade_s": 0 },
-      { "color": "#140a00", "hold_s": 1, "fade_s": 0 },
-      { "color": "#ff6a00", "hold_s": 1, "fade_s": 0 }
-    ] } },
-  { "id": "bar-colour", "label": "Bar Colours", "group": "Tempo",
-    "sequence": { "drive": "beats", "repeat": true, "stops": [
-      { "color": "#ff0044", "hold_s": 1, "fade_s": 0 },
-      { "color": "#ffb400", "hold_s": 1, "fade_s": 0 },
-      { "color": "#00e05a", "hold_s": 1, "fade_s": 0 },
-      { "color": "#3a6bff", "hold_s": 1, "fade_s": 0 }
-    ] } },
-  { "id": "count-in", "label": "Count In", "group": "Tempo",
-    "sequence": { "drive": "beats", "repeat": true, "stops": [
-      { "color": "#ffffff", "hold_s": 1, "fade_s": 0 },
-      { "color": "#3a3a3a", "hold_s": 1, "fade_s": 0 },
-      { "color": "#3a3a3a", "hold_s": 1, "fade_s": 0 },
-      { "color": "#3a3a3a", "hold_s": 1, "fade_s": 0 }
-    ] } },
-  { "id": "swing", "label": "Swing", "group": "Tempo",
-    "sequence": { "drive": "beats", "repeat": true, "stops": [
-      { "color": "#ffb400", "hold_s": 0.66, "fade_s": 0 },
-      { "color": "#1a1200", "hold_s": 1.34, "fade_s": 0 }
-    ] } },
-  { "id": "two-bar", "label": "Two Bar Phrase", "group": "Tempo",
-    "sequence": { "drive": "beats", "repeat": true, "stops": [
-      { "color": "#00ff88", "hold_s": 1, "fade_s": 0 },
-      { "color": "#04241a", "hold_s": 3, "fade_s": 0 },
-      { "color": "#0a2a1e", "hold_s": 1, "fade_s": 0 },
-      { "color": "#04241a", "hold_s": 3, "fade_s": 0 }
-    ] } },
-  { "id": "vu-pump", "label": "VU Pump", "group": "Tempo",
-    "sequence": { "drive": "beats", "repeat": true, "stops": [
-      { "color": "#00e05a", "hold_s": 0.5, "fade_s": 0 },
-      { "color": "#ffb400", "hold_s": 0.5, "fade_s": 0 },
-      { "color": "#ff0022", "hold_s": 0.5, "fade_s": 0 },
-      { "color": "#0a0500", "hold_s": 2.5, "fade_s": 0 }
-    ] } },
+  { "id": "downbeat-4", "label": "Downbeat (4)", "group": "Tempo", "sequence": { "drive": "beats", "repeat": true, "stops": [
+    { "color": "#ffffff", "hold_s": 1, "fade_s": 0 }, { "color": "#1a1a1a", "hold_s": 3, "fade_s": 0 } ] } },
+  { "id": "waltz-3", "label": "Waltz (3)", "group": "Tempo", "sequence": { "drive": "beats", "repeat": true, "stops": [
+    { "color": "#ff66aa", "hold_s": 1, "fade_s": 0 }, { "color": "#2a0d1a", "hold_s": 2, "fade_s": 0 } ] } },
+  { "id": "six-eight", "label": "Six Eight", "group": "Tempo", "sequence": { "drive": "beats", "repeat": true, "stops": [
+    { "color": "#ffd400", "hold_s": 1, "fade_s": 0 }, { "color": "#241d00", "hold_s": 2, "fade_s": 0 },
+    { "color": "#ff8a00", "hold_s": 1, "fade_s": 0 }, { "color": "#241000", "hold_s": 2, "fade_s": 0 } ] } },
+  { "id": "clave", "label": "Clave (3-2)", "group": "Tempo", "sequence": { "drive": "beats", "repeat": true, "stops": [
+    { "color": "#00e5ff", "hold_s": 0.25, "fade_s": 0 }, { "color": "#001a1e", "hold_s": 1.25, "fade_s": 0 },
+    { "color": "#00e5ff", "hold_s": 0.25, "fade_s": 0 }, { "color": "#001a1e", "hold_s": 1.25, "fade_s": 0 },
+    { "color": "#00e5ff", "hold_s": 0.25, "fade_s": 0 }, { "color": "#001a1e", "hold_s": 1.75, "fade_s": 0 },
+    { "color": "#00e5ff", "hold_s": 0.25, "fade_s": 0 }, { "color": "#001a1e", "hold_s": 0.75, "fade_s": 0 },
+    { "color": "#00e5ff", "hold_s": 0.25, "fade_s": 0 }, { "color": "#001a1e", "hold_s": 1.75, "fade_s": 0 } ] } },
+  { "id": "backbeat", "label": "Backbeat (2 & 4)", "group": "Tempo", "sequence": { "drive": "beats", "repeat": true, "stops": [
+    { "color": "#140a00", "hold_s": 1, "fade_s": 0 }, { "color": "#ff6a00", "hold_s": 1, "fade_s": 0 },
+    { "color": "#140a00", "hold_s": 1, "fade_s": 0 }, { "color": "#ff6a00", "hold_s": 1, "fade_s": 0 } ] } },
+  { "id": "bar-colour", "label": "Bar Colours", "group": "Tempo", "sequence": { "drive": "beats", "repeat": true, "stops": [
+    { "color": "#ff0044", "hold_s": 1, "fade_s": 0 }, { "color": "#ffb400", "hold_s": 1, "fade_s": 0 },
+    { "color": "#00e05a", "hold_s": 1, "fade_s": 0 }, { "color": "#3a6bff", "hold_s": 1, "fade_s": 0 } ] } },
+  { "id": "count-in", "label": "Count In", "group": "Tempo", "sequence": { "drive": "beats", "repeat": true, "stops": [
+    { "color": "#ffffff", "hold_s": 1, "fade_s": 0 }, { "color": "#3a3a3a", "hold_s": 1, "fade_s": 0 },
+    { "color": "#3a3a3a", "hold_s": 1, "fade_s": 0 }, { "color": "#3a3a3a", "hold_s": 1, "fade_s": 0 } ] } },
+  { "id": "swing", "label": "Swing", "group": "Tempo", "sequence": { "drive": "beats", "repeat": true, "stops": [
+    { "color": "#ffb400", "hold_s": 0.66, "fade_s": 0 }, { "color": "#1a1200", "hold_s": 1.34, "fade_s": 0 } ] } },
+  { "id": "two-bar", "label": "Two Bar Phrase", "group": "Tempo", "sequence": { "drive": "beats", "repeat": true, "stops": [
+    { "color": "#00ff88", "hold_s": 1, "fade_s": 0 }, { "color": "#04241a", "hold_s": 3, "fade_s": 0 },
+    { "color": "#0a2a1e", "hold_s": 1, "fade_s": 0 }, { "color": "#04241a", "hold_s": 3, "fade_s": 0 } ] } },
+  { "id": "vu-pump", "label": "VU Pump", "group": "Tempo", "sequence": { "drive": "beats", "repeat": true, "stops": [
+    { "color": "#00e05a", "hold_s": 0.5, "fade_s": 0 }, { "color": "#ffb400", "hold_s": 0.5, "fade_s": 0 },
+    { "color": "#ff0022", "hold_s": 0.5, "fade_s": 0 }, { "color": "#0a0500", "hold_s": 2.5, "fade_s": 0 } ] } },
 
-  { "id": "sunrise-slow", "label": "Daybreak", "group": "Nature",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#050010", "hold_s": 1.5, "fade_s": 0 },
-      { "color": "#4a1050", "hold_s": 1, "fade_s": 2.5, "curve": "ease_in" },
-      { "color": "#ff5a00", "hold_s": 1, "fade_s": 2.5, "curve": "ease_in_out" },
-      { "color": "#ffd48a", "hold_s": 2, "fade_s": 2.5, "curve": "ease_out" }
-    ] } },
-  { "id": "sunset-slow", "label": "Last Light", "group": "Nature",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ffc46a", "hold_s": 2, "fade_s": 0 },
-      { "color": "#ff4a00", "hold_s": 1, "fade_s": 2.5, "curve": "ease_in_out" },
-      { "color": "#5a0d33", "hold_s": 1, "fade_s": 2.5, "curve": "ease_in" },
-      { "color": "#05000f", "hold_s": 2, "fade_s": 2, "curve": "ease_out" }
-    ] } },
-  { "id": "campfire", "label": "Campfire", "group": "Nature",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff5a00", "hold_s": 0.35, "fade_s": 0.25, "curve": "ease_out" },
-      { "color": "#ffa030", "hold_s": 0.25, "fade_s": 0.2 },
-      { "color": "#c02800", "hold_s": 0.3, "fade_s": 0.3, "curve": "ease_in" },
-      { "color": "#ff7a10", "hold_s": 0.2, "fade_s": 0.25 }
-    ] } },
-  { "id": "lightning-storm", "label": "Lightning Storm", "group": "Nature",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#050812", "hold_s": 2.4, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#0a1020", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#e8f0ff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#050812", "hold_s": 3.2, "fade_s": 0 }
-    ] } },
-  { "id": "ocean-swell", "label": "Ocean Swell", "group": "Nature",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#00243a", "hold_s": 1, "fade_s": 2.5, "curve": "ease_in_out" },
-      { "color": "#00a0c0", "hold_s": 0.6, "fade_s": 1.6, "curve": "ease_out" },
-      { "color": "#004a66", "hold_s": 1, "fade_s": 2.2, "curve": "ease_in_out" }
-    ] } },
-  { "id": "aurora", "label": "Aurora", "group": "Nature",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#00ff9a", "hold_s": 1, "fade_s": 2.4, "curve": "ease_in_out" },
-      { "color": "#00c8ff", "hold_s": 0.8, "fade_s": 2.2, "curve": "ease_in_out" },
-      { "color": "#8a4aff", "hold_s": 0.8, "fade_s": 2.4, "curve": "ease_in_out" },
-      { "color": "#004a3a", "hold_s": 1, "fade_s": 2, "curve": "ease_in" }
-    ] } },
-  { "id": "forest-canopy", "label": "Forest Canopy", "group": "Nature",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#0d3a12", "hold_s": 1.4, "fade_s": 1.8, "curve": "ease_in_out" },
-      { "color": "#6ac432", "hold_s": 0.8, "fade_s": 1.6, "curve": "ease_out" },
-      { "color": "#173f18", "hold_s": 1.2, "fade_s": 1.8, "curve": "ease_in_out" }
-    ] } },
-  { "id": "moonrise", "label": "Moonrise", "group": "Nature",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#02030a", "hold_s": 2, "fade_s": 0 },
-      { "color": "#1a2a5a", "hold_s": 1, "fade_s": 2.5, "curve": "ease_in" },
-      { "color": "#c8d8ff", "hold_s": 1.6, "fade_s": 2, "curve": "ease_out" }
-    ] } },
-  { "id": "tidepool", "label": "Tidepool", "group": "Nature",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#00404a", "hold_s": 1.2, "fade_s": 1.4, "curve": "ease_in_out" },
-      { "color": "#00b4a0", "hold_s": 0.6, "fade_s": 1.2, "curve": "ease_out" },
-      { "color": "#1e6a4a", "hold_s": 0.8, "fade_s": 1.4, "curve": "ease_in_out" },
-      { "color": "#00303a", "hold_s": 1, "fade_s": 1.2, "curve": "ease_in" }
-    ] } },
+  { "id": "sunrise-slow", "label": "Daybreak", "group": "Nature", "sequence": { "repeat": true, "stops": [
+    { "color": "#050010", "hold_s": 1.5, "fade_s": 0 }, { "color": "#4a1050", "hold_s": 1, "fade_s": 2.5, "curve": "ease_in" },
+    { "color": "#ff5a00", "hold_s": 1, "fade_s": 2.5, "curve": "ease_in_out" },
+    { "color": "#ffd48a", "hold_s": 2, "fade_s": 2.5, "curve": "ease_out" } ] } },
+  { "id": "sunset-slow", "label": "Last Light", "group": "Nature", "sequence": { "repeat": true, "stops": [
+    { "color": "#ffc46a", "hold_s": 2, "fade_s": 0 }, { "color": "#ff4a00", "hold_s": 1, "fade_s": 2.5, "curve": "ease_in_out" },
+    { "color": "#5a0d33", "hold_s": 1, "fade_s": 2.5, "curve": "ease_in" }, { "color": "#05000f", "hold_s": 2, "fade_s": 2, "curve": "ease_out" } ] } },
+  { "id": "campfire", "label": "Campfire", "group": "Nature", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff5a00", "hold_s": 0.35, "fade_s": 0.25, "curve": "ease_out" }, { "color": "#ffa030", "hold_s": 0.25, "fade_s": 0.2 },
+    { "color": "#c02800", "hold_s": 0.3, "fade_s": 0.3, "curve": "ease_in" }, { "color": "#ff7a10", "hold_s": 0.2, "fade_s": 0.25 } ] } },
+  { "id": "lightning-storm", "label": "Lightning Storm", "group": "Nature", "sequence": { "repeat": true, "stops": [
+    { "color": "#050812", "hold_s": 2.4, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#0a1020", "hold_s": 0.25, "fade_s": 0 }, { "color": "#e8f0ff", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#050812", "hold_s": 3.2, "fade_s": 0 } ] } },
+  { "id": "ocean-swell", "label": "Ocean Swell", "group": "Nature", "sequence": { "repeat": true, "stops": [
+    { "color": "#00243a", "hold_s": 1, "fade_s": 2.5, "curve": "ease_in_out" },
+    { "color": "#00a0c0", "hold_s": 0.6, "fade_s": 1.6, "curve": "ease_out" },
+    { "color": "#004a66", "hold_s": 1, "fade_s": 2.2, "curve": "ease_in_out" } ] } },
+  { "id": "aurora", "label": "Aurora", "group": "Nature", "sequence": { "repeat": true, "stops": [
+    { "color": "#00ff9a", "hold_s": 1, "fade_s": 2.4, "curve": "ease_in_out" },
+    { "color": "#00c8ff", "hold_s": 0.8, "fade_s": 2.2, "curve": "ease_in_out" },
+    { "color": "#8a4aff", "hold_s": 0.8, "fade_s": 2.4, "curve": "ease_in_out" }, { "color": "#004a3a", "hold_s": 1, "fade_s": 2, "curve": "ease_in" } ] } },
+  { "id": "forest-canopy", "label": "Forest Canopy", "group": "Nature", "sequence": { "repeat": true, "stops": [
+    { "color": "#0d3a12", "hold_s": 1.4, "fade_s": 1.8, "curve": "ease_in_out" },
+    { "color": "#6ac432", "hold_s": 0.8, "fade_s": 1.6, "curve": "ease_out" },
+    { "color": "#173f18", "hold_s": 1.2, "fade_s": 1.8, "curve": "ease_in_out" } ] } },
+  { "id": "moonrise", "label": "Moonrise", "group": "Nature", "sequence": { "repeat": true, "stops": [
+    { "color": "#02030a", "hold_s": 2, "fade_s": 0 }, { "color": "#1a2a5a", "hold_s": 1, "fade_s": 2.5, "curve": "ease_in" },
+    { "color": "#c8d8ff", "hold_s": 1.6, "fade_s": 2, "curve": "ease_out" } ] } },
+  { "id": "tidepool", "label": "Tidepool", "group": "Nature", "sequence": { "repeat": true, "stops": [
+    { "color": "#00404a", "hold_s": 1.2, "fade_s": 1.4, "curve": "ease_in_out" },
+    { "color": "#00b4a0", "hold_s": 0.6, "fade_s": 1.2, "curve": "ease_out" },
+    { "color": "#1e6a4a", "hold_s": 0.8, "fade_s": 1.4, "curve": "ease_in_out" },
+    { "color": "#00303a", "hold_s": 1, "fade_s": 1.2, "curve": "ease_in" } ] } },
 
-  { "id": "police", "label": "Police", "group": "Signals",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#0033ff", "hold_s": 0.45, "fade_s": 0 },
-      { "color": "#ff0000", "hold_s": 0.45, "fade_s": 0 }
-    ] } },
-  { "id": "ambulance", "label": "Ambulance", "group": "Signals",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff0022", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#ff0022", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#0a0000", "hold_s": 0.6, "fade_s": 0 }
-    ] } },
-  { "id": "fire-truck", "label": "Fire Truck", "group": "Signals",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff0000", "hold_s": 0.5, "fade_s": 0, "style": "flash", "period_s": 0.5 },
-      { "color": "#ffffff", "hold_s": 0.5, "fade_s": 0 }
-    ] } },
-  { "id": "lighthouse", "label": "Lighthouse", "group": "Signals",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ffffff", "hold_s": 0.35, "fade_s": 0.35, "curve": "ease_in_out" },
-      { "color": "#02040a", "hold_s": 2.4, "fade_s": 0.5, "curve": "ease_out" }
-    ] } },
-  { "id": "hazard-beacon", "label": "Hazard Beacon", "group": "Signals",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ffb400", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#1a1000", "hold_s": 0.45, "fade_s": 0 },
-      { "color": "#ffb400", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#1a1000", "hold_s": 1.1, "fade_s": 0 }
-    ] } },
-  { "id": "air-raid", "label": "Air Raid", "group": "Signals",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff2200", "hold_s": 1, "fade_s": 1.4, "curve": "ease_in" },
-      { "color": "#3a0500", "hold_s": 0.6, "fade_s": 1.4, "curve": "ease_out" }
-    ] } },
-  { "id": "sos", "label": "SOS", "group": "Signals",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.55, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.6, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.6, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.6, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.55, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 1.4, "fade_s": 0 }
-    ] } },
-  { "id": "channel-buoy", "label": "Channel Buoy", "group": "Signals",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#00ff2a", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#001a06", "hold_s": 1.7, "fade_s": 0 },
-      { "color": "#00ff2a", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#001a06", "hold_s": 3, "fade_s": 0 }
-    ] } },
-  { "id": "beacon-sweep", "label": "Beacon Sweep", "group": "Signals",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff6a00", "hold_s": 0.2, "fade_s": 0.8, "curve": "ease_in" },
-      { "color": "#ff6a00", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#140800", "hold_s": 0.4, "fade_s": 0.9, "curve": "ease_out" }
-    ] } },
+  { "id": "police", "label": "Police", "group": "Signals", "sequence": { "repeat": true, "stops": [
+    { "color": "#0033ff", "hold_s": 0.45, "fade_s": 0 }, { "color": "#ff0000", "hold_s": 0.45, "fade_s": 0 } ] } },
+  { "id": "ambulance", "label": "Ambulance", "group": "Signals", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff0022", "hold_s": 0.3, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.3, "fade_s": 0 },
+    { "color": "#ff0022", "hold_s": 0.3, "fade_s": 0 }, { "color": "#0a0000", "hold_s": 0.6, "fade_s": 0 } ] } },
+  { "id": "fire-truck", "label": "Fire Truck", "group": "Signals", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff0000", "hold_s": 0.5, "fade_s": 0, "style": "flash", "period_s": 0.5 }, { "color": "#ffffff", "hold_s": 0.5, "fade_s": 0 } ] } },
+  { "id": "lighthouse", "label": "Lighthouse", "group": "Signals", "sequence": { "repeat": true, "stops": [
+    { "color": "#ffffff", "hold_s": 0.35, "fade_s": 0.35, "curve": "ease_in_out" },
+    { "color": "#02040a", "hold_s": 2.4, "fade_s": 0.5, "curve": "ease_out" } ] } },
+  { "id": "hazard-beacon", "label": "Hazard Beacon", "group": "Signals", "sequence": { "repeat": true, "stops": [
+    { "color": "#ffb400", "hold_s": 0.25, "fade_s": 0 }, { "color": "#1a1000", "hold_s": 0.45, "fade_s": 0 },
+    { "color": "#ffb400", "hold_s": 0.25, "fade_s": 0 }, { "color": "#1a1000", "hold_s": 1.1, "fade_s": 0 } ] } },
+  { "id": "air-raid", "label": "Air Raid", "group": "Signals", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff2200", "hold_s": 1, "fade_s": 1.4, "curve": "ease_in" }, { "color": "#3a0500", "hold_s": 0.6, "fade_s": 1.4, "curve": "ease_out" } ] } },
+  { "id": "sos", "label": "SOS", "group": "Signals", "sequence": { "repeat": true, "stops": [
+    { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.55, "fade_s": 0 },
+    { "color": "#ffffff", "hold_s": 0.6, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffffff", "hold_s": 0.6, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffffff", "hold_s": 0.6, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.55, "fade_s": 0 },
+    { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 1.4, "fade_s": 0 } ] } },
+  { "id": "channel-buoy", "label": "Channel Buoy", "group": "Signals", "sequence": { "repeat": true, "stops": [
+    { "color": "#00ff2a", "hold_s": 0.3, "fade_s": 0 }, { "color": "#001a06", "hold_s": 1.7, "fade_s": 0 },
+    { "color": "#00ff2a", "hold_s": 0.3, "fade_s": 0 }, { "color": "#001a06", "hold_s": 3, "fade_s": 0 } ] } },
+  { "id": "beacon-sweep", "label": "Beacon Sweep", "group": "Signals", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff6a00", "hold_s": 0.2, "fade_s": 0.8, "curve": "ease_in" }, { "color": "#ff6a00", "hold_s": 0.3, "fade_s": 0 },
+    { "color": "#140800", "hold_s": 0.4, "fade_s": 0.9, "curve": "ease_out" } ] } },
 
-  { "id": "crt-warmup", "label": "CRT Warm-up", "group": "Retro",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#000000", "hold_s": 0.4, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0.2, "curve": "exponential" },
-      { "color": "#0a2a1a", "hold_s": 0.3, "fade_s": 0.3, "curve": "ease_out" },
-      { "color": "#00ff66", "hold_s": 1.6, "fade_s": 0.6, "curve": "ease_in" }
-    ] } },
-  { "id": "loading-bar", "label": "Loading Bar", "group": "Retro",
-    "sequence": { "drive": "progress", "repeat": false, "stops": [
-      { "color": "#0a1a2a", "hold_s": 1, "fade_s": 0 },
-      { "color": "#1e5aa8", "hold_s": 2, "fade_s": 1 },
-      { "color": "#3a9bff", "hold_s": 2, "fade_s": 1 },
-      { "color": "#9fd8ff", "hold_s": 2, "fade_s": 1 }
-    ] } },
-  { "id": "arcade-attract", "label": "Arcade Attract", "group": "Retro",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff00ff", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#00ffff", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#ffff00", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#00ff00", "hold_s": 0.3, "fade_s": 0 }
-    ] } },
-  { "id": "dial-up", "label": "Dial-up", "group": "Retro",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#00ff66", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#0a1400", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#00ff66", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#0a1400", "hold_s": 0.55, "fade_s": 0 },
-      { "color": "#ffb400", "hold_s": 0.8, "fade_s": 0.3, "curve": "ease_in" },
-      { "color": "#0a0a00", "hold_s": 0.4, "fade_s": 0 }
-    ] } },
-  { "id": "tape-rewind", "label": "Tape Rewind", "group": "Retro",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#8a4a1e", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#2a1200", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#8a4a1e", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#2a1200", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#8a4a1e", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#2a1200", "hold_s": 0.6, "fade_s": 0 }
-    ] } },
-  { "id": "floppy-seek", "label": "Floppy Seek", "group": "Retro",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff2200", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#140000", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#ff2200", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#140000", "hold_s": 1.2, "fade_s": 0 }
-    ] } },
-  { "id": "pinball-bonus", "label": "Pinball Bonus", "group": "Retro",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ffff00", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ff0088", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#00ffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffff00", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ff0088", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.9, "fade_s": 0 }
-    ] } },
-  { "id": "game-over", "label": "Game Over", "group": "Retro",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ff0000", "hold_s": 0.45, "fade_s": 0 },
-      { "color": "#3a0000", "hold_s": 0.45, "fade_s": 0 },
-      { "color": "#ff0000", "hold_s": 0.45, "fade_s": 0 },
-      { "color": "#3a0000", "hold_s": 0.45, "fade_s": 0 },
-      { "color": "#1a0000", "hold_s": 1.4, "fade_s": 0.8, "curve": "ease_out" }
-    ] } },
-  { "id": "one-up", "label": "1-Up", "group": "Retro",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#00ff2a", "hold_s": 0.8, "fade_s": 0 }
-    ] } },
+  { "id": "crt-warmup", "label": "CRT Warm-up", "group": "Retro", "sequence": { "repeat": false, "stops": [
+    { "color": "#000000", "hold_s": 0.4, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0.2, "curve": "exponential" },
+    { "color": "#0a2a1a", "hold_s": 0.3, "fade_s": 0.3, "curve": "ease_out" },
+    { "color": "#00ff66", "hold_s": 1.6, "fade_s": 0.6, "curve": "ease_in" } ] } },
+  { "id": "loading-bar", "label": "Loading Bar", "group": "Retro", "sequence": { "drive": "progress", "repeat": false, "stops": [
+    { "color": "#0a1a2a", "hold_s": 1, "fade_s": 0 }, { "color": "#1e5aa8", "hold_s": 2, "fade_s": 1 },
+    { "color": "#3a9bff", "hold_s": 2, "fade_s": 1 }, { "color": "#9fd8ff", "hold_s": 2, "fade_s": 1 } ] } },
+  { "id": "arcade-attract", "label": "Arcade Attract", "group": "Retro", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff00ff", "hold_s": 0.3, "fade_s": 0 }, { "color": "#00ffff", "hold_s": 0.3, "fade_s": 0 },
+    { "color": "#ffff00", "hold_s": 0.3, "fade_s": 0 }, { "color": "#00ff00", "hold_s": 0.3, "fade_s": 0 } ] } },
+  { "id": "dial-up", "label": "Dial-up", "group": "Retro", "sequence": { "repeat": true, "stops": [
+    { "color": "#00ff66", "hold_s": 0.2, "fade_s": 0 }, { "color": "#0a1400", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#00ff66", "hold_s": 0.2, "fade_s": 0 }, { "color": "#0a1400", "hold_s": 0.55, "fade_s": 0 },
+    { "color": "#ffb400", "hold_s": 0.8, "fade_s": 0.3, "curve": "ease_in" }, { "color": "#0a0a00", "hold_s": 0.4, "fade_s": 0 } ] } },
+  { "id": "tape-rewind", "label": "Tape Rewind", "group": "Retro", "sequence": { "repeat": true, "stops": [
+    { "color": "#8a4a1e", "hold_s": 0.2, "fade_s": 0 }, { "color": "#2a1200", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#8a4a1e", "hold_s": 0.2, "fade_s": 0 }, { "color": "#2a1200", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#8a4a1e", "hold_s": 0.2, "fade_s": 0 }, { "color": "#2a1200", "hold_s": 0.6, "fade_s": 0 } ] } },
+  { "id": "floppy-seek", "label": "Floppy Seek", "group": "Retro", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff2200", "hold_s": 0.25, "fade_s": 0 }, { "color": "#140000", "hold_s": 0.3, "fade_s": 0 },
+    { "color": "#ff2200", "hold_s": 0.25, "fade_s": 0 }, { "color": "#140000", "hold_s": 1.2, "fade_s": 0 } ] } },
+  { "id": "pinball-bonus", "label": "Pinball Bonus", "group": "Retro", "sequence": { "repeat": false, "stops": [
+    { "color": "#ffff00", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ff0088", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#00ffff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ffff00", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ff0088", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.9, "fade_s": 0 } ] } },
+  { "id": "game-over", "label": "Game Over", "group": "Retro", "sequence": { "repeat": false, "stops": [
+    { "color": "#ff0000", "hold_s": 0.45, "fade_s": 0 }, { "color": "#3a0000", "hold_s": 0.45, "fade_s": 0 },
+    { "color": "#ff0000", "hold_s": 0.45, "fade_s": 0 }, { "color": "#3a0000", "hold_s": 0.45, "fade_s": 0 },
+    { "color": "#1a0000", "hold_s": 1.4, "fade_s": 0.8, "curve": "ease_out" } ] } },
+  { "id": "one-up", "label": "1-Up", "group": "Retro", "sequence": { "repeat": false, "stops": [
+    { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#00ff2a", "hold_s": 0.8, "fade_s": 0 } ] } },
 
-  { "id": "deep-dive", "label": "Deep Dive", "group": "Focus",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#00304a", "hold_s": 2, "fade_s": 3, "curve": "ease_in_out" },
-      { "color": "#0a1a2a", "hold_s": 2, "fade_s": 3, "curve": "ease_in_out" }
-    ] } },
-  { "id": "flow-state", "label": "In The Zone", "group": "Focus",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#00d488", "hold_s": 2.5, "fade_s": 2.5, "curve": "ease_in_out" },
-      { "color": "#00543a", "hold_s": 1.5, "fade_s": 2.5, "curve": "ease_in_out" }
-    ] } },
-  { "id": "work-block", "label": "Work Block", "group": "Focus",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#00a866", "hold_s": 3, "fade_s": 0, "style": "breathe", "period_s": 6 }
-    ] } },
-  { "id": "break-block", "label": "Break Block", "group": "Focus",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#00a8ff", "hold_s": 3, "fade_s": 0, "style": "breathe", "period_s": 4 }
-    ] } },
-  { "id": "dnd-pulse", "label": "Busy Pulse", "group": "Focus",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff0033", "hold_s": 0.8, "fade_s": 1.4, "curve": "ease_in_out" },
-      { "color": "#2a0008", "hold_s": 1, "fade_s": 1.4, "curve": "ease_in_out" }
-    ] } },
-  { "id": "warm-up", "label": "Warm Up", "group": "Focus",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#241400", "hold_s": 1, "fade_s": 0 },
-      { "color": "#ffa000", "hold_s": 2, "fade_s": 3, "curve": "ease_in" }
-    ] } },
-  { "id": "cool-down", "label": "Taper", "group": "Focus",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ff8a00", "hold_s": 1, "fade_s": 0 },
-      { "color": "#3a1a00", "hold_s": 2, "fade_s": 4, "curve": "ease_out" }
-    ] } },
-  { "id": "crunch", "label": "Crunch", "group": "Focus",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff3300", "hold_s": 0.5, "fade_s": 0.5, "curve": "ease_in" },
-      { "color": "#ffb400", "hold_s": 0.3, "fade_s": 0.4, "curve": "ease_out" },
-      { "color": "#2a0800", "hold_s": 0.5, "fade_s": 0.5, "curve": "ease_in" }
-    ] } },
+  { "id": "deep-dive", "label": "Deep Dive", "group": "Focus", "sequence": { "repeat": true, "stops": [
+    { "color": "#00304a", "hold_s": 2, "fade_s": 3, "curve": "ease_in_out" }, { "color": "#0a1a2a", "hold_s": 2, "fade_s": 3, "curve": "ease_in_out" } ] } },
+  { "id": "flow-state", "label": "In The Zone", "group": "Focus", "sequence": { "repeat": true, "stops": [
+    { "color": "#00d488", "hold_s": 2.5, "fade_s": 2.5, "curve": "ease_in_out" },
+    { "color": "#00543a", "hold_s": 1.5, "fade_s": 2.5, "curve": "ease_in_out" } ] } },
+  { "id": "work-block", "label": "Work Block", "group": "Focus", "sequence": { "repeat": true, "stops": [
+    { "color": "#00a866", "hold_s": 3, "fade_s": 0, "style": "breathe", "period_s": 6 } ] } },
+  { "id": "break-block", "label": "Break Block", "group": "Focus", "sequence": { "repeat": true, "stops": [
+    { "color": "#00a8ff", "hold_s": 3, "fade_s": 0, "style": "breathe", "period_s": 4 } ] } },
+  { "id": "dnd-pulse", "label": "Busy Pulse", "group": "Focus", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff0033", "hold_s": 0.8, "fade_s": 1.4, "curve": "ease_in_out" },
+    { "color": "#2a0008", "hold_s": 1, "fade_s": 1.4, "curve": "ease_in_out" } ] } },
+  { "id": "warm-up", "label": "Warm Up", "group": "Focus", "sequence": { "repeat": false, "stops": [
+    { "color": "#241400", "hold_s": 1, "fade_s": 0 }, { "color": "#ffa000", "hold_s": 2, "fade_s": 3, "curve": "ease_in" } ] } },
+  { "id": "cool-down", "label": "Taper", "group": "Focus", "sequence": { "repeat": false, "stops": [
+    { "color": "#ff8a00", "hold_s": 1, "fade_s": 0 }, { "color": "#3a1a00", "hold_s": 2, "fade_s": 4, "curve": "ease_out" } ] } },
+  { "id": "crunch", "label": "Crunch", "group": "Focus", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff3300", "hold_s": 0.5, "fade_s": 0.5, "curve": "ease_in" },
+    { "color": "#ffb400", "hold_s": 0.3, "fade_s": 0.4, "curve": "ease_out" },
+    { "color": "#2a0800", "hold_s": 0.5, "fade_s": 0.5, "curve": "ease_in" } ] } },
 
-  { "id": "anxious", "label": "Anxious", "group": "Mood",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ffb400", "hold_s": 0.25, "fade_s": 0.2, "curve": "ease_in" },
-      { "color": "#2a1800", "hold_s": 0.2, "fade_s": 0.25, "curve": "ease_out" },
-      { "color": "#ffb400", "hold_s": 0.2, "fade_s": 0.2 },
-      { "color": "#2a1800", "hold_s": 0.8, "fade_s": 0.3, "curve": "ease_out" }
-    ] } },
-  { "id": "content", "label": "Content", "group": "Mood",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ffb46a", "hold_s": 2.5, "fade_s": 2.5, "curve": "ease_in_out" },
-      { "color": "#6a3a1a", "hold_s": 1.5, "fade_s": 2.5, "curve": "ease_in_out" }
-    ] } },
-  { "id": "restless", "label": "Restless", "group": "Mood",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#8a4aff", "hold_s": 0.4, "fade_s": 0.3 },
-      { "color": "#1a0a2a", "hold_s": 0.3, "fade_s": 0.3 },
-      { "color": "#4a8aff", "hold_s": 0.35, "fade_s": 0.3 },
-      { "color": "#0a0a2a", "hold_s": 0.5, "fade_s": 0.4 }
-    ] } },
-  { "id": "melancholy", "label": "Melancholy", "group": "Mood",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#1e3a6a", "hold_s": 2, "fade_s": 3, "curve": "ease_in_out" },
-      { "color": "#050a1a", "hold_s": 2.5, "fade_s": 3, "curve": "ease_in_out" }
-    ] } },
-  { "id": "elated", "label": "Elated", "group": "Mood",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ffff00", "hold_s": 0.3, "fade_s": 0.25, "curve": "ease_out" },
-      { "color": "#ff8a00", "hold_s": 0.25, "fade_s": 0.25 },
-      { "color": "#ffffff", "hold_s": 0.3, "fade_s": 0.25, "curve": "ease_out" },
-      { "color": "#ffcc00", "hold_s": 0.4, "fade_s": 0.3 }
-    ] } },
-  { "id": "simmer", "label": "Simmer", "group": "Mood",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff3300", "hold_s": 1, "fade_s": 1.6, "curve": "ease_in_out" },
-      { "color": "#5a0d00", "hold_s": 1.2, "fade_s": 1.6, "curve": "ease_in_out" }
-    ] } },
-  { "id": "drift", "label": "Drift", "group": "Mood",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#4a8aff", "hold_s": 1.5, "fade_s": 3, "curve": "ease_in_out" },
-      { "color": "#8a4aff", "hold_s": 1.5, "fade_s": 3, "curve": "ease_in_out" },
-      { "color": "#0a1a3a", "hold_s": 1.5, "fade_s": 3, "curve": "ease_in_out" }
-    ] } },
-  { "id": "brace", "label": "Brace", "group": "Mood",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#140000", "hold_s": 1.6, "fade_s": 0 },
-      { "color": "#ff0000", "hold_s": 0.4, "fade_s": 0.9, "curve": "exponential" },
-      { "color": "#3a0000", "hold_s": 0.5, "fade_s": 0.5, "curve": "ease_out" }
-    ] } },
-  { "id": "unwind", "label": "Unwind", "group": "Mood",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff8a00", "hold_s": 1.5, "fade_s": 2.5, "curve": "ease_out" },
-      { "color": "#8a2a4a", "hold_s": 1.5, "fade_s": 2.5, "curve": "ease_in_out" },
-      { "color": "#0a0518", "hold_s": 2, "fade_s": 2.5, "curve": "ease_in" }
-    ] } },
-  { "id": "spark", "label": "Spark", "group": "Mood",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#0a0a00", "hold_s": 1.4, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffcc00", "hold_s": 0.5, "fade_s": 0.5, "curve": "ease_out" }
-    ] } },
+  { "id": "anxious", "label": "Anxious", "group": "Mood", "sequence": { "repeat": true, "stops": [
+    { "color": "#ffb400", "hold_s": 0.25, "fade_s": 0.2, "curve": "ease_in" },
+    { "color": "#2a1800", "hold_s": 0.2, "fade_s": 0.25, "curve": "ease_out" }, { "color": "#ffb400", "hold_s": 0.2, "fade_s": 0.2 },
+    { "color": "#2a1800", "hold_s": 0.8, "fade_s": 0.3, "curve": "ease_out" } ] } },
+  { "id": "content", "label": "Content", "group": "Mood", "sequence": { "repeat": true, "stops": [
+    { "color": "#ffb46a", "hold_s": 2.5, "fade_s": 2.5, "curve": "ease_in_out" },
+    { "color": "#6a3a1a", "hold_s": 1.5, "fade_s": 2.5, "curve": "ease_in_out" } ] } },
+  { "id": "restless", "label": "Restless", "group": "Mood", "sequence": { "repeat": true, "stops": [
+    { "color": "#8a4aff", "hold_s": 0.4, "fade_s": 0.3 }, { "color": "#1a0a2a", "hold_s": 0.3, "fade_s": 0.3 },
+    { "color": "#4a8aff", "hold_s": 0.35, "fade_s": 0.3 }, { "color": "#0a0a2a", "hold_s": 0.5, "fade_s": 0.4 } ] } },
+  { "id": "melancholy", "label": "Melancholy", "group": "Mood", "sequence": { "repeat": true, "stops": [
+    { "color": "#1e3a6a", "hold_s": 2, "fade_s": 3, "curve": "ease_in_out" },
+    { "color": "#050a1a", "hold_s": 2.5, "fade_s": 3, "curve": "ease_in_out" } ] } },
+  { "id": "elated", "label": "Elated", "group": "Mood", "sequence": { "repeat": true, "stops": [
+    { "color": "#ffff00", "hold_s": 0.3, "fade_s": 0.25, "curve": "ease_out" }, { "color": "#ff8a00", "hold_s": 0.25, "fade_s": 0.25 },
+    { "color": "#ffffff", "hold_s": 0.3, "fade_s": 0.25, "curve": "ease_out" }, { "color": "#ffcc00", "hold_s": 0.4, "fade_s": 0.3 } ] } },
+  { "id": "simmer", "label": "Simmer", "group": "Mood", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff3300", "hold_s": 1, "fade_s": 1.6, "curve": "ease_in_out" },
+    { "color": "#5a0d00", "hold_s": 1.2, "fade_s": 1.6, "curve": "ease_in_out" } ] } },
+  { "id": "drift", "label": "Drift", "group": "Mood", "sequence": { "repeat": true, "stops": [
+    { "color": "#4a8aff", "hold_s": 1.5, "fade_s": 3, "curve": "ease_in_out" },
+    { "color": "#8a4aff", "hold_s": 1.5, "fade_s": 3, "curve": "ease_in_out" },
+    { "color": "#0a1a3a", "hold_s": 1.5, "fade_s": 3, "curve": "ease_in_out" } ] } },
+  { "id": "brace", "label": "Brace", "group": "Mood", "sequence": { "repeat": true, "stops": [
+    { "color": "#140000", "hold_s": 1.6, "fade_s": 0 }, { "color": "#ff0000", "hold_s": 0.4, "fade_s": 0.9, "curve": "exponential" },
+    { "color": "#3a0000", "hold_s": 0.5, "fade_s": 0.5, "curve": "ease_out" } ] } },
+  { "id": "unwind", "label": "Unwind", "group": "Mood", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff8a00", "hold_s": 1.5, "fade_s": 2.5, "curve": "ease_out" },
+    { "color": "#8a2a4a", "hold_s": 1.5, "fade_s": 2.5, "curve": "ease_in_out" },
+    { "color": "#0a0518", "hold_s": 2, "fade_s": 2.5, "curve": "ease_in" } ] } },
+  { "id": "spark", "label": "Spark", "group": "Mood", "sequence": { "repeat": true, "stops": [
+    { "color": "#0a0a00", "hold_s": 1.4, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffcc00", "hold_s": 0.5, "fade_s": 0.5, "curve": "ease_out" } ] } },
 
-  { "id": "disco-floor", "label": "Disco Floor", "group": "Play",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff00ff", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#00ffff", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#ffff00", "hold_s": 0.25, "fade_s": 0 }
-    ] } },
-  { "id": "rainbow-chase", "label": "Rainbow Chase", "group": "Play",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ffffff", "hold_s": 1.2, "fade_s": 0, "style": "rainbow", "period_s": 0.5 },
-      { "color": "#ffffff", "hold_s": 1.2, "fade_s": 0, "style": "rainbow", "period_s": 1.4 }
-    ] } },
-  { "id": "candy", "label": "Candy", "group": "Play",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff69b4", "hold_s": 0.5, "fade_s": 0.3, "curve": "ease_in_out" },
-      { "color": "#7cf0ff", "hold_s": 0.5, "fade_s": 0.3, "curve": "ease_in_out" },
-      { "color": "#fff36a", "hold_s": 0.5, "fade_s": 0.3, "curve": "ease_in_out" }
-    ] } },
-  { "id": "neon-sign", "label": "Neon Sign", "group": "Play",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff00aa", "hold_s": 1.4, "fade_s": 0 },
-      { "color": "#3a0022", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ff00aa", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#3a0022", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ff00aa", "hold_s": 2, "fade_s": 0 }
-    ] } },
-  { "id": "slot-machine", "label": "Slot Machine", "group": "Play",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ffcc00", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ff0044", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#00e5ff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffcc00", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ff0044", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 1.2, "fade_s": 0 }
-    ] } },
-  { "id": "carnival", "label": "Carnival", "group": "Play",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff0044", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#ffcc00", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#00e05a", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#3a6bff", "hold_s": 0.3, "fade_s": 0 }
-    ] } },
-  { "id": "laser-tag", "label": "Laser Tag", "group": "Play",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#00ff88", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#020a06", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#ff0088", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#0a0206", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#00e5ff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#02080a", "hold_s": 0.8, "fade_s": 0 }
-    ] } },
-  { "id": "bubble", "label": "Bubble", "group": "Play",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#7cf0ff", "hold_s": 0.3, "fade_s": 0.8, "curve": "ease_out" },
-      { "color": "#0a2a30", "hold_s": 0.4, "fade_s": 0.9, "curve": "ease_in" }
-    ] } },
-  { "id": "confetti-burst", "label": "Confetti Burst", "group": "Play",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ff0088", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#00e5ff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffcc00", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#00ff66", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#1a1a1a", "hold_s": 0.9, "fade_s": 0 }
-    ] } },
-  { "id": "jackpot", "label": "Jackpot", "group": "Play",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ffd400", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffd400", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffd400", "hold_s": 1.6, "fade_s": 0, "style": "rainbow", "period_s": 0.7 }
-    ] } },
+  { "id": "disco-floor", "label": "Disco Floor", "group": "Play", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff00ff", "hold_s": 0.25, "fade_s": 0 }, { "color": "#00ffff", "hold_s": 0.25, "fade_s": 0 },
+    { "color": "#ffff00", "hold_s": 0.25, "fade_s": 0 } ] } },
+  { "id": "rainbow-chase", "label": "Rainbow Chase", "group": "Play", "sequence": { "repeat": true, "stops": [
+    { "color": "#ffffff", "hold_s": 1.2, "fade_s": 0, "style": "rainbow", "period_s": 0.5 },
+    { "color": "#ffffff", "hold_s": 1.2, "fade_s": 0, "style": "rainbow", "period_s": 1.4 } ] } },
+  { "id": "candy", "label": "Candy", "group": "Play", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff69b4", "hold_s": 0.5, "fade_s": 0.3, "curve": "ease_in_out" },
+    { "color": "#7cf0ff", "hold_s": 0.5, "fade_s": 0.3, "curve": "ease_in_out" },
+    { "color": "#fff36a", "hold_s": 0.5, "fade_s": 0.3, "curve": "ease_in_out" } ] } },
+  { "id": "neon-sign", "label": "Neon Sign", "group": "Play", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff00aa", "hold_s": 1.4, "fade_s": 0 }, { "color": "#3a0022", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ff00aa", "hold_s": 0.25, "fade_s": 0 }, { "color": "#3a0022", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ff00aa", "hold_s": 2, "fade_s": 0 } ] } },
+  { "id": "slot-machine", "label": "Slot Machine", "group": "Play", "sequence": { "repeat": false, "stops": [
+    { "color": "#ffcc00", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ff0044", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#00e5ff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ffcc00", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ff0044", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 1.2, "fade_s": 0 } ] } },
+  { "id": "carnival", "label": "Carnival", "group": "Play", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff0044", "hold_s": 0.3, "fade_s": 0 }, { "color": "#ffcc00", "hold_s": 0.3, "fade_s": 0 },
+    { "color": "#00e05a", "hold_s": 0.3, "fade_s": 0 }, { "color": "#3a6bff", "hold_s": 0.3, "fade_s": 0 } ] } },
+  { "id": "laser-tag", "label": "Laser Tag", "group": "Play", "sequence": { "repeat": true, "stops": [
+    { "color": "#00ff88", "hold_s": 0.2, "fade_s": 0 }, { "color": "#020a06", "hold_s": 0.3, "fade_s": 0 },
+    { "color": "#ff0088", "hold_s": 0.2, "fade_s": 0 }, { "color": "#0a0206", "hold_s": 0.3, "fade_s": 0 },
+    { "color": "#00e5ff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#02080a", "hold_s": 0.8, "fade_s": 0 } ] } },
+  { "id": "bubble", "label": "Bubble", "group": "Play", "sequence": { "repeat": true, "stops": [
+    { "color": "#7cf0ff", "hold_s": 0.3, "fade_s": 0.8, "curve": "ease_out" },
+    { "color": "#0a2a30", "hold_s": 0.4, "fade_s": 0.9, "curve": "ease_in" } ] } },
+  { "id": "confetti-burst", "label": "Confetti Burst", "group": "Play", "sequence": { "repeat": false, "stops": [
+    { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ff0088", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#00e5ff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ffcc00", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#00ff66", "hold_s": 0.2, "fade_s": 0 }, { "color": "#1a1a1a", "hold_s": 0.9, "fade_s": 0 } ] } },
+  { "id": "jackpot", "label": "Jackpot", "group": "Play", "sequence": { "repeat": false, "stops": [
+    { "color": "#ffd400", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffd400", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffd400", "hold_s": 1.6, "fade_s": 0, "style": "rainbow", "period_s": 0.7 } ] } },
 
-  { "id": "lava-flow", "label": "Lava Flow", "group": "Ambient",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff2200", "hold_s": 2, "fade_s": 3.5, "curve": "ease_in_out" },
-      { "color": "#ffb400", "hold_s": 1.5, "fade_s": 3, "curve": "ease_in_out" },
-      { "color": "#5a0d00", "hold_s": 2, "fade_s": 3.5, "curve": "ease_in_out" }
-    ] } },
-  { "id": "breathing-room", "label": "Breathing Room", "group": "Ambient",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#1e8c46", "hold_s": 1.5, "fade_s": 3, "curve": "ease_in_out" },
-      { "color": "#02180c", "hold_s": 2, "fade_s": 3, "curve": "ease_in_out" }
-    ] } },
-  { "id": "embers", "label": "Embers", "group": "Ambient",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#5a1400", "hold_s": 1.5, "fade_s": 2, "curve": "ease_in_out" },
-      { "color": "#ff4400", "hold_s": 0.6, "fade_s": 1.4, "curve": "ease_out" },
-      { "color": "#2a0800", "hold_s": 1.6, "fade_s": 2, "curve": "ease_in" }
-    ] } },
-  { "id": "starlight", "label": "Starlight", "group": "Ambient",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#02040f", "hold_s": 2.5, "fade_s": 0 },
-      { "color": "#c8d8ff", "hold_s": 0.25, "fade_s": 0 },
-      { "color": "#02040f", "hold_s": 1.8, "fade_s": 0 },
-      { "color": "#8aa8ff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#02040f", "hold_s": 3, "fade_s": 0 }
-    ] } },
-  { "id": "fog", "label": "Fog", "group": "Ambient",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#3a4450", "hold_s": 2.5, "fade_s": 3.5, "curve": "ease_in_out" },
-      { "color": "#0a0e14", "hold_s": 2.5, "fade_s": 3.5, "curve": "ease_in_out" }
-    ] } },
-  { "id": "glacier", "label": "Glacier", "group": "Ambient",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#0a2a3a", "hold_s": 3, "fade_s": 4, "curve": "ease_in_out" },
-      { "color": "#7cd8ff", "hold_s": 1.5, "fade_s": 4, "curve": "ease_in_out" }
-    ] } },
-  { "id": "dusk-to-dawn", "label": "Dusk to Dawn", "group": "Ambient",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#ff5500", "hold_s": 1.5, "fade_s": 2, "curve": "ease_in" },
-      { "color": "#2a0a40", "hold_s": 2, "fade_s": 3.5, "curve": "ease_in_out" },
-      { "color": "#02030a", "hold_s": 3, "fade_s": 3, "curve": "ease_in" },
-      { "color": "#4a3a6a", "hold_s": 1.5, "fade_s": 3, "curve": "ease_out" }
-    ] } },
-  { "id": "resting-heart", "label": "Resting Heart", "group": "Ambient",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#8a1e2a", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#2a0008", "hold_s": 0.25, "fade_s": 0.2, "curve": "ease_out" },
-      { "color": "#8a1e2a", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#12000a", "hold_s": 1.4, "fade_s": 0.4, "curve": "ease_out" }
-    ] } },
+  { "id": "lava-flow", "label": "Lava Flow", "group": "Ambient", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff2200", "hold_s": 2, "fade_s": 3.5, "curve": "ease_in_out" },
+    { "color": "#ffb400", "hold_s": 1.5, "fade_s": 3, "curve": "ease_in_out" },
+    { "color": "#5a0d00", "hold_s": 2, "fade_s": 3.5, "curve": "ease_in_out" } ] } },
+  { "id": "breathing-room", "label": "Breathing Room", "group": "Ambient", "sequence": { "repeat": true, "stops": [
+    { "color": "#1e8c46", "hold_s": 1.5, "fade_s": 3, "curve": "ease_in_out" },
+    { "color": "#02180c", "hold_s": 2, "fade_s": 3, "curve": "ease_in_out" } ] } },
+  { "id": "embers", "label": "Embers", "group": "Ambient", "sequence": { "repeat": true, "stops": [
+    { "color": "#5a1400", "hold_s": 1.5, "fade_s": 2, "curve": "ease_in_out" },
+    { "color": "#ff4400", "hold_s": 0.6, "fade_s": 1.4, "curve": "ease_out" }, { "color": "#2a0800", "hold_s": 1.6, "fade_s": 2, "curve": "ease_in" } ] } },
+  { "id": "starlight", "label": "Starlight", "group": "Ambient", "sequence": { "repeat": true, "stops": [
+    { "color": "#02040f", "hold_s": 2.5, "fade_s": 0 }, { "color": "#c8d8ff", "hold_s": 0.25, "fade_s": 0 },
+    { "color": "#02040f", "hold_s": 1.8, "fade_s": 0 }, { "color": "#8aa8ff", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#02040f", "hold_s": 3, "fade_s": 0 } ] } },
+  { "id": "fog", "label": "Fog", "group": "Ambient", "sequence": { "repeat": true, "stops": [
+    { "color": "#3a4450", "hold_s": 2.5, "fade_s": 3.5, "curve": "ease_in_out" },
+    { "color": "#0a0e14", "hold_s": 2.5, "fade_s": 3.5, "curve": "ease_in_out" } ] } },
+  { "id": "glacier", "label": "Glacier", "group": "Ambient", "sequence": { "repeat": true, "stops": [
+    { "color": "#0a2a3a", "hold_s": 3, "fade_s": 4, "curve": "ease_in_out" },
+    { "color": "#7cd8ff", "hold_s": 1.5, "fade_s": 4, "curve": "ease_in_out" } ] } },
+  { "id": "dusk-to-dawn", "label": "Dusk to Dawn", "group": "Ambient", "sequence": { "repeat": true, "stops": [
+    { "color": "#ff5500", "hold_s": 1.5, "fade_s": 2, "curve": "ease_in" },
+    { "color": "#2a0a40", "hold_s": 2, "fade_s": 3.5, "curve": "ease_in_out" }, { "color": "#02030a", "hold_s": 3, "fade_s": 3, "curve": "ease_in" },
+    { "color": "#4a3a6a", "hold_s": 1.5, "fade_s": 3, "curve": "ease_out" } ] } },
+  { "id": "resting-heart", "label": "Resting Heart", "group": "Ambient", "sequence": { "repeat": true, "stops": [
+    { "color": "#8a1e2a", "hold_s": 0.2, "fade_s": 0 }, { "color": "#2a0008", "hold_s": 0.25, "fade_s": 0.2, "curve": "ease_out" },
+    { "color": "#8a1e2a", "hold_s": 0.2, "fade_s": 0 }, { "color": "#12000a", "hold_s": 1.4, "fade_s": 0.4, "curve": "ease_out" } ] } },
 
-  { "id": "morse-ok", "label": "Morse OK", "group": "Patterns",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#00ff2a", "hold_s": 0.55, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#00ff2a", "hold_s": 0.55, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 1.2, "fade_s": 0 }
-    ] } },
-  { "id": "triple-echo", "label": "Triple Echo", "group": "Patterns",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#4a4a4a", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#2a2a2a", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#0a0a0a", "hold_s": 1.2, "fade_s": 0 }
-    ] } },
-  { "id": "staircase", "label": "Staircase", "group": "Patterns",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#1a0a00", "hold_s": 0.4, "fade_s": 0 },
-      { "color": "#5a2a00", "hold_s": 0.4, "fade_s": 0 },
-      { "color": "#a85a00", "hold_s": 0.4, "fade_s": 0 },
-      { "color": "#ff9a00", "hold_s": 0.4, "fade_s": 0 },
-      { "color": "#ffd48a", "hold_s": 0.8, "fade_s": 0 }
-    ] } },
-  { "id": "double-blink-hold", "label": "Double Blink & Hold", "group": "Patterns",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#ffcc00", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffcc00", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-      { "color": "#ffcc00", "hold_s": 1.6, "fade_s": 0 }
-    ] } },
-  { "id": "ramp-and-drop", "label": "Ramp & Drop", "group": "Patterns",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#0a1400", "hold_s": 0.3, "fade_s": 0 },
-      { "color": "#7cff00", "hold_s": 0.3, "fade_s": 1.6, "curve": "ease_in" },
-      { "color": "#0a1400", "hold_s": 0.3, "fade_s": 0.25, "curve": "ease_in" }
-    ] } },
-  { "id": "swell-and-cut", "label": "Swell & Cut", "group": "Patterns",
-    "sequence": { "repeat": true, "stops": [
-      { "color": "#00ff9a", "hold_s": 0.25, "fade_s": 2.2, "curve": "ease_in" },
-      { "color": "#000000", "hold_s": 0.8, "fade_s": 0 }
-    ] } },
-  { "id": "wind-up", "label": "Wind Up", "group": "Patterns",
-    "sequence": { "repeat": false, "stops": [
-      { "color": "#2a2a00", "hold_s": 0.5, "fade_s": 0 },
-      { "color": "#8a8a00", "hold_s": 0.4, "fade_s": 0.5, "curve": "ease_in" },
-      { "color": "#ffff00", "hold_s": 0.3, "fade_s": 0.4, "curve": "ease_in" },
-      { "color": "#ffffff", "hold_s": 0.8, "fade_s": 0.3, "curve": "exponential" }
-    ] } }
+  { "id": "morse-ok", "label": "Morse OK", "group": "Patterns", "sequence": { "repeat": true, "stops": [
+    { "color": "#00ff2a", "hold_s": 0.55, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#00ff2a", "hold_s": 0.55, "fade_s": 0 }, { "color": "#000000", "hold_s": 1.2, "fade_s": 0 } ] } },
+  { "id": "triple-echo", "label": "Triple Echo", "group": "Patterns", "sequence": { "repeat": false, "stops": [
+    { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#4a4a4a", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#2a2a2a", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 }, { "color": "#0a0a0a", "hold_s": 1.2, "fade_s": 0 } ] } },
+  { "id": "staircase", "label": "Staircase", "group": "Patterns", "sequence": { "repeat": false, "stops": [
+    { "color": "#1a0a00", "hold_s": 0.4, "fade_s": 0 }, { "color": "#5a2a00", "hold_s": 0.4, "fade_s": 0 },
+    { "color": "#a85a00", "hold_s": 0.4, "fade_s": 0 }, { "color": "#ff9a00", "hold_s": 0.4, "fade_s": 0 },
+    { "color": "#ffd48a", "hold_s": 0.8, "fade_s": 0 } ] } },
+  { "id": "double-blink-hold", "label": "Double Blink & Hold", "group": "Patterns", "sequence": { "repeat": false, "stops": [
+    { "color": "#ffcc00", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffcc00", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
+    { "color": "#ffcc00", "hold_s": 1.6, "fade_s": 0 } ] } },
+  { "id": "ramp-and-drop", "label": "Ramp & Drop", "group": "Patterns", "sequence": { "repeat": true, "stops": [
+    { "color": "#0a1400", "hold_s": 0.3, "fade_s": 0 }, { "color": "#7cff00", "hold_s": 0.3, "fade_s": 1.6, "curve": "ease_in" },
+    { "color": "#0a1400", "hold_s": 0.3, "fade_s": 0.25, "curve": "ease_in" } ] } },
+  { "id": "swell-and-cut", "label": "Swell & Cut", "group": "Patterns", "sequence": { "repeat": true, "stops": [
+    { "color": "#00ff9a", "hold_s": 0.25, "fade_s": 2.2, "curve": "ease_in" }, { "color": "#000000", "hold_s": 0.8, "fade_s": 0 } ] } },
+  { "id": "wind-up", "label": "Wind Up", "group": "Patterns", "sequence": { "repeat": false, "stops": [
+    { "color": "#2a2a00", "hold_s": 0.5, "fade_s": 0 }, { "color": "#8a8a00", "hold_s": 0.4, "fade_s": 0.5, "curve": "ease_in" },
+    { "color": "#ffff00", "hold_s": 0.3, "fade_s": 0.4, "curve": "ease_in" },
+    { "color": "#ffffff", "hold_s": 0.8, "fade_s": 0.3, "curve": "exponential" } ] } }
 ];
 
 /** True if `preset` is a stop list rather than a device-rendered effect. */

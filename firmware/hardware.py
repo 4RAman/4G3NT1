@@ -1,14 +1,12 @@
 # Board wiring - the one file you edit for your ESP32.
 #
-# Defaults target the build this project actually has: an **ESP32-S3 Mini**
-# with a 19 mm illuminated momentary button (ChromaTek), whose switch and
-# WS2812 are wired out to two GPIOs. Other boards still work - a board with
-# an onboard WS2812 only changes NEOPIXEL_PIN, and a classic ESP32 with a
-# discrete common-cathode RGB LED is LED_KIND = "rgb_pwm".
+# Defaults target the build this project actually has: an **ESP32-S3 Mini** with
+# a 19 mm illuminated momentary button (ChromaTek), switch and WS2812 wired out
+# to two GPIOs. Other boards work - an onboard WS2812 only changes
+# NEOPIXEL_PIN, a discrete common-cathode RGB LED is LED_KIND = "rgb_pwm".
 #
-# **IMPORTANT: The button's wire colours are non-standard.** Verify against
-# these specific colours when re-soldering; do not assume standard conventions
-# (black=ground, red=power) will match what you have.
+# **IMPORTANT: the button's wire colours are non-standard.** Verify against
+# these when re-soldering; black=ground / red=power does *not* hold here.
 #
 #   button common (white)  -> GND        LED VDD (black) -> 3V3
 #   button NO     (green)  -> BUTTON_PIN LED GND         -> GND
@@ -18,30 +16,22 @@
 # a 5 V part: its red die runs at ~2 V and its green and blue dies at ~3.2 V,
 # so on a 3.3 V rail only red keeps enough headroom for its current sink to
 # regulate. Green and blue starve, and white comes out orange. Moving VDD to
-# 5 V is the fix, and it drags the data threshold (~0.7 x VDD) up with it -
-# which is the *flicker* failure further down this file. Do both or neither.
+# 5 V is the fix, and it drags the data threshold (~0.7 x VDD) up with it - a
+# marginal threshold fails as *flicker*, not silence. Do both or neither:
+# series diode or level shifter, never 5 V alone.
+#
+# **Pins to avoid on the S3**, which every pin below is chosen against: the
+# strapping pins (0/3/45/46), the SPI flash (26-32), octal PSRAM (33-37) and
+# USB (19/20). The strapping pins are a requirement rather than a nicety - a
+# button holding one low *at power-on* enters download mode instead of running,
+# and the board then sits silent in the bootloader until it is physically
+# replugged, which looks exactly like a failed flash.
 
 DEVICE_NAME = "AIButton"  # what the host scans for; match config.json's ble_device_name
 
 # --- button ------------------------------------------------------------
-# Any momentary switch between the pin and GND, using the internal pull-up:
-# the switch's normally-open contact here, its common to GND.
-#
-# GPIO10 is a plain S3 GPIO, clear of the strapping pins (0/3/45/46), the SPI
-# flash (26-32), octal PSRAM (33-37) and USB (19/20), so the button cannot
-# influence boot. That last property is the requirement, not a nicety: a
-# button on a strapping pin held low *at power-on* enters download mode
-# instead of running, and the board then sits silent in the bootloader until
-# it is physically replugged - which looks exactly like a failed flash.
-#
-# **This is the green wire** (the switch's normally-open contact). The
-# button's wire colours are non-standard; see the warning at the top of this
-# file before assuming anything about which is which.
-#
-# Re-soldered onto the real 19 mm button 2026-08-21 (TODO 0c). It previously
-# borrowed the board's own BOOT button on GPIO0 while the button was
-# de-soldered - that stand-in is gone, and with it the download-mode hazard
-# that came with it.
+# Any momentary switch between the pin and GND, using the internal pull-up: the
+# switch's normally-open contact - **the green wire** - here, its common to GND.
 BUTTON_PIN = 10
 BUTTON_PULL_UP = True   # False if you wire your own pull-down + button to 3V3
 BUTTON_ACTIVE_LOW = True  # pressed reads 0 (the pull-up case)
@@ -52,59 +42,35 @@ BUTTON_ACTIVE_LOW = True  # pressed reads 0 (the pull-up case)
 # "none"     - no LED; the firmware still runs and reports gestures
 LED_KIND = "neopixel"
 
-# GPIO12 for the button's LED: a plain GPIO on the S3, clear of the
-# strapping pins (0/3/45/46), the SPI flash (26-32), octal PSRAM (33-37) and
-# USB (19/20). Any free pin does - WS2812 data is an ordinary push-pull
-# output - so if your board routes something else to GPIO12, move this and
-# nothing else changes.
-#
-# **This is the red wire** (WS2812 data in, *not* power - see the warning at
-# the top of this file). Re-soldered 2026-08-21; it was GPIO1 before.
-#
-# For an *onboard* WS2812 instead, boards sold as "ESP32-S3 Mini" disagree:
-# 48 on the common Super Mini clones and DevKitC-1 v1.0, 47 on the
-# LOLIN/Wemos S3 Mini, 21 on the Waveshare S3-Zero, 38 on DevKitC-1 v1.1.
-# README.md has a snippet that identifies it in ten seconds.
+# WS2812 data in - **the red wire**, *not* power. Any free pin does (this is an
+# ordinary push-pull output), so move it if your board routes something else
+# here and nothing else changes.
 NEOPIXEL_PIN = 12
 
-# How many WS2812s are chained on that data line. All of them show the same
-# colour - the LED is one indicator, not a display - so this only has to be
-# big enough. Over-estimating is harmless (surplus bytes fall off the end of
-# the chain); under-estimating leaves the rest of the ring dark.
+# How many WS2812s are chained on that data line. All show the same colour - the
+# LED is one indicator, not a display - so this only has to be big enough:
+# over-estimating is harmless (surplus bytes fall off the end of the chain),
+# under-estimating leaves the rest of the ring dark.
 NEOPIXEL_COUNT = 1
 
-# 0..1, scaling every colour before it reaches the button's WS2812.
-#
-# Full scale. Note this does *not* fix a warm/orange cast on white: the
-# onboard LED and this one are written identical bytes (MultiBackend fans one
-# set() out to both), so a colour difference between them is electrical, not
-# arithmetic - see "white looks orange" in README.md. Raising this makes the
-# LED brighter and, if anything, the cast slightly stronger, because more
-# current means more droop on a rail that is already marginal for blue.
+# 0..1, scaling every colour before it reaches the button's WS2812. Not the
+# knob for the orange cast on white - that is the 3V3 fault above, and turning
+# this up makes it slightly worse, since more current means more droop on a rail
+# already marginal for blue. Nor is a difference between the two LEDs arithmetic:
+# MultiBackend fans one set() out to both, so they get identical bytes.
 LED_BRIGHTNESS = 1.0
 
 # Byte order of the LED itself. MicroPython's neopixel driver assumes "GRB",
-# which most strips are - but plenty of dev-board LEDs are wired "RGB", and
-# then that assumption swaps two of your colours.
+# which most strips are - but plenty of dev-board LEDs are wired "RGB", and then
+# that assumption swaps two of your colours. This LED and the onboard one are
+# NOT the same order; that is normal (different parts, different makers) and is
+# why each has its own setting rather than sharing one. Both values below are
+# measured, not guessed.
 #
-# Diagnose it against *what is set here now*, not against an absolute: whatever
-# two components look swapped, swap those two letters in this name.
-#
-# This LED and the onboard one are NOT the same order - the button's WS2812 is
-# GRB (the common case, and what the driver already assumes), the board's is
-# RGB. That is normal (they are different parts from different makers) and it
-# is why each has its own setting rather than sharing one.
-#
-# Measured, not guessed, and the two values were on the wrong LEDs until they
-# were: pushing solid #ff0000 lit *both* LEDs green and #00ff00 lit both red,
-# while #0000ff was correct - an R/G swap on both at once, which is exactly
-# what swapping these two settings between the two LEDs produces. The Lights
-# picker's Diagnostic row is how to repeat that in ten seconds.
-#
-# White is useless for this. It is three equal components, so every
-# permutation of it is still white - a byte-order fault only shows on colours
-# with unequal components. So are yellow and blue *for this particular fault*:
-# an R/G swap fixes both, so red/green/cyan/magenta are the ones that talk.
+# Diagnose against *what is set here now*, not an absolute: whatever two
+# components look swapped, swap those two letters. Push known colours from the
+# Lights picker's Diagnostic row and read the result per CLAUDE.md's byte-order
+# gotcha - which colours talk, and what one-LED-wrong vs both-wrong means.
 NEOPIXEL_ORDER = "GRB"
 
 RGB_PINS = (18, 19, 20)   # (red, green, blue) when LED_KIND == "rgb_pwm"
@@ -112,33 +78,22 @@ RGB_ACTIVE_HIGH = True    # False for a common-anode LED
 RGB_PWM_FREQ = 1000
 
 # --- onboard LED (optional, mirrors the LED above) ----------------------
-# Most "ESP32-S3 Mini" boards also carry their own WS2812 next to the USB
-# port, separate from the one wired into the button. Set this to drive it
-# too - it always shows the same state as the LED above, just as a second,
-# always-visible copy (handy with the button's LED buried inside a case).
-# None (the default) leaves it dark.
+# Most "ESP32-S3 Mini" boards also carry their own WS2812 next to the USB port,
+# separate from the one in the button. Set this to drive it too, as a second
+# always-visible copy of the same state (handy with the button's LED buried in a
+# case); None leaves it dark.
 #
-# Pin disagrees by board: 48 on the common Super Mini clones and DevKitC-1
+# The pin disagrees by board: 48 on the common Super Mini clones and DevKitC-1
 # v1.0, 47 on the LOLIN/Wemos S3 Mini, 21 on the Waveshare S3-Zero, 38 on
-# DevKitC-1 v1.1. README.md has a snippet that identifies it in ten seconds.
-# 48 is measured, not guessed: confirmed lit on this build's Melife
-# ESP32-S3FH4R2 ("Super Mini"-style clone). Another board is another number -
-# the REPL snippet in README.md identifies it.
+# DevKitC-1 v1.1. 48 is measured on this build's Melife ESP32-S3FH4R2 ("Super
+# Mini" clone); README.md has a snippet that identifies another board's.
 ONBOARD_NEOPIXEL_PIN = 48
-
-# Usually GRB, but not on this board: measured RGB, by the same test that
-# corrected NEOPIXEL_ORDER above. Both LEDs showed the *same* wrong colours,
-# which is the signature of these two values being on the wrong LEDs rather
-# than of one of them being wrong on its own.
-ONBOARD_NEOPIXEL_ORDER = "RGB"
+ONBOARD_NEOPIXEL_ORDER = "RGB"  # measured; see NEOPIXEL_ORDER above
 ONBOARD_LED_BRIGHTNESS = 0.25
 
 # --- buzzer ------------------------------------------------------------
-# A piezo buzzer between the pin and GND. None disables sound entirely.
-#
-# Any free GPIO does. Avoid the S3's reserved ranges: 26-32 are the SPI
-# flash, 33-37 go to octal PSRAM on boards that have it, and 0/3/45/46 are
-# strapping pins. GPIO5 is on the header of every S3 Mini variant and free
-# on all of them.
+# A piezo buzzer between the pin and GND. None disables sound entirely. Any
+# free GPIO clear of the exclusions above does; GPIO5 is on the header of
+# every S3 Mini variant and free on all of them.
 BUZZER_PIN = 5
 BUZZER_VOLUME = 0.5  # 0..1; a piezo is loudest around 0.5 (50% duty cycle)

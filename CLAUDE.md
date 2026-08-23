@@ -28,47 +28,42 @@ steal the connection from each other. A second one now *refuses* at startup
 
 ## The control panel is not the web UI
 
-Two UIs, and the split is structural rather than stylistic:
+Two UIs, and the split is structural:
 
 - **The web UI** (`webui.py`, :8080) is served *by* the running service and
-  configures it — modes, lights, events. It can never start the service,
-  because it only exists once the service is up.
+  configures it. It can never start the service, because it only exists once
+  the service is up.
 - **The control panel** (`aibutton/control/`, a tray icon) sits *around* the
-  service and owns its lifecycle — start, stop, watch, flash the firmware.
+  service and owns its lifecycle - start, stop, watch, flash.
 
-So: anything about *what the button does* goes in the web UI; anything about
+Anything about *what the button does* goes in the web UI; anything about
 *whether the service is running* goes in the control panel. The panel imports
 the service, never the reverse.
 
-The panel's Start defaults to `--ble`, the opposite of the command line's
-default, and that asymmetry is deliberate: someone running the panel has a
-button in front of them. Its own settings live in `control-panel.json`,
-*beside* `config.json` and never inside it — the web UI's editor rewrites
-that file wholesale, so a panel setting stored there would not survive a
-Save.
+The panel's Start defaults to `--ble`, the opposite of the command line, and
+deliberately: someone running the panel has a button in front of them. Its
+settings live in `control-panel.json`, **never inside `config.json`** - the
+editor rewrites that file wholesale, so a panel setting there would not
+survive a Save.
 
-**A second launch talks to the first one instead of refusing.** The panel
-listens on a loopback socket ([beacon.py](aibutton/control/beacon.py)) and
-records the port beside its lock; launching again asks the running panel to
-show its window and exits quietly. That matters because three different
-situations used to look identical — already running, wedged, and running but
-invisible — and Windows files new tray icons into a hidden overflow flyout, so
-"look in the tray" is advice a lot of people cannot act on. **If the holder
-does not answer it is wedged, and the newcomer says so and names the PID
-rather than insisting all is well.** The window is also shown at launch by
-default (`show_on_start`), because a tray icon is not a discoverable place to
-put your only UI.
+**A second launch talks to the first rather than refusing.** It asks over a
+loopback socket ([beacon.py](aibutton/control/beacon.py)); answered means the
+running panel shows its window and the newcomer exits quietly. **If the holder
+does not answer it is wedged, and the newcomer says so and names the PID.**
+Three situations used to look identical - running, wedged, and running but
+invisible - and Windows hides new tray icons in an overflow flyout, so "look in
+the tray" is advice many people cannot act on. The window is shown at launch
+(`show_on_start`) for the same reason.
 
-Never parent a dialog to a withdrawn Tk root. That is what made this wedge so
-hard to read: the modal rendered with no taskbar button and no focus, so the
-process sat forever holding a dialog nobody could see or dismiss.
+**Never parent a dialog to a withdrawn Tk root.** It renders with no taskbar
+button and no focus, so the process sits forever holding a dialog nobody can
+see or dismiss.
 
-Stopping is the one non-obvious part. Windows never delivers SIGTERM between
-processes, and `CTRL_BREAK_EVENT` needs a console a tray app does not have —
-so the polite stop is `POST /api/service/stop`, and signals are the fallback
-for POSIX and for a service started from a terminal. A hard kill stays safe
-by construction (the OS drops the run lock, the store commits per write); it
-just skips the device's goodbye.
+Stopping: Windows never delivers SIGTERM between processes and
+`CTRL_BREAK_EVENT` needs a console a tray app lacks, so the polite stop is
+`POST /api/service/stop`, with signals the fallback for POSIX and for a service
+started from a terminal. A hard kill is safe by construction (the OS drops the
+run lock, the store commits per write); it only skips the device's goodbye.
 
 ## Shape
 
@@ -84,121 +79,100 @@ double-tap window) is the one thing that lives on the device.
 
 ## SOLID, as it actually applies here
 
-These aren't aspirations; they're the reasons the existing code is shaped
-the way it is. Match them.
+Not aspirations - the reasons the code is shaped as it is. Match them.
 
-**Single responsibility — a pure core with I/O injected at the edges.**
+**Single responsibility - a pure core with I/O injected at the edges.**
 [rules.py](aibutton/rules.py), [scheduler.py](aibutton/scheduler.py) and the
-parsing half of [config.py](aibutton/config.py) are side-effect-free
-functions over data: no clock, no queue, no hardware. That's why they're
-testable without mocks, and why the whole app runs with nothing plugged in.
-[trigger.py](firmware/trigger.py) is pure for the same reason — it's the one
-piece of firmware the host test suite can execute.
-*Keep new logic out of I/O classes; take the clock and the store as
-arguments.*
+parsing half of [config.py](aibutton/config.py) are side-effect-free functions
+over data, which is why they need no mocks and why the app runs with nothing
+plugged in. [trigger.py](firmware/trigger.py) is pure for the same reason - the
+one piece of firmware the host suite can execute.
+*Keep new logic out of I/O classes; take the clock and the store as arguments.*
 
-**Open/closed — capability is added as data, not as branches.**
+**Open/closed - capability is added as data, not as branches.**
 [schema.js](aibutton/web/static/schema.js) declares every action, template,
-activation, LED style and setting; the editor, the summaries and the form
-widgets are generated from those tables. Adding the Pomodoro template meant
-adding a descriptor and a parser, not touching the mode editor.
+activation, LED style and setting; the editor and its widgets are generated
+from those tables.
 *If you find yourself adding an `if template == ...` to the UI, add a
 descriptor instead.*
 
-**Liskov — implementations are interchangeable, no downcasting.**
-`MockDevice` and `BLEDevice` differ in everything except behaviour;
-[main.py](aibutton/main.py) never asks which it has. Widgets all return
-`{ el, validate }` so the mode editor treats them uniformly.
+**Liskov - implementations are interchangeable, no downcasting.** `MockDevice`
+and `BLEDevice` differ in everything except behaviour. Widgets all return
+`{ el, validate }`.
 *The one legitimate `isinstance` on a device is the web UI asking "is this a
 mock?" to decide whether to show the virtual panel.*
 
-**Interface segregation — the seam is four methods.**
-`ButtonDevice` is `events` in; `set_led` / `play_sound` / `start_loop` /
-`stop_loop` out, plus lifecycle. Everything else — palettes, reconnection,
-byte encoding — is a private concern of the implementation.
-*Resist widening it. `set_palette` and `set_gesture_config` earned their
-places by being device state the host asserts, exactly like the LED state.*
-`info` is the counterpart and stayed an **attribute rather than a method**
-for exactly that reason: it is device state the host *reads*, never asserts,
-so nothing has to be implemented to satisfy it — a backend that is its own
-hardware just knows its own answer.
+**Interface segregation - the seam is four methods.** `ButtonDevice` is
+`events` in; `set_led` / `play_sound` / `start_loop` / `stop_loop` out, plus
+lifecycle. Palettes, reconnection and byte encoding are private to the
+implementation. *Resist widening it* - `set_palette` and `set_gesture_config`
+earned their places by being device state the host **asserts**, exactly like
+the LED state. `info` is the counterpart and stayed an **attribute rather than
+a method**, because it is device state the host *reads* and never asserts, so
+nothing has to be implemented to satisfy it.
 
-Ephemeral effects are the worked example of *not* widening it.
-"Show this look right now" became an optional second argument to `set_led`,
-not a fifth method, because it is the same assertion the seam already makes
-carrying more detail. The state argument stays required and still means
-something — it is what the status line and the web UI report, and what a
-device too old for effects falls back to rendering. **That fallback lives
-inside `BLEDevice`, not in the run loop**: a mode asks for a look, and
-whether showing it costs a borrowed palette entry is the device's business.
+Ephemeral effects are the worked example of *not* widening it: "show this look
+now" became an optional second argument to `set_led`, not a fifth method,
+because it is the same assertion carrying more detail. The state argument stays
+required - it is what the status line reports and what a device too old for
+effects falls back to rendering. **That fallback lives inside `BLEDevice`, not
+in the run loop**: whether a look costs a borrowed palette entry is the
+device's business.
 
-**Dependency inversion — depend on the abstraction, and mind the direction.**
-`main` depends on `ButtonDevice`, never on `BLEDevice`; the import of the
-concrete class is deferred to the one line that chooses it.
-[device.py](aibutton/device.py) imports nothing from the package — `config`
-imports *it*, not the reverse — so the wire vocabulary has no opinions about
-config.
-*Never let device.py import config.py; palette encoding duck-types the
-effect object precisely to avoid that.*
+**Dependency inversion - mind the direction.** `main` depends on
+`ButtonDevice`, never on `BLEDevice`; the concrete import is deferred to the
+one line that chooses it. [device.py](aibutton/device.py) imports nothing from
+the package - `config` imports *it*.
+*Never let device.py import config.py; palette encoding duck-types the effect
+object precisely to avoid that.*
 
 ## Apps, not features
 
-The product is *a button that runs swappable apps*, not a button with a list
-of built-in behaviours. What ships as a "mode" today becomes an "app"
-tomorrow, and the direction of travel is that **adding one touches the app's
-own files and nothing else**. Full plan in [ROADMAP.md](ROADMAP.md); what it
-means while writing code today:
+The product is *a button that runs swappable apps*. What ships as a "mode"
+today becomes an "app" tomorrow, and the direction of travel is that **adding
+one touches the app's own files and nothing else**. Full plan in
+[ROADMAP.md](ROADMAP.md); what it means today:
 
-**Know what an app currently costs.** A rich template is a 4-to-6 file
-change — `config.py` (dataclass, parser, allow-list, serialiser, union),
-`main.py` (a `run_*` loop and two `isinstance` chains), `schema.js`
-(template, takeover set, built-in), plus tests. Every one of those is a place
-a third-party app author cannot reach. If you are adding an app and find
-yourself editing the core, that is the tax — note it, don't normalise it.
+**Know what an app currently costs.** A rich template is a 4-to-6 file change:
+`config.py` (dataclass, parser, allow-list, serialiser, union), `main.py` (a
+`run_*` loop and two `isinstance` chains), `schema.js` (template, takeover set,
+built-in), plus tests. Every one is a place a third-party app author cannot
+reach. If adding an app means editing the core, **that is the tax - note it,
+don't normalise it.** Its own light and a new gesture used to cost more and no
+longer do; those are the two taxes protocol v1 removed.
 
-*Its own light used to add three more files* (`device.py` /
-`firmware/protocol.py` / `firmware/led.py`, plus the palette and the
-editor's state list) and no longer does: push an effect. That is one of the
-two taxes protocol v1 removed. The other is a new gesture — a longer tap is
-now a data change in `TriggerType` and `GESTURES`, with no reflash under it.
+**Prefer a preset to a template.** A new `BUILTIN_MODES` entry costs zero
+Python. Reach for a new `*Behavior` only when an existing one genuinely cannot
+express the behaviour.
 
-**Prefer a preset to a template.** A new entry in `BUILTIN_MODES` costs zero
-Python. Reach for a new `*Behavior` only when the behaviour genuinely cannot
-be expressed by an existing one.
+**Don't burn a wire code.** `LEDState` is a one-byte global namespace, mirrored
+in four places, `0x0B` already spent, and *shared* - every Pomodoro gets the
+same colours. An app wanting its own look pushes an effect, which since
+protocol v1 is supported rather than a workaround: the device renders it until
+the next state change, storing nothing (`run_metronome` and `run_countdown` are
+the two to copy). **Allocating a new `LEDState` needs an argument for why the
+app's look is a thing the whole system should have a name for.**
 
-**Don't burn a wire code.** `LEDState` is a one-byte global namespace,
-mirrored in four places, and `0x0B` is already spent. It is also *shared* —
-every Pomodoro gets the same colours. A new app wanting its own look is a
-reason to push an effect, not to allocate a state — and since protocol v1
-that is a supported thing to do rather than a workaround: pass an effect to
-`set_led` and the device renders it until the next state change, storing
-nothing. `run_metronome` and `run_countdown` are the two consumers to copy.
-**Allocating a new `LEDState` now needs an argument for why the app's look is
-a thing the whole system should have a name for.**
+**Keep new logic out of the run loop.** The takeover loops are the one place
+the pure-core rule is *not* followed - they await the device, so they need
+asyncio and can run nowhere but the host. New behaviour should lean toward a
+step function over `(state, event, now)` returning effects. Anything pure
+survives the Stage-3 move unchanged; anything awaiting a device gets rewritten.
 
-**Keep new logic out of the run loop.** The takeover loops in `main.py` are
-the one place the "pure core, injected I/O" rule is *not* followed — they
-await the device directly, which is why they can't be tested without asyncio
-and can't run anywhere but the host. New behaviour should lean toward a step
-function over `(state, event, now)` returning effects, even before the
-runtime formally exists. Anything pure survives the Stage-3 move unchanged;
-anything that awaits a device gets rewritten.
+**The brain is moving to the device - decided.** The button runs its own OS and
+the active app; the phone holds preferences and does the heavy lifting. Design
+in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
 
-**The brain is moving to the device — decided.** The button will run its own
-OS and the active app; the phone holds preferences and does the heavy lifting
-(webhooks, AI, the store). Full design in [ARCHITECTURE.md](ARCHITECTURE.md).
-Three consequences for code written today:
-
-- Code that assumes *"the host is awake and connected"* is fine for now and
-  must be easy to find later. Say so in a comment when you write it.
-- Anything that must feel instant (light, sound, what a press means) belongs
-  on the device eventually. Anything needing a network, a parser or a model
-  belongs on the phone — permanently. The latency budget in
-  ARCHITECTURE.md is the arbiter, not taste.
+- Code assuming *"the host is awake and connected"* is fine now and must be
+  easy to find later. **Say so in a comment when you write it.**
+- Anything that must feel instant (light, sound, what a press means) belongs on
+  the device eventually; anything needing a network, a parser or a model
+  belongs on the phone permanently. ARCHITECTURE.md's latency budget is the
+  arbiter, not taste.
 - **An app is data, not code**: a state machine with expressions, bounded by
-  construction — no loops, no allocation, no recursion. When you extend an
-  app's abilities, extend the *effect set* (a system decision) rather than
-  reaching for something that only a general-purpose language could express.
+  construction - no loops, no allocation, no recursion. Extend the *effect set*
+  rather than reaching for something only a general-purpose language could
+  express.
 
 ## Invariants
 

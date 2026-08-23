@@ -1,4 +1,4 @@
-"""Config loading, validation, and hot-reload for the AI Button.
+"""Config loading, validation, and hot-reload for the button.
 
 The config file is `config.json` in the working directory (override with
 the AIBUTTON_CONFIG environment variable or the --config CLI flag).
@@ -15,10 +15,6 @@ mode is a named personality made of a behaviour *template* plus an
 stored flat on the mode object, mirroring how actions store their fields.
 
     "modes": [
-      { "name": "Default",
-        "template": "actions",
-        "activation": { "type": "always" },
-        "short_press": { "action": "log", "event": "button_press" } },
       { "name": "Morning meds",
         "template": "actions",
         "activation": { "type": "window", "between": ["05:00", "07:00"],
@@ -27,9 +23,8 @@ stored flat on the mode object, mirroring how actions store their fields.
         "double_tap": { "action": "log", "event": "meds_taken" } },
       { "name": "Wake up",
         "template": "alarm",
-        "activation": { "type": "schedule", "at": "07:00",
-                        "days": ["mon","tue","wed","thu","fri"] },
-        "message": "Wake up", "snooze_minutes": 9, "dismiss_event": "woke_up" }
+        "activation": { "type": "schedule", "at": "07:00" },
+        "message": "Wake up", "snooze_minutes": 9 }
     ]
 
 Two natures of mode (the template picks the nature):
@@ -37,25 +32,15 @@ Two natures of mode (the template picks the nature):
 * **Ambient** (`actions`) - passive; it only *answers* gestures while in
   scope. Pairs with `always`/`window` activations. Resolved first-match-wins
   in config order (see rules.py).
-* **Takeover** (`alarm`) - the device *enters* it (a `schedule` fires at a
-  clock time) and it owns the button until dismissed (see scheduler.py +
-  main.py). The standalone `alarm` *action* of v0.2 is gone - alarms are a
-  template now.
-
-Action primitives (the `actions` template body): log (SQLite event),
-timer_toggle (start/stop stopwatch pairs), webhook (POST - the
-IFTTT/Make/n8n hook), enter_mode (switch to a takeover mode).
+* **Takeover** (`alarm` and the rest) - the device *enters* it and it owns
+  the button until it exits (see scheduler.py + main.py).
 
 v0.4 - scenes
 -------------
-An optional "scenes" block makes the whole config swappable:
-
-    "scenes": { "dir": "scenes", "active": "focus" }
-
-The named file in that directory is layered over this one *as raw JSON*
-before anything below runs (see load_config_full and [scenes.py](scenes.py)),
-so a scene is validated by the same parser, with the same per-key fallbacks,
-as the config it overrides. No "scenes" block means none of this happens.
+An optional `"scenes": {"dir": "scenes", "active": "focus"}` block layers
+the named file over this one *as raw JSON* before anything below runs (see
+load_config_full and [scenes.py](scenes.py)), so a scene is validated by the
+same parser, with the same per-key fallbacks, as the config it overrides.
 
 Migration / back-compat: legacy v0.2 "rules" configs load and are converted
 to ambient `actions` modes (window activation from between/days, else
@@ -102,19 +87,14 @@ class LogAction:
 
 @dataclass(frozen=True)
 class ReadoutAction:
-    """Show `event`'s count for today on the light, without entering an app -
-    the "counting without entering an app" readout TODO 15 and 17 designed
-    together: tens digit as slow pulses, units digit as quick ones (see
-    `sequencer.readout`), because exact counts are what blink *rhythm* is
-    good at and hue is not - a scheme that "does not depend on telling
-    colours apart at all", so it survives the ring's colour cast, a warm
-    room and a colourblind reader (TODO 17).
+    """Show `event`'s count for today on the light, without entering an app:
+    tens digit as slow pulses, units digit as quick ones (see
+    `sequencer.readout`). Exact counts are what blink *rhythm* is good at and
+    hue is not, so the scheme survives the ring's colour cast, a warm room and
+    a colourblind reader (TODO 17).
 
-    A sibling of `LogAction` rather than a mode of it: one writes a row, this
-    only reads what is already there, and what each pushes to the LED differs
-    enough (nothing, versus a whole one-shot sequence) that main.py's ambient
-    dispatch handles it separately from the other primitives, the same way it
-    already special-cases `EnterModeAction` - see `handle()`.
+    Dispatched by main.py's `handle()` rather than by `execute()`, like
+    `EnterModeAction`: it pushes a whole one-shot sequence at the LED.
     """
 
     event: str
@@ -136,13 +116,8 @@ class WebhookAction:
 @dataclass(frozen=True)
 class OscAction:
     """Fire one OSC message at something listening on UDP - a DAW, a lighting
-    desk, a TouchOSC layout, anything in that family.
-
-    A sibling of WebhookAction rather than a mode of it, because the two
-    differ in kind: a webhook is a request with an answer and a failure mode,
-    and this is a datagram that either leaves or does not. It is the same
-    "reach something else on the network" primitive at the other end of the
-    reliability scale, which is exactly why the button can afford it - see
+    desk, a TouchOSC layout, anything in that family. A datagram that either
+    leaves or does not, where a webhook is a request with an answer; see
     [osc.py](osc.py) on why fire-and-forget is the right contract here.
 
     `args` are JSON values and their OSC types are inferred: bool -> T/F,
@@ -159,12 +134,9 @@ class OscAction:
 @dataclass(frozen=True)
 class MidiAction:
     """Send one MIDI message to a port another application is listening on -
-    a DAW, chiefly.
-
-    A sibling of OscAction rather than a mode of it, for the reason osc.py
-    already gives: a MIDI note does not travel over OSC and vice versa. It
-    exists because the DAW in question is Studio One, which speaks MIDI and
-    Mackie Control and not OSC (see [midi.py](midi.py)).
+    a DAW, chiefly. It exists alongside `OscAction` because the DAW in
+    question is Studio One, which speaks MIDI and Mackie Control and not OSC
+    (see [midi.py](midi.py)).
 
     `port` is matched as a case-insensitive substring of the open MIDI output
     ports, not as an exact name: Windows decorates a loopMIDI port with a
@@ -186,13 +158,12 @@ class MidiAction:
 
 @dataclass(frozen=True)
 class EnterModeAction:
-    """Switch into the named takeover mode (alarm/stopwatch/counter). This is
-    how a gesture in an ambient mode starts a takeover, so "entered by a
-    gesture" needs no special activation type - it is simply an action that
-    switches modes. The target is resolved at runtime (main.py), not at parse
-    time: forward references and config ordering mean the target may be defined
-    later in the list, and a missing/non-takeover target is handled gracefully
-    by the runtime (fail state, never a crash)."""
+    """Switch into the named takeover mode, which is how a gesture starts one -
+    so "entered by a gesture" needs no special activation type.
+
+    The target is resolved at runtime (main.py), not at parse time: forward
+    references and config ordering mean it may be defined later in the list,
+    and a missing/non-takeover target fails as a fail state, never a crash."""
 
     target: str
 
@@ -202,20 +173,16 @@ class StandbyAction:
     """Put the ambient layer to sleep, or wake it - one gesture, both ways.
 
     **Ambient-only, and session-only**, both decided rather than fallen into.
-    Ambient, because the other two readings of "off" cost more than they buy:
-    a button that goes dark cannot show you it is off, and a service that
-    stops has to be restarted by something that is not the button. What this
-    turns off is the layer that answers everyday gestures - a takeover already
-    running, and a scheduled one about to start, are untouched, because an
-    alarm you set is not a thing a stray five-tap should be able to cancel.
+    Ambient: what sleeps is the layer answering everyday gestures, while a
+    takeover already running and a scheduled one about to start are untouched -
+    an alarm you set is not a thing a stray five-tap should be able to cancel.
+    Session: an "off" that survived a restart would be a button that comes back
+    dead with nothing on it to say why, so the flag lives in main.py's run loop
+    and nowhere on disk.
 
-    Session, because an "off" that survived a restart would be a button that
-    comes back dead with nothing on it to say why. The flag lives in main.py's
-    run loop and nowhere on disk.
-
-    Handled by main.py's `handle()` rather than by `execute()`, for the reason
-    `EnterModeAction` and `ReadoutAction` are: it changes what the loop does
-    with the *next* gesture, and that is state only the loop owns.
+    Handled by main.py's `handle()` rather than by `execute()`, like
+    `EnterModeAction` and `ReadoutAction`: it changes what the loop does with
+    the *next* gesture, and that is state only the loop owns.
     """
 
 
@@ -223,22 +190,13 @@ class StandbyAction:
 class NamedAction:
     """A reference into `AppConfig.actions` - the pool - by name.
 
-    The move `looks` already made, for the same reason: a thing edited in two
-    places is not modular, and an action bound to three gestures should be one
-    action. **Naming stays optional** - most actions are used once, and
-    forcing those through a library is indirection for nothing. A gesture
-    holds an inline action *or* a name, exactly as a mode holds an inline look
-    or a name.
-
     In JSON it is a bare string, and that is what makes it free: every binding
     ever written is an object, so a string can only mean this, and no existing
-    config can be misread as one.
+    config can be misread as one. Naming stays optional; most actions are used
+    once, and forcing those through a library is indirection for nothing.
 
-    **Resolved at use time** (`resolve_action`), not at parse time - the
-    reason `EnterModeAction` already gives about its target. Deleting a pool
-    entry leaves the references dangling *on purpose*: the parser warns and
-    the runtime fails clearly, which is more honest than quietly rewriting
-    what several gestures do.
+    Resolved at use time (`resolve_action`), not at parse time, and a dangling
+    reference stays dangling on purpose - see CLAUDE.md.
     """
 
     name: str
@@ -309,38 +267,26 @@ class ControlBehavior:
     """A control surface: an app whose gestures fire actions, like the ambient
     layer, but only while it is open.
 
-    **The same map as `ActionsBehavior`, at the other level.** That is the
-    whole idea and the reason this is cheap: an ambient actions mode answers
-    gestures *whenever nothing has taken over*, and this answers them *because
-    you opened it*. Nothing about what a gesture means changes; only when it
-    applies. It exists because the two shapes that could already fire arbitrary
-    actions both got it wrong for a remote - the ambient layer cannot be
-    reached from a launcher, and a Signal light *cycles* rather than binding
-    one gesture per command.
+    **The same map as `ActionsBehavior`, at the other level**, which is why it
+    is cheap: an ambient actions mode answers gestures whenever nothing has
+    taken over, and this answers them because you opened it. Nothing about what
+    a gesture means changes; only when it applies.
 
-    **Long press is not bindable, and the parser enforces it.** CLAUDE.md's
-    rule is that a long press means "up one level" everywhere, and a control
-    surface is the case where breaking it would be most tempting - five
-    gestures already fills the page and there is a sixth right there. Taking
-    it would buy one more command and cost the one gesture people are supposed
-    to trust without thinking, in the app most likely to be used without
-    looking. A binding on `long_press` is dropped with a warning rather than
-    honoured.
-
-    So the budget is five: short press, double tap, triple tap, four taps,
-    five taps. If that is not enough, **bind one of them to `enter_mode` and
-    branch** - a control surface can open another one, so five gestures per
-    page buys as many pages as you care to build. That is why `return_after`
-    is here and defaults to on: without it, long press out of a sub-page would
-    drop you all the way to the ambient layer, and the gesture would mean "up
-    one level" or "up two" depending on how deep you had gone.
+    **Long press is not bindable, and `_parse_control_body` enforces it** -
+    CLAUDE.md's "up one level" rule, in the app most likely to be used without
+    looking. So the budget is five: short press, double tap, triple tap, four
+    taps, five taps. If that is not enough, **bind one of them to `enter_mode`
+    and branch** - a surface can open another one, so five gestures per page
+    buys as many pages as you care to build. That is what `return_after` is
+    for: without it, long press out of a sub-page would drop you all the way to
+    the ambient layer, and the gesture would mean "up one level" or "up two"
+    depending on how deep you had gone.
     """
 
     actions: dict[str, Action]  # trigger value -> action, never long_press
     log_as: str = ""  # optional event name written on each fire
     # On: a surface this one opens returns here when it is left, so long press
-    # always travels exactly one level. Same default and same reasoning as
-    # LauncherBehavior.return_after - see the comment there.
+    # always travels exactly one level.
     return_after: bool = True
 
     @property
@@ -369,10 +315,9 @@ def _default_rungs() -> tuple[ladder.Rung, ...]:
     """The ladder someone has to be able to read across a room: white on the
     ten, yellow on the five, light blue on even seconds, dark blue on odd.
 
-    Chosen so the *rate* tells you the unit before you know the code - a
-    colour you see twice a minute is obviously the coarse one - and so the two
-    most frequent colours are a light/dark pair rather than two hues, which
-    survives both this build's warm ring cast (TODO 0c) and a colourblind
+    Chosen so the *rate* tells you the unit before you know the code, and so
+    the two most frequent colours are a light/dark pair rather than two hues -
+    which survives both this build's warm ring cast (TODO 0c) and a colourblind
     reader.
     """
     return (
@@ -394,21 +339,19 @@ class LadderSpec:
     It lives on the *behaviour* rather than on a palette entry for the same
     reason a ramp does: a ladder says which colour, not how the light moves,
     so it composes with the look instead of competing with it.
+
+    One field name serves two meanings: `every_s` counts *seconds* for the
+    timers and *beats* for the metronome, where `tick_s` is unused because the
+    tempo supplies the cadence. The ladder is unit-agnostic - `ladder.color_at`
+    takes a number - so what a rung counts is the consumer's decision, declared
+    on the field descriptor in schema.js rather than stored here. One dataclass
+    is what lets the parser, the widget and the round-trip be written once.
     """
 
     enabled: bool = False
     tick_s: float = 0.5
     base: str = "#000000"  # ticks landing on no rung; black = a dark off-beat
     rungs: tuple[ladder.Rung, ...] = field(default_factory=_default_rungs)
-
-    # A note on units, because one field name has to serve two meanings.
-    # `every_s` counts *seconds* for the timers and *beats* for the metronome,
-    # and `tick_s` is unused there because the tempo supplies the cadence. The
-    # ladder itself is unit-agnostic - `ladder.color_at` takes a number - so
-    # what a rung counts is the consumer's decision, declared on the field
-    # descriptor in schema.js rather than stored here. Keeping one dataclass
-    # is what lets the parser, the editor widget and the round-trip be written
-    # once.
 
 
 @dataclass(frozen=True)
@@ -422,15 +365,9 @@ class StopwatchBehavior:
     # one is not "log nothing" - it files every unnamed stopwatch into one
     # nameless bucket that `total_today("")` then adds up together. Where a
     # blank genuinely means "log nothing" the loop says so (`if
-    # behavior.log_as:` in run_signal / run_control / run_launcher) and the
-    # editor leaves the field optional; this one is `required: true` there,
-    # and a default the editor refuses to save is a default that only ever
-    # reaches you as an error message.
+    # behavior.log_as:` in run_signal / run_control / run_launcher).
     log_as: str = "stopwatch"
-    # Optional: turn the light into a clock while it runs. Defined here rather
-    # than on the palette entry because it is what this *mode* is doing, and
-    # because a ladder is not an effect - it says which colour, not how the
-    # light moves (same split as ramp).
+    # Optional: turn the light into a clock while it runs.
     ladder: LadderSpec = field(default_factory=LadderSpec)
 
     @property
@@ -463,21 +400,17 @@ class PomodoroBehavior:
 
     **This is the interval-timer template, and "Pomodoro" is one preset of
     it.** A Pomodoro is 25/5 with a long break every fourth and no end; Tabata
-    is 20s/10s for eight rounds; HIIT is 40s/20s. They are the same machine
-    with different numbers, so they ship as entries in `BUILTIN_MODES` rather
-    than as three templates (see TODO item 20). The `template` string stays
-    `"pomodoro"` deliberately - it is the key `MODE_LED_STATES`, schema.js and
-    every existing config are written against, and renaming it would be a
-    migration that bought nothing but a tidier word.
+    is 20s/10s for eight rounds; HIIT is 40s/20s. Same machine, different
+    numbers, so they ship as `BUILTIN_MODES` entries rather than as three
+    templates. The `template` string stays `"pomodoro"` because it is the key
+    `MODE_LED_STATES`, schema.js and every existing config are written against.
 
-    **Durations are seconds, and `*_minutes` is still accepted.** The old
-    names were unusable for the short end (`work_minutes: 0.667` is not a way
-    to write forty seconds), so seconds are canonical and the parser converts
-    the legacy names on the way in - "add, don't repurpose" applied to config.
-    Nothing anybody has written stops working; it is rewritten as seconds the
-    next time it is saved.
+    **Durations are seconds, and `*_minutes` is still accepted.** The old names
+    were unusable for the short end (`work_minutes: 0.667` is not a way to
+    write forty seconds), so seconds are canonical and the parser converts the
+    legacy names on the way in - "add, don't repurpose" applied to config.
 
-    `advance` is the setting that decides how much the button asks of you:
+    `advance` decides how much the button asks of you:
 
         auto        both transitions happen on their own
         manual      every transition waits for a gesture
@@ -486,14 +419,11 @@ class PomodoroBehavior:
     `gestures` maps a trigger to a POMODORO_COMMANDS entry, so what each
     press does is yours to change - the defaults are toggle / exit / extend.
 
-    `waiting_style` is shown, instead of the phase's usual animation, whenever
-    the timer is not actually running - paused, or a block has ended and
-    `advance` is waiting for a press. It still wears WORKING's or RESTING's
-    *colour* (the mode's own look if it has named one, else the palette
-    entry) - only the movement changes, exactly like a countdown's ramp
-    borrows TIMING's appearance rather than switching state. LISTENING is not
-    an option here: it is the button's global "your press registered" state,
-    edited once in the Lights tab, and this is not that (see MODE_LED_STATES).
+    `waiting_style` is shown instead of the phase's usual animation whenever
+    the timer is not actually running - paused, or a block ended and `advance`
+    is waiting for a press. It still wears WORKING's or RESTING's *colour*;
+    only the movement changes, exactly like a countdown's ramp borrows TIMING's
+    appearance rather than switching state.
     """
 
     work_s: float = 25 * 60
@@ -501,9 +431,7 @@ class PomodoroBehavior:
     long_break_s: float = 15 * 60
     blocks_before_long_break: int = 4
     extend_s: float = 10 * 60  # what `extend` adds
-    # 0 = alternate until you leave, which is what a Pomodoro has always done
-    # and therefore the default. A workout sets it: eight rounds and stop.
-    rounds: int = 0
+    rounds: int = 0  # 0 = alternate until you leave; a workout sets eight
     # A "get ready" pause before the first work block. Zero for a Pomodoro -
     # you started it deliberately - and ten seconds for anything you have to
     # put the phone down for.
@@ -545,9 +473,9 @@ class MetronomeBehavior:
 
     `max_bpm` is about contact bounce, not taste: two edges 20 ms apart imply
     3000 BPM, and without a ceiling one bad press throws the average away.
-    Raising it is how this mode goes faster - it is *not* the same limit as
-    the LED's flash floor, which is a safety cap the light works around by
-    marking every Nth beat (see main.py's run_metronome).
+    Raising it is how this mode goes faster - it is *not* the LED's flash
+    floor, which the light works around by marking every Nth beat (see
+    main.py's run_metronome).
     """
 
     start_bpm: float = 120.0
@@ -556,19 +484,16 @@ class MetronomeBehavior:
     max_bpm: float = 300.0
     sound_on_tap: bool = True
     log_as: str = "metronome"  # a finished session logs its BPM under this
-    # Follow a DAW's MIDI clock instead of taps. Empty means tap-only, which is
-    # what this mode has always been. When set, **the clock owns the tempo and
-    # tapping no longer changes it** - two things steering one number is how
-    # you get a metronome that argues with the session. A tap still marks a
-    # beat and still makes its sound, because that is the other thing taps are
-    # for. See [midi_clock.py](midi_clock.py) for what arrives on the wire.
+    # Follow a DAW's MIDI clock instead of taps; empty means tap-only. When
+    # set, **the clock owns the tempo and tapping no longer changes it** - two
+    # things steering one number is how you get a metronome that argues with
+    # the session. A tap still marks a beat and still makes its sound. See
+    # [midi_clock.py](midi_clock.py) for what arrives on the wire.
     clock_port: str = ""
-    # A subdivision ladder counted in **beats**, not seconds - which is the
-    # only reading that is useful here. The tempo already decides the timing;
-    # what a metronome wants from a colour is an *accent* ("every 4th beat"),
-    # and a seconds-based ladder would drift against the tempo the moment you
-    # tapped a new one. See LadderSpec: the ladder counts, the caller decides
-    # in what.
+    # A subdivision ladder counted in **beats**, not seconds: the tempo already
+    # decides the timing, what a metronome wants from a colour is an *accent*
+    # ("every 4th beat"), and a seconds-based ladder would drift against the
+    # tempo the moment you tapped a new one.
     ladder: LadderSpec = field(default_factory=LadderSpec)
 
     @property
@@ -605,8 +530,7 @@ class CountdownBehavior:
     The ramp is stored here rather than in `led_palette` because it belongs to
     *this* countdown - a five-minute tea timer and a two-hour deadline want
     different colours, and the global palette has one entry per LED state for
-    everyone to share. Named looks (item 3) generalised exactly this shape -
-    a mode names its own appearance instead of sharing the global entry.
+    everyone to share.
     """
 
     minutes: float = 10.0
@@ -630,27 +554,23 @@ class ReminderBehavior:
     """The scheduled *nudge*: fires on a clock time like an alarm, but flashes
     instead of ringing and clears on any press.
 
-    Why this is its own template rather than a setting on AlarmBehavior: an
-    alarm is a thing you have to deal with - it rings until dismissed, and its
-    whole design is that it cannot be ignored. A reminder is a thing you should
-    notice. Folding them together would mean one dataclass whose fields half
-    apply depending on another field, which is the shape that produces "why is
-    my snooze doing nothing".
+    Its own template rather than a setting on AlarmBehavior: an alarm is a
+    thing you have to deal with, a reminder is a thing you should notice, and
+    folding them together would mean one dataclass whose fields half apply
+    depending on another field - the shape that produces "why is my snooze
+    doing nothing".
 
-    It owns no new LED state. `ALERT` already means "look at the button", and
-    the reminder's *look* is a named look pushed as an ephemeral effect, so a
-    reminder is visibly not an alarm without spending a wire code (ROADMAP D4).
+    It owns no new LED state: `ALERT` already means "look at the button", and
+    the reminder's *look* is a named look pushed as an ephemeral effect.
     """
 
     message: str = ""
     label: str = ""
-    # A single chime, not a loop. Empty means silent - the point of a reminder
-    # over an alarm is that it may be ignorable, and a silent one is a real
-    # choice rather than a broken one.
+    # A single chime, not a loop. Off means silent, which is a real choice: the
+    # point of a reminder over an alarm is that it may be ignorable.
     chime: bool = True
-    # Logged when the reminder is cleared. Mirrors `unless_logged_today` one
-    # level up: an ambient mode stands down once something is logged today, and
-    # this is the scheduled equivalent writing that row.
+    # Logged when the reminder is cleared - the row an ambient mode's
+    # `unless_logged_today` then stands down on.
     cleared_event: str = ""
     # How long it flashes before giving up on its own. 0 = until pressed.
     # A reminder nobody was in the room for should not still be flashing at
@@ -667,17 +587,15 @@ class LauncherBehavior:
     """The app launcher: short press cycles the installed apps, **double tap
     launches** the one showing, and long press backs out.
 
-    The double tap is deliberate and is the one place long press does not mean
-    "up one level" - it means it *here* too, which is exactly the point: a menu
-    where the universal escape gesture instead committed you to something would
-    be the single exception to a rule people are meant to trust without
-    thinking. See `run_launcher`, which is authoritative.
+    Launching on a double tap is deliberate: long press still means "up one
+    level" here, because a menu where the universal escape gesture instead
+    committed you to something would be the single exception to a rule people
+    are meant to trust without thinking. See `run_launcher`, authoritative.
 
-    Why this exists at all: a takeover app is reached by an `enter_mode` action
-    bound to a gesture, and there are six gestures. Keep one for everyday
-    logging and one for leaving, and you can reach four - against eleven apps,
-    which makes "load the button with as many apps as it will fit" untrue as
-    written (ROADMAP Stage 2). One gesture spent on this reaches all of them.
+    Why it exists at all: an app is reached by an `enter_mode` action bound to
+    a gesture, and there are six gestures. Keep one for everyday logging and
+    one for leaving and you can reach four - against eleven apps. One gesture
+    spent on this reaches all of them.
 
     `targets` empty means **every takeover mode in config order**, so a newly
     added app appears in the launcher without anyone editing a list. Naming
@@ -687,18 +605,14 @@ class LauncherBehavior:
     the normal case, not an error.
 
     It owns no LED state (see MODE_LED_STATES): the whole point is that it
-    wears the *target's* colour, so the light answers "which app" rather than
-    "which mode is running".
+    wears the *target's* colour, so the light answers "which app".
     """
 
     targets: tuple[str, ...] = ()
-    # Whether leaving an app returns to the launcher. **On** by default,
-    # because it is what makes long press mean one thing everywhere: *up one
-    # level*. Every takeover already exits on a long press, so with this on the
-    # whole button reads as a hierarchy - long press in an app goes back to the
-    # menu, long press in the menu goes home. Off makes long press skip a level
-    # from inside an app, which is the same gesture meaning two different
-    # distances depending on how you got there.
+    # Whether leaving an app returns to the launcher. **On**, because it is
+    # what makes long press mean one thing everywhere: up one level. Off makes
+    # long press skip a level from inside an app, which is the same gesture
+    # meaning two different distances depending on how you got there.
     return_after: bool = True
     log_as: str = ""  # optional: log which app was launched, under this name
 
@@ -712,12 +626,11 @@ class SignalState:
     """One position of a Signal: what it is called, what it looks like, and
     what goes out when you land on it.
 
-    The outbound message is an ordinary `Action`, which is the whole reason
-    this template is cheap: a status can fire a webhook, an OSC message or a
-    log row without this template knowing what any of those are, and a fourth
-    action primitive works here on the day it is added. `None` is a position
-    that only shows a colour, which is a real thing to want - "on air" is
-    often just a light.
+    The outbound message is an ordinary `Action`, which is why this template is
+    cheap: a position can fire a webhook, an OSC message or a log row without
+    this template knowing what any of those are, and a new action primitive
+    works here on the day it is added. `None` is a position that only shows a
+    colour - "on air" is often just a light.
     """
 
     name: str
@@ -741,30 +654,25 @@ class SignalBehavior:
     """A signal light: short press moves to the next position, and it *stays*
     there. Long press leaves; double tap re-sends the current position.
 
-    **This is the first app whose point is to persist rather than to finish.**
-    Every other takeover is doing something and then done - a timer runs out, a
-    game ends, a launcher hands off. This one is an output device: the button
-    sits there being your status until you change it, and the reason to hold
-    the foreground is precisely that holding the light *is* the feature.
+    **The app whose point is to persist rather than to finish.** Every other
+    takeover is doing something and then done; this one is an output device
+    that sits there being your status until you change it. The honest cost is
+    the "one foreground app" decision becoming visible: while a Signal is
+    showing, nothing else on the button is reachable, and long press is what
+    releases it.
 
-    That has an honest cost, and it is the "one foreground app" decision (TODO
-    item 15) becoming visible for the first time: while a Signal is showing,
-    nothing else on the button is reachable. Long press releases it.
-
-    Two shapes fall out of one machine, which is why there is one template and
-    two presets rather than two templates:
+    Two shapes fall out of one machine, which is why this is one template and
+    two presets:
 
         a status light   Free / Heads-down / On air, firing a webhook
         a footswitch     Stop / Play / Record, firing OSC at a DAW
 
-    They differ in what the positions are called and what they send, and in
-    nothing else. See [osc.py](osc.py) for what a footswitch can honestly do
-    over this link - not live looping, and the reason why.
+    See [osc.py](osc.py) for what a footswitch can honestly do over this link -
+    not live looping, and the reason why.
 
     Positions carry their colour inline rather than naming a look, because a
     look is bound to an `LEDState` and these are not states - there can be five
-    of them and they mean whatever you say. `CountdownBehavior.ramp` is the
-    precedent for a template owning colours that are not states.
+    of them and they mean whatever you say.
     """
 
     states: tuple[SignalState, ...] = field(default_factory=_default_signal_states)
@@ -797,17 +705,14 @@ class HotColdBehavior:
     """The Hot/Cold game: a hue wheel spins, a press stops it, and the light
     says how close you landed to a target only the button knows.
 
-    The rules are not here. They are a pure step function in
-    [hotcold.py](hotcold.py), driven by main.py's run_hotcold - which is the
-    shape ROADMAP Stage 3 wants every app in, and the reason this one can be
-    tested with numbers instead of a device. What lives here is only what the
-    editor stores.
+    The rules are a pure step function in [hotcold.py](hotcold.py), driven by
+    main.py's run_hotcold - the shape ROADMAP Stage 3 wants every app in, and
+    the reason this one can be tested with numbers instead of a device. What
+    lives here is only what the editor stores.
 
-    It owns no LED state (see MODE_LED_STATES), for the same reason the
-    launcher owns none: the colour *is* the game. Every frame it shows is an
-    ephemeral effect it computed - the spinning rainbow, then the ramp colour
-    for how close you got - so a palette entry would only ever be the thing
-    briefly overwritten before you could read it.
+    It owns no LED state (see MODE_LED_STATES): every frame is an ephemeral
+    effect it computed, so a palette entry would only ever be the thing briefly
+    overwritten before you could read it.
 
     `tolerance` is measured in the same normalised distance `hotcold.distance`
     returns, where 1.0 is half a turn away. It is not tighter by default
@@ -855,11 +760,7 @@ class ReactionBehavior:
     main.py's run_reaction. Read that module's header before trusting a number
     off this: the multi-tap window is corrected for, the one-way radio latency
     cannot be, so readings are comparable with each other rather than with a
-    stopwatch.
-
-    It owns no LED state (see MODE_LED_STATES) for the same reason the other
-    game owns none - every frame is computed, so a named look would be one
-    wrong frame before the game paints over it.
+    stopwatch. It owns no LED state, like the other game.
 
     `slowest_ms` is only the ramp's far end: a press slower than it is still
     logged honestly, it just cannot look any redder.
@@ -896,80 +797,54 @@ _ALLOWED_ACTIVATIONS = {
     "counter": (ManualActivation,),
     "pomodoro": (ManualActivation,),
     "metronome": (ManualActivation,),
-    # Manual, not schedule: a countdown that starts itself at a clock time is
-    # an alarm, and that template already exists.
+    # Manual throughout below: an app that started itself on a clock time is an
+    # app interrupting you, and the one shape that *should* do that (a
+    # countdown fired at 07:00) is an alarm, which is already a template.
     "countdown": (ManualActivation,),
-    # Manual: something has to bind a gesture to reach the launcher, and
-    # a launcher that started itself on a schedule would be an app that
-    # interrupts you to ask which app you wanted.
     "launcher": (ManualActivation,),
-    # Manual: a game that started itself would be a game interrupting you.
     "hotcold": (ManualActivation,),
     "reaction": (ManualActivation,),
-    # Manual: a signal is something you set, so something has to reach it.
     "signal": (ManualActivation,),
-    # Manual: a control surface is an app you open. An always-on one is just
-    # an actions mode, which already exists and is the right thing to use.
+    # An always-on control surface is just an actions mode, which exists.
     "control": (ManualActivation,),
 }
 
-# Which LED states belong to a *mode* rather than to the button.
-#
-# The split this encodes: IDLE/LISTENING/THINKING/SUCCESS/ERROR describe what
-# the button is doing and are edited once, globally, in the Lights tab. The
-# states below describe what a particular mode is doing, so their appearance
-# is edited next to the mode - and, since a mode names a look rather than
-# owning the global entry, two Pomodoros can finally look different.
+# Which LED states belong to a *mode* rather than to the button - the split
+# CLAUDE.md's "the Lights tab is the button's vocabulary" invariant describes.
+# An empty tuple means the app paints every frame itself, so a named look would
+# only ever be one wrong frame before it paints over it.
 #
 # Mirrored by `ledStates` on each template descriptor in schema.js;
 # test_webui.py fails if they drift.
 MODE_LED_STATES: dict[str, tuple[str, ...]] = {
     "actions": (),  # ambient: it never takes the light over
     "alarm": (LEDState.ALERT.value,),
-    # Same state as an alarm, deliberately. ALERT means "look at the button";
-    # what distinguishes a reminder from a ringing alarm is the look it wears,
-    # which is why naming one matters more here than anywhere else - a
-    # reminder that picks no look is indistinguishable from an alarm.
+    # Same state as an alarm, deliberately: ALERT means "look at the button",
+    # and what distinguishes a reminder from a ringing one is the look it
+    # wears - so naming one matters more here than anywhere else.
     "reminders": (LEDState.ALERT.value,),
     "stopwatch": (LEDState.TIMING.value,),
     "counter": (LEDState.COUNTING.value,),
     "pomodoro": (LEDState.WORKING.value, LEDState.RESTING.value),
     "metronome": (LEDState.METRONOME.value,),
     "countdown": (LEDState.TIMING.value,),
-    # Deliberately none. The launcher shows whichever app is selected, in
-    # *that* app's colour, so giving it a look of its own would be a
-    # setting that only ever overwrites the thing you are trying to read.
-    "launcher": (),
-    # Also none, and for the same reason one level along: every frame this
-    # game shows is a colour it worked out (the wheel, then the answer), so
-    # a named look would be a setting whose only effect is one frame of the
-    # wrong thing before the game paints over it.
+    "launcher": (),  # it wears the selected app's colour
     "hotcold": (),
     "reaction": (),
-    # None: a Signal wears the colour of whichever position it is on, and
-    # those are the app's own, not the button's vocabulary.
-    "signal": (),
-    # LISTENING while it waits, then the usual SUCCESS/ERROR per action - the
-    # same vocabulary the ambient layer already speaks. But a control surface
-    # is not only a remote: bind enter_mode and it is a menu of pages, and a
-    # menu's entire job is telling you where you are. So LISTENING - the
-    # state it actually sits in between actions - is ownable: a page names a
-    # look for it and wears that colour the whole time it is open, and
-    # walking into a sub-page changes it, at zero wire cost (set_led already
-    # resolves the active mode's look for whatever state it pushes, and
-    # `resting()` in main.py re-pushes LISTENING after every action's
-    # SUCCESS/ERROR flash). A page that names nothing still resolves to the
-    # palette's LISTENING colour, exactly as before this existed.
+    "signal": (),  # a position's colour is the app's own, not a state
+    # LISTENING is ownable here because a control surface is not only a remote:
+    # bind enter_mode and it is a menu of pages, and a menu's job is telling you
+    # where you are. A page names a look for the state it sits in between
+    # actions and wears it the whole time it is open, at zero wire cost -
+    # set_led already resolves the active mode's look, and main.py's `resting()`
+    # re-pushes LISTENING after each action's SUCCESS/ERROR flash.
     "control": (LEDState.LISTENING.value,),
 }
 
-# The rest: the button's own vocabulary, which no mode owns. LISTENING is
-# the one dual citizen: the ambient layer wears it while an action runs -
-# no mode involved - so it must stay globally editable, and a control page
-# may *also* name a look for it, overriding the global colour only while
-# that page is open. Deriving it out with the others would delete the
-# system default from the Lights tab while the ambient layer still
-# renders it.
+# The rest: the button's own vocabulary, which no mode owns. LISTENING is the
+# one dual citizen (see MODE_LED_STATES["control"]) and is kept here as well,
+# because the ambient layer wears it with no mode involved - deriving it out
+# would delete the system default from the Lights tab while it still renders.
 SYSTEM_LED_STATES: tuple[str, ...] = tuple(
     state.value
     for state in LEDState
@@ -981,18 +856,17 @@ SYSTEM_LED_STATES: tuple[str, ...] = tuple(
 # The two lifecycle hooks, in the order they fire. They live on `Mode` rather
 # than on each behaviour because there is exactly one pair of moments to hang
 # them on and the run loop already owns both (ARCHITECTURE.md, "Composition: an
-# app's edges"). One field serves every takeover, which is what "zero
-# per-template code" means: adding an app does not add a hook.
+# app's edges"). One field serves every takeover: adding an app adds no hook.
 MODE_HOOKS: tuple[str, ...] = ("on_enter", "on_exit")
 
 # What a hook may be: the fire-and-forget primitives `actions.execute()` runs.
 # The three that are missing are the three `main.handle()` keeps for itself -
 # `enter_mode`, `readout` and `standby` each change what the *loop* does next,
-# and a hook fires beside the loop rather than inside it. `enter_mode` is the
-# case that makes this worth enforcing rather than documenting: a mode whose
-# on_enter entered another mode would be a takeover starting a takeover from
-# inside the moment the first one begins, which is the one shape
-# `enter_takeover`'s replace-don't-nest rule exists to refuse.
+# and a hook fires beside the loop rather than inside it. `enter_mode` is why
+# this is enforced rather than documented: a mode whose on_enter entered
+# another mode would be a takeover starting a takeover from inside the moment
+# the first one begins, which is what `enter_takeover`'s replace-don't-nest
+# rule exists to refuse.
 #
 # A bare name (`NamedAction`) is allowed and resolved at use time like every
 # other binding, so a pool entry that happens to be one of those three fails at
@@ -1013,13 +887,12 @@ class Mode:
     activation: Activation
     # Which named look this mode wears for each LED state it owns, e.g.
     # {"WORKING": "focus-warm"}. A state left out falls back to the global
-    # palette entry, which is what every mode did before looks existed - so an
-    # empty map is exactly today's behaviour. Keys are validated against
-    # MODE_LED_STATES for the template; values against the config's look pool.
+    # palette entry. Keys are validated against MODE_LED_STATES for the
+    # template; values against the config's look pool.
     looks: dict[str, str] = field(default_factory=dict)
     # Fired as this mode is entered and as it ends (see MODE_HOOKS above).
-    # None means what it has always meant: nothing happens, and nothing costs
-    # anything - a mode with no hooks is one `getattr` per session.
+    # None means nothing happens and nothing costs anything - a mode with no
+    # hooks is one `getattr` per session.
     on_enter: Action | None = None
     on_exit: Action | None = None
 
@@ -1038,8 +911,7 @@ def bound_triggers(modes) -> set[str]:
     Read off the dataclass fields rather than by asking each behaviour what it
     binds. A behaviour's gesture map is always a dict keyed by trigger name -
     `actions` on the everyday template, `gestures` on Pomodoro - so scanning
-    for that shape stays correct for a template nobody has written yet, which
-    an isinstance chain per template would not.
+    for that shape stays correct for a template nobody has written yet.
     """
     names: set[str] = set()
     for mode in modes:
@@ -1082,14 +954,10 @@ def _default_modes() -> tuple[Mode, ...]:
     that promise is true the moment the file exists rather than only once
     someone adds those modes by hand.
 
-    double_tap goes to the Launcher, not straight to a Stopwatch as an
-    earlier plan for this default had it: the launcher launches on a double
-    tap by the codebase's own rule (CLAUDE.md), and a fresh config with no
-    launcher binding at all would fail the Stage-2 gate that every app must
-    be reachable without the web UI. Stopwatch ships as a mode the launcher
-    reaches instead - Home only spends two of its three bindings on entering
-    something, and the launcher is what makes that enough to reach all of
-    them (`LauncherBehavior.targets` defaults to every takeover mode in
+    double_tap goes to the Launcher rather than straight to an app: a fresh
+    config with no launcher binding would fail the Stage-2 gate that every app
+    must be reachable without the web UI, and one binding on a launcher reaches
+    all of them (`LauncherBehavior.targets` defaults to every takeover mode in
     config order).
     """
     return (
@@ -1113,22 +981,20 @@ def _has_ambient_always(modes: tuple[Mode, ...]) -> bool:
 def _ensure_ambient_always(modes: tuple[Mode, ...]) -> tuple[Mode, ...]:
     """Guarantee at least one ambient mode with an Always activation exists.
 
-    Structural, not a stored flag: nothing is recorded on `Mode` saying "this
-    one is the floor", because a flag can be hand-deleted exactly like the
-    mode itself - the parser would still need this guarantee, and a derived
-    property can't drift from what the config actually contains.
+    Structural, not a stored flag: a flag saying "this one is the floor" can be
+    hand-deleted exactly like the mode itself, so the parser would need this
+    check anyway, and a derived property cannot drift from what the config
+    actually contains.
 
     Every path through `_parse_modes` funnels through here - the "modes" list,
-    both legacy migration ladders, and the built-in defaults - so a config
-    that deletes or rescopes its only ambient-Always mode gets one back rather
-    than leaving the button with no mode to answer a gesture by default. A
-    scene gets this for free too: scenes merge into the raw dict before
-    `parse_config` ever runs (see `load_config_full`), so this check already
-    sits downstream of that merge.
+    both legacy migration ladders, and the built-in defaults - so a config that
+    deletes or rescopes its only ambient-Always mode gets one back rather than
+    leaving the button with no mode to answer a gesture. Scenes are covered
+    too: they merge into the raw dict before `parse_config` runs.
 
-    Appended last, at the lowest priority: a seeded Home mode must never
-    shadow an ambient mode someone actually configured, only catch gestures
-    nothing else claims.
+    Appended last, at the lowest priority: a seeded Home mode must never shadow
+    an ambient mode someone actually configured, only catch gestures nothing
+    else claims.
     """
     if _has_ambient_always(modes):
         return modes
@@ -1139,6 +1005,127 @@ def _ensure_ambient_always(modes: tuple[Mode, ...]) -> tuple[Mode, ...]:
         home.name,
     )
     return modes + (home,)
+
+
+# --- per-key fallback helpers -------------------------------------------
+#
+# A bad config never crashes the service: every key falls back on its own and
+# says which key and what it should have been, and those same messages reach
+# the editor (`parse_with_warnings`). These are the shapes that repeat across
+# the template parsers. A key whose complaint has to say something more
+# specific than these do still spells its check out inline.
+
+def _is_num(value) -> bool:
+    """A real number, never a bool. The bool exclusion is the point: `True` is
+    an `int` in Python, so `"channel": true` would otherwise validate as
+    channel 1 and play."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_whole(value) -> bool:
+    """A whole number, never a bool (see `_is_num`)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_int_in(value, low: int, high: int) -> bool:
+    """A whole number inside an inclusive range."""
+    return _is_whole(value) and low <= value <= high
+
+
+def _take(raw: dict, key: str, expected: type, default):
+    """A top-level key of the config object, well-typed or the default."""
+    if key not in raw:
+        return default
+    value = raw[key]
+    if expected is float:
+        if _is_num(value):
+            return float(value)
+    elif expected is bool:
+        if isinstance(value, bool):
+            return value
+    elif isinstance(value, expected) and not isinstance(value, bool):
+        return value
+    log.error(
+        "config: %r should be %s, got %r - using default %r",
+        key, expected.__name__, value, default,
+    )
+    return default
+
+
+def _positive(raw: dict, key: str, where: str, default: float) -> float:
+    """`raw[key]` as a number greater than zero."""
+    value = raw.get(key, default)
+    if _is_num(value) and value > 0:
+        return float(value)
+    log.error("config: %s.%s must be a number > 0 - using %s", where, key, default)
+    return default
+
+
+def _nonneg(raw: dict, key: str, where: str, default: float) -> float:
+    """`raw[key]` as a number of zero or more."""
+    value = raw.get(key, default)
+    if _is_num(value) and value >= 0:
+        return float(value)
+    log.error("config: %s.%s must be a number >= 0 - using %s", where, key, default)
+    return default
+
+
+def _string(raw: dict, key: str, where: str, default: str) -> str:
+    """`raw[key]` as a string; empty is allowed and usually means "not set"."""
+    value = raw.get(key, default)
+    if isinstance(value, str):
+        return value
+    log.error("config: %s.%s must be a string - using default", where, key)
+    return default
+
+
+def _nonempty(raw: dict, key: str, where: str, default: str) -> str:
+    """`raw[key]` as a string with something in it - for the `log_as`/`event`
+    fields a run loop uses unguarded, where "" is not "log nothing" but a
+    nameless bucket every unnamed session then adds up together."""
+    value = raw.get(key, default)
+    if isinstance(value, str) and value:
+        return value
+    log.error(
+        "config: %s.%s must be a non-empty string - using %r", where, key, default
+    )
+    return default
+
+
+def _whole(
+    raw: dict, key: str, where: str, default: int, minimum: int = 0, note: str = "",
+) -> int:
+    """`raw[key]` as a whole number of at least `minimum`. `note` says what the
+    smallest value means, for the fields where 0 is a mode rather than none."""
+    value = raw.get(key, default)
+    if _is_whole(value) and value >= minimum:
+        return value
+    log.error(
+        "config: %s.%s must be a whole number >= %s%s - using %s",
+        where, key, minimum, note, default,
+    )
+    return default
+
+
+def _flag(raw: dict, key: str, where: str, default: bool) -> bool:
+    """`raw[key]` as a true/false."""
+    value = raw.get(key, default)
+    if isinstance(value, bool):
+        return value
+    log.error("config: %s.%s must be true or false - using default", where, key)
+    return default
+
+
+def _style(raw: dict, key: str, where: str, default: str) -> str:
+    """`raw[key]` as one of the LED styles (device.LED_STYLES)."""
+    value = raw.get(key, default)
+    if isinstance(value, str) and value in LED_STYLES:
+        return value
+    log.error(
+        "config: %s.%s must be one of %s - using %r",
+        where, key, "/".join(LED_STYLES), default,
+    )
+    return default
 
 
 # --- LED palette --------------------------------------------------------
@@ -1191,29 +1178,16 @@ def _parse_color(raw, where: str, default: str) -> str:
 
 def _parse_effect(raw, where: str, default: LedEffect) -> LedEffect:
     """One palette entry, falling back per field: a bad colour costs you that
-    colour, not the whole state's appearance."""
+    colour, not the whole state's appearance. This is the shape every other
+    config surface follows - CLAUDE.md points new ones here."""
     if not isinstance(raw, dict):
         log.error("config: %s must be an object - using defaults", where)
         return default
-
-    style = raw.get("style", default.style)
-    if not (isinstance(style, str) and style in LED_STYLES):
-        log.error(
-            "config: %s.style must be one of %s - using %r",
-            where, "/".join(LED_STYLES), default.style,
-        )
-        style = default.style
-
-    period = raw.get("period_s", default.period_s)
-    if not (isinstance(period, (int, float)) and not isinstance(period, bool) and period > 0):
-        log.error("config: %s.period_s must be a number > 0 - using %s", where, default.period_s)
-        period = default.period_s
-
     return LedEffect(
-        style=style,
+        style=_style(raw, "style", where, default.style),
         color=_parse_color(raw.get("color", default.color), f"{where}.color", default.color),
         color2=_parse_color(raw.get("color2", default.color2), f"{where}.color2", default.color2),
-        period_s=float(period),
+        period_s=_positive(raw, "period_s", where, default.period_s),
     )
 
 
@@ -1228,9 +1202,6 @@ def _parse_ramp(raw, where: str, default: tuple[ramp.Stop, ...]) -> tuple[ramp.S
     entry that pins `at` keeps that position; one that doesn't keeps the even
     slot it would have had, so the two forms mix without a second syntax.
     Positions need not be sorted or span 0..1 - ramp.color_at handles both.
-
-    Same per-key rule as everything else: one bad stop costs you that stop's
-    colour, not the ramp.
     """
     if not isinstance(raw, list) or not raw:
         log.error("config: %s must be a non-empty list of colours - using the default", where)
@@ -1248,7 +1219,7 @@ def _parse_ramp(raw, where: str, default: tuple[ramp.Stop, ...]) -> tuple[ramp.S
             continue
         color = _parse_color(entry.get("color"), f"{where}[{index}].color", "#000000")
         at = entry.get("at", slot)
-        if not (isinstance(at, (int, float)) and not isinstance(at, bool) and 0.0 <= at <= 1.0):
+        if not (_is_num(at) and 0.0 <= at <= 1.0):
             log.error(
                 "config: %s[%d].at must be a number from 0 to 1 - using %s",
                 where, index, slot,
@@ -1265,13 +1236,9 @@ def _parse_ramp(raw, where: str, default: tuple[ramp.Stop, ...]) -> tuple[ramp.S
 # Which templates can supply each drive's number (TODO 36d). `clock` is absent
 # because it needs nothing: a stop list walked by the clock owns its own
 # position and renders anywhere. The other two are parameterised from outside
-# themselves, so they are only meaningful under an app that has the number -
-# a countdown knows how far through it is, a metronome knows what beat it is
-# on, and IDLE knows neither.
-#
-# **Keyed by template, not by state, and that is forced rather than chosen.**
-# `TIMING` belongs to both the countdown and the stopwatch, and only one of
-# them has an end to be a fraction of. The number's owner is the app.
+# themselves - a countdown knows how far through it is, a metronome knows what
+# beat it is on, and IDLE knows neither. Keyed by template rather than by
+# state, which CLAUDE.md explains and `TIMING` forces.
 #
 # Mirrored as `drives` on each template descriptor in schema.js.
 DRIVE_TEMPLATES: dict[str, tuple[str, ...]] = {
@@ -1287,8 +1254,12 @@ def _parse_stop(raw, where: str) -> sequencer.Stop | None:
     Mirrors `_parse_ramp`'s two-tier fallback: an entry of the wrong *shape*
     (not a string or an object) is dropped - `None` here, skipped by the
     caller - while a dict with a bad *field* keeps the stop and falls back
-    per field, same as `_parse_effect`. "One bad stop costs that stop" means
-    the shape rule; a typo in `hold_s` costs you a number, not the stop.
+    per field. "One bad stop costs that stop" means the shape rule; a typo in
+    `hold_s` costs you a number, not the stop.
+
+    `curve` (the fade's shape) and `style`/`period_s` (what the hold does)
+    default to what every stop written before they existed meant, so an old
+    config parses to exactly the sequence it always did.
     """
     if isinstance(raw, str):
         return sequencer.Stop(_parse_color(raw, where, "#000000"))
@@ -1296,21 +1267,6 @@ def _parse_stop(raw, where: str) -> sequencer.Stop | None:
         log.error("config: %s must be a colour or an object - ignored", where)
         return None
 
-    color = _parse_color(raw.get("color"), f"{where}.color", "#000000")
-
-    hold_s = raw.get("hold_s", 0.5)
-    if not (isinstance(hold_s, (int, float)) and not isinstance(hold_s, bool) and hold_s >= 0):
-        log.error("config: %s.hold_s must be a number >= 0 - using 0.5", where)
-        hold_s = 0.5
-
-    fade_s = raw.get("fade_s", 0.0)
-    if not (isinstance(fade_s, (int, float)) and not isinstance(fade_s, bool) and fade_s >= 0):
-        log.error("config: %s.fade_s must be a number >= 0 - using 0.0", where)
-        fade_s = 0.0
-
-    # How the fade is shaped (TODO 36b). Linear is both the default and what
-    # every stop written before this existed meant, so an old config parses to
-    # exactly the sequence it always did.
     curve = raw.get("curve", "linear")
     if curve not in sequencer.CURVES:
         log.error(
@@ -1319,25 +1275,13 @@ def _parse_stop(raw, where: str) -> sequencer.Stop | None:
         )
         curve = "linear"
 
-    # What the *hold* does (TODO 36c) - solid unless asked otherwise, which is
-    # again what every stop meant before this field existed.
-    style = raw.get("style", "solid")
-    if not (isinstance(style, str) and style in LED_STYLES):
-        log.error(
-            "config: %s.style must be one of %s - using 'solid'",
-            where, "/".join(LED_STYLES),
-        )
-        style = "solid"
-
-    period_s = raw.get("period_s", 1.0)
-    if not (isinstance(period_s, (int, float)) and not isinstance(period_s, bool)
-            and period_s > 0):
-        log.error("config: %s.period_s must be a number > 0 - using 1.0", where)
-        period_s = 1.0
-
     return sequencer.Stop(
-        color=color, hold_s=float(hold_s), fade_s=float(fade_s),
-        curve=curve, style=style, period_s=float(period_s),
+        color=_parse_color(raw.get("color"), f"{where}.color", "#000000"),
+        hold_s=_nonneg(raw, "hold_s", where, 0.5),
+        fade_s=_nonneg(raw, "fade_s", where, 0.0),
+        curve=curve,
+        style=_style(raw, "style", where, "solid"),
+        period_s=_positive(raw, "period_s", where, 1.0),
     )
 
 
@@ -1346,12 +1290,11 @@ def _parse_sequence(raw: dict, where: str, default: LedEffect) -> LedEffect | se
     look, alongside the plain-effect form `_parse_effect` already handles.
 
     Falls back to `default` (a plain `LedEffect`, never an invented
-    `Sequence`) rather than to some degenerate stop list: a look that fails
-    to parse should end up looking like *something* real, and `LedEffect()`
-    is what every other broken look already becomes. That happens both when
-    `stops` is not a usable list at all, and when every entry in it turned
-    out to be unusable - a sequence with nothing left to play is exactly as
-    broken as one that never had anything to play.
+    `Sequence`) rather than to some degenerate stop list: a look that fails to
+    parse should end up looking like *something* real. That covers both an
+    unusable `stops` list and one whose every entry turned out unusable - a
+    sequence with nothing left to play is as broken as one that never had
+    anything.
     """
     entries = raw.get("stops")
     if not isinstance(entries, list) or not entries:
@@ -1360,10 +1303,7 @@ def _parse_sequence(raw: dict, where: str, default: LedEffect) -> LedEffect | se
         )
         return default
 
-    repeat = raw.get("repeat", True)
-    if not isinstance(repeat, bool):
-        log.error("config: %s.repeat must be true or false - using true", where)
-        repeat = True
+    repeat = _flag(raw, "repeat", where, True)
 
     stops: list[sequencer.Stop] = []
     for index, entry in enumerate(entries):
@@ -1386,14 +1326,12 @@ def _parse_sequence(raw: dict, where: str, default: LedEffect) -> LedEffect | se
 
 
 def _parse_look(raw, where: str, default: LedEffect) -> LedEffect | sequencer.Sequence:
-    """One look, either shape it may take: a plain effect (the only shape
-    before this existed), or - when `raw` has a `stops` key - a stop list.
+    """One look, either shape it may take: a plain effect, or - when `raw` has
+    a `stops` key - a stop list.
 
-    The dispatch is the key's presence alone, not a `"type"` field: a look
-    is either "here is the one colour and style it wears" or "here is the
-    playlist it wears", and those two questions have different required
-    keys already. Not a valid object at all falls back the same way
-    `_parse_effect` always has.
+    The dispatch is that key's presence alone, not a `"type"` field: a look is
+    either "the one colour and style it wears" or "the playlist it wears", and
+    those two questions have different required keys already.
     """
     if isinstance(raw, dict) and "stops" in raw:
         return _parse_sequence(raw, where, default)
@@ -1426,16 +1364,12 @@ def _parse_looks(raw) -> dict[str, LedEffect | sequencer.Sequence]:
     point the same way: two Pomodoros can want different colours, two *modes*
     can want the same colour, and a name is the thing an ephemeral effect
     already pushes down the wire (ROADMAP D4). Empty by default - a pool of
-    invented names would be noise, and a mode with no look falls back to the
-    global palette exactly as it always has.
+    invented names would be noise.
 
-    A pool entry may be a plain effect or a stop list (`_parse_look`) - the
-    system palette stays effect-only (see `_parse_palette`), because a
-    palette entry ships to the device and renders unattended, and a sequence
-    is a schedule only the host can walk.
-
-    Per-key fallback like everything else: one broken look costs you that
-    look, not the pool.
+    A pool entry may be a plain effect or a stop list (`_parse_look`), where
+    the system palette stays effect-only (`_parse_palette`): a palette entry
+    ships to the device and renders unattended, and a sequence is a schedule
+    only the host can walk. One broken look costs you that look, not the pool.
     """
     looks: dict[str, LedEffect | sequencer.Sequence] = {}
     if "looks" not in raw:
@@ -1455,29 +1389,21 @@ def _parse_looks(raw) -> dict[str, LedEffect | sequencer.Sequence]:
 def _parse_state_looks(raw, known: dict[str, object]) -> dict[str, str]:
     """The system states' own look names: `{"SUCCESS": "three-blinks"}`.
 
-    **The generalisation of a thing that already existed.** A control page can
-    already name a look for LISTENING (`MODE_LED_STATES["control"]`, TODO 26),
-    overriding the global colour while the page is open. This is that, one
-    scope up: the button's own vocabulary - IDLE/LISTENING/THINKING/SUCCESS/
-    ERROR - may name a pool look instead of being limited to what the palette
-    can hold.
-
-    Which matters because the palette **cannot hold a sequence**. Its entries
-    ship to the device and render unattended, so they are one style the
-    firmware can draw alone; a stop list is a schedule only the host can walk
-    (`_parse_palette`). Naming a look is what lets SUCCESS be "green, pause,
-    green, pause, green, blink blink" rather than "the flash style", while
-    the palette entry stays underneath as the colour a host-less button still
-    shows. Authoring surface over fallback form - the same relation `looks`
-    and `led_palette` already have, not a replacement for either.
+    A control page can already name a look for LISTENING
+    (`MODE_LED_STATES["control"]`); this is that one scope up, letting the
+    button's own vocabulary name a pool look instead of being limited to what
+    the palette can hold. Which matters because the palette **cannot hold a
+    sequence** (`_parse_palette`): naming a look is what lets SUCCESS be
+    "green, pause, green, pause, green" rather than "the flash style", while
+    the palette entry stays underneath as what a host-less button shows.
 
     Resolution order ends up: an explicit effect, then the active mode's look,
     then this, then None - which is what `set_led` already means by "use the
     palette". See `look_for`.
 
-    Fail-soft per key like `_parse_mode_looks`, and for a stronger reason: a
-    misnamed look on SUCCESS must cost you a colour, never the button's
-    ability to tell you something worked.
+    Fail-soft per key, and for a stronger reason than usual: a misnamed look on
+    SUCCESS must cost you a colour, never the button's ability to tell you
+    something worked.
     """
     entry = raw.get("state_looks")
     if entry is None:
@@ -1502,10 +1428,9 @@ def _parse_state_looks(raw, known: dict[str, object]) -> dict[str, str]:
             continue
         entry = known[look]
         if isinstance(entry, sequencer.Sequence) and entry.drive != "clock":
-            # No app underneath at all here - these are the button's own
-            # states, worn by the ambient layer between modes - so there is
-            # nothing that could ever supply a progress or a beat. Warned about
-            # once and kept, on the clock, like every other stranded drive.
+            # No app underneath these at all - they are the button's own
+            # states, worn between modes - so nothing could ever supply a
+            # progress or a beat. Kept on the clock, like every stranded drive.
             log.warning(
                 "config: state_looks[%r] names a %r-driven look, and the "
                 "button's own states have no app to supply that - it will play "
@@ -1518,15 +1443,14 @@ def _parse_state_looks(raw, known: dict[str, object]) -> dict[str, str]:
 def _parse_action_pool(raw) -> dict[str, Action]:
     """The named-action pool: `{"smoke": {"action": "log", "event": "cig"}}`.
 
-    `_parse_looks` again, key for key: empty by default (a pool of invented
-    names would be noise), per-entry fallback (one broken action costs that
-    entry, not the pool), an unusable name dropped with a complaint.
+    `_parse_looks` again, key for key: empty by default, per-entry fallback,
+    an unusable name dropped with a complaint.
 
     One rule of its own: **a pool entry may not itself be a name.** Chains
     would need cycle detection to be safe and buy nothing that a second
-    binding to the same name does not already give you, so the one-level
-    guarantee is made here, where it is cheap, rather than in
-    `resolve_action`, where it would be a loop with a counter.
+    binding to the same name does not, so the one-level guarantee is made
+    here, where it is cheap, rather than in `resolve_action`, where it would
+    be a loop with a counter.
     """
     pool: dict[str, Action] = {}
     if "actions" not in raw:
@@ -1580,10 +1504,9 @@ def _parse_mode_looks(
 ) -> dict[str, str]:
     """One mode's state -> look-name map, dropping anything unusable.
 
-    Never fatal: a mode whose look is misspelled should light up in its
-    default colour and say so, not vanish. That is the same fail-soft rule
-    every other key follows, and it matters more here because a look is
-    cosmetic - losing the mode over it would be wildly disproportionate.
+    Never fatal: a mode whose look is misspelled should light up in its default
+    colour and say so, not vanish - a look is cosmetic, and losing the mode
+    over one would be wildly disproportionate.
 
     `known` is the whole pool rather than only its names, because a look's
     *drive* decides whether this template can render it (`_drive_warning`) -
@@ -1624,13 +1547,11 @@ def _parse_hooks(
     """One mode's `on_enter` / `on_exit` actions, dropping anything unusable.
 
     Never fatal, for the reason `_parse_mode_looks` gives just above: a hook is
-    something the mode does *around* itself, and losing a whole Pomodoro
-    because its exit webhook has no URL would be wildly disproportionate. A bad
-    hook is dropped with a warning and the mode runs without it.
+    something the mode does *around* itself, so a bad one is dropped with a
+    warning and the mode runs without it.
 
     `actions` is the pool's names, handed through so a hook naming something
-    absent is reported at load like every other reference - `_parse_action`
-    does that part.
+    absent is reported at load like every other reference.
     """
     chosen: dict[str, Action] = {}
     for key in MODE_HOOKS:
@@ -1648,11 +1569,10 @@ def _parse_hooks(
             )
             continue
         if template == "actions":
-            # Kept rather than dropped: it round-trips, and the fix is to
-            # change the template rather than to lose what was written. But an
-            # everyday mode is never entered and never left, so nothing will
-            # ever fire this - and a hook that silently does nothing is exactly
-            # what a load-time warning is for.
+            # Kept rather than dropped: it round-trips, and the fix is to change
+            # the template rather than to lose what was written. But an everyday
+            # mode is never entered or left, so nothing will ever fire it - and
+            # a hook that silently does nothing is what a load warning is for.
             log.warning(
                 "config: %s.%s is on an everyday (actions) mode, which is "
                 "never entered or left - the hook will never fire", where, key,
@@ -1674,21 +1594,17 @@ class AppConfig:
     # What each LED state looks like. Pushed to the device on connect and on
     # every edit, so the button and the web UI's virtual device agree.
     led_palette: dict[str, LedEffect] = field(default_factory=_default_palette)
-    # Named looks a mode can wear instead of the palette entry for the state
-    # it is showing (see `look_for`). Empty means every mode uses the palette,
-    # which is what they all did before this existed. A look is a plain
-    # effect or a stop list (sequencer.Sequence) - see `_parse_looks`.
+    # Named looks a mode can wear instead of the palette entry for the state it
+    # is showing (see `look_for`). Empty means every mode uses the palette. A
+    # look is a plain effect or a stop list - see `_parse_looks`.
     looks: dict[str, LedEffect | sequencer.Sequence] = field(default_factory=dict)
     # Named actions a gesture can reference instead of holding one inline (see
-    # `resolve_action`). Empty means every binding is inline, which is what
-    # they all were before this existed. Naming is optional by design: this is
-    # for the action used in three places, not for the one used once.
+    # `resolve_action`). Naming is optional by design: this is for the action
+    # used in three places, not for the one used once.
     actions: dict[str, Action] = field(default_factory=dict)
     # A look the button's own states wear instead of their palette entry (see
-    # `_parse_state_looks`). Empty means every system state renders straight
-    # from the palette, which is what they all did before this existed - and
-    # the palette stays underneath either way, as what a host-less button
-    # shows.
+    # `_parse_state_looks`). The palette stays underneath either way, as what a
+    # host-less button shows.
     state_looks: dict[str, str] = field(default_factory=dict)
     # Where the swappable scene files live and which one is active. The scene
     # itself is merged in before parsing (see load_config_full), so nothing
@@ -1702,51 +1618,17 @@ class AppConfig:
     min_flash_period_s: float = SAFE_MIN_PERIOD_S
 
 
-# --- parsing helpers ----------------------------------------------------
-
-def _take(raw: dict, key: str, expected: type, default):
-    """Return raw[key] if present and well-typed, else the default."""
-    if key not in raw:
-        return default
-    value = raw[key]
-    if expected is float:
-        # Accept ints for float fields, but never bools (bool is an int subclass).
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return float(value)
-    elif expected is bool:
-        if isinstance(value, bool):
-            return value
-    elif isinstance(value, expected) and not isinstance(value, bool):
-        return value
-    log.error(
-        "config: %r should be %s, got %r - using default %r",
-        key, expected.__name__, value, default,
-    )
-    return default
-
-
-def _is_int_in(value, low: int, high: int) -> bool:
-    """A whole number inside an inclusive range - and not a bool.
-
-    The bool exclusion is the point: `True` is an `int` in Python, so a
-    config that says `"channel": true` would otherwise validate as channel 1
-    and play. Written once here because MIDI checks three such fields in one
-    expression; the older single-field checks still spell it out inline.
-    """
-    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
-
+# --- parsing ------------------------------------------------------------
 
 def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | None:
     """One gesture's action: an inline object, or a bare string naming one in
     the pool (`AppConfig.actions`).
 
     `known` is the pool's names, passed at every call site that has one in
-    scope, so a misspelled reference is reported at load - beside every other
-    config complaint the editor already shows - instead of at the moment the
-    gesture failed to do anything. It is only ever a warning: the reference is
-    kept either way (see `NamedAction`). The legacy migration ladders pass
-    nothing, because a v0.1 config predates the pool and cannot contain a
-    reference into it - the same reason they never produce a named look.
+    scope, so a misspelled reference is reported at load instead of at the
+    moment the gesture failed to do anything. It is only ever a warning; the
+    reference is kept either way (see `NamedAction`). The legacy migration
+    ladders pass nothing, because a v0.1 config predates the pool.
     """
     if isinstance(raw, str):
         if not raw.strip():
@@ -1770,8 +1652,6 @@ def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | No
     elif kind == "readout":
         event = raw.get("event")
         if isinstance(event, str) and event:
-            # Per-field fallback below, like `_parse_effect` - a bad colour
-            # costs you that colour, not the whole readout.
             defaults = ReadoutAction(event=event)
             return ReadoutAction(
                 event=event,
@@ -1808,9 +1688,7 @@ def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | No
         if (
             isinstance(host, str)
             and host
-            and isinstance(port, int)
-            and not isinstance(port, bool)
-            and 0 < port <= 65535
+            and _is_int_in(port, 1, 65535)
             and isinstance(address, str)
             and address.startswith("/")
             and isinstance(args, list)
@@ -1851,18 +1729,17 @@ def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | No
         if isinstance(target, str) and target:
             return EnterModeAction(target=target)
     elif kind == "alarm":
-        # v0.2 standalone alarm *action* is removed (alarm is a template
-        # now). It cannot be migrated inline (no fire time), so callers that
-        # see one drop it with a loud warning - see _migrate_rule.
+        # Removed: an alarm is a template now, and this cannot be migrated
+        # inline because a gesture has no fire time - see _migrate_rule.
         log.error(
             "config: %s uses the removed 'alarm' action - alarms are now an "
             "alarm-template mode; ignored", where,
         )
         return None
     elif kind == "prompt":
-        # The on-device AI is gone with the Pi build (DESIGN-ESP32.md); there
-        # is nothing on the host to send a prompt to. Say so plainly rather
-        # than letting it fall through as a generic "not a valid action".
+        # The on-device AI went with the Pi build (DESIGN-ESP32.md), so there is
+        # nothing to send a prompt to. Named rather than left to fall through as
+        # a generic "not a valid action".
         log.error(
             "config: %s uses the removed 'prompt' action - the on-device AI "
             "client is gone; POST to an AI via a webhook instead; ignored", where,
@@ -1993,12 +1870,11 @@ def _parse_control_body(
     """Parse a control surface: the same gesture map as an actions mode, minus
     the long press.
 
-    A bound `long_press` is dropped with a warning rather than honoured. That
-    is the one place this parser is opinionated, and it is deliberate: long
-    press is how you leave every takeover, and an app that ate it would strand
-    you inside itself with no gesture left to say so. The Pomodoro parser
-    warning about unbinding its own exit is the precedent.
+    A bound `long_press` is dropped with a warning rather than honoured - it is
+    how you leave every takeover, and an app that ate it would strand you
+    inside itself with no gesture left to say so.
     """
+    defaults = ControlBehavior(actions={})
     actions: dict[str, Action] = {}
     for trigger in TRIGGER_TYPES:
         if trigger not in raw:
@@ -2015,57 +1891,28 @@ def _parse_control_body(
     if not actions:
         log.error("config: %s (%r) has no valid gesture actions - skipped", where, name)
         return None
-    log_as = raw.get("log_as", "")
-    if not isinstance(log_as, str):
-        log.error("config: %s.log_as must be a string - using ''", where)
-        log_as = ""
-    defaults = ControlBehavior(actions={})
-    return_after = raw.get("return_after", defaults.return_after)
-    if not isinstance(return_after, bool):
-        log.error("config: %s.return_after must be true or false - using default", where)
-        return_after = defaults.return_after
     return ControlBehavior(
-        actions=actions, log_as=log_as, return_after=return_after
+        actions=actions,
+        log_as=_string(raw, "log_as", where, defaults.log_as),
+        return_after=_flag(raw, "return_after", where, defaults.return_after),
     )
 
 
-def _parse_alarm_body(raw: dict, where: str) -> AlarmBehavior | None:
+def _parse_alarm_body(raw: dict, where: str) -> AlarmBehavior:
     """Parse the flat alarm-template fields, each falling back per-key."""
     defaults = AlarmBehavior()
-
-    message = raw.get("message", defaults.message)
-    if not isinstance(message, str):
-        log.error("config: %s.message must be a string - using default", where)
-        message = defaults.message
-
-    label = raw.get("label", defaults.label)
-    if not isinstance(label, str):
-        log.error("config: %s.label must be a string - using default", where)
-        label = defaults.label
-
-    snooze = raw.get("snooze_minutes", defaults.snooze_minutes)
-    if not (isinstance(snooze, (int, float)) and not isinstance(snooze, bool) and snooze >= 0):
-        log.error("config: %s.snooze_minutes must be a number >= 0 - using default", where)
-        snooze = defaults.snooze_minutes
-
-    dismiss_event = raw.get("dismiss_event", defaults.dismiss_event)
-    if not isinstance(dismiss_event, str):
-        log.error("config: %s.dismiss_event must be a string - using default", where)
-        dismiss_event = defaults.dismiss_event
-
     return AlarmBehavior(
-        message=message, label=label,
-        snooze_minutes=float(snooze), dismiss_event=dismiss_event,
+        message=_string(raw, "message", where, defaults.message),
+        label=_string(raw, "label", where, defaults.label),
+        snooze_minutes=_nonneg(raw, "snooze_minutes", where, defaults.snooze_minutes),
+        dismiss_event=_string(raw, "dismiss_event", where, defaults.dismiss_event),
     )
 
 
 def _parse_ladder(raw, where: str) -> LadderSpec:
-    """One subdivision ladder, each key falling back on its own.
-
-    Same rule as `_parse_effect`: a bad rung costs you that rung, a bad tick
-    costs you the tick, and neither costs you the mode. A ladder is a *look*,
-    and losing a stopwatch over the colour of its off-beat would be wildly
-    disproportionate.
+    """One subdivision ladder, each key falling back on its own: a bad rung
+    costs you that rung, a bad tick costs you the tick, and neither costs you
+    the mode.
 
     An `enabled` ladder with no usable rungs left is turned back off rather
     than run as a base-colour-only clock: showing one flat colour and calling
@@ -2078,16 +1925,8 @@ def _parse_ladder(raw, where: str) -> LadderSpec:
         log.error("config: %s must be an object - ignored", where)
         return defaults
 
-    enabled = raw.get("enabled", defaults.enabled)
-    if not isinstance(enabled, bool):
-        log.error("config: %s.enabled must be true or false - using default", where)
-        enabled = defaults.enabled
-
-    tick = raw.get("tick_s", defaults.tick_s)
-    if not (isinstance(tick, (int, float)) and not isinstance(tick, bool) and tick > 0):
-        log.error("config: %s.tick_s must be a number > 0 - using default", where)
-        tick = defaults.tick_s
-
+    enabled = _flag(raw, "enabled", where, defaults.enabled)
+    tick = _positive(raw, "tick_s", where, defaults.tick_s)
     # _parse_color rather than a local check: it already owns normalisation
     # ('#' optional, case-folded), and a second opinion about what a colour is
     # would be a mirrored table with nothing testing the mirror.
@@ -2108,9 +1947,7 @@ def _parse_ladder(raw, where: str) -> LadderSpec:
             "config: %s has no usable rungs - the subdivision light is off", where
         )
         enabled = False
-    return LadderSpec(
-        enabled=enabled, tick_s=float(tick), base=base, rungs=rungs
-    )
+    return LadderSpec(enabled=enabled, tick_s=tick, base=base, rungs=rungs)
 
 
 def _parse_rungs(entries: list, where: str):
@@ -2121,61 +1958,33 @@ def _parse_rungs(entries: list, where: str):
             log.error("config: %s must be an object - dropped", at)
             continue
         every = entry.get("every_s")
-        if not (
-            isinstance(every, (int, float))
-            and not isinstance(every, bool)
-            and every > 0
-        ):
+        if not (_is_num(every) and every > 0):
             log.error("config: %s.every_s must be a number > 0 - dropped", at)
             continue
         # A rung with no readable colour is dropped rather than defaulted:
         # unlike `base`, there is no sensible colour to substitute, and a rung
         # silently becoming black would look exactly like the off-beat.
-        raw_color = entry.get("color")
-        color = _parse_color(raw_color, f"{at}.color", "")
+        color = _parse_color(entry.get("color"), f"{at}.color", "")
         if not color:
             continue
         yield ladder.Rung(every_s=float(every), color=color)
 
 
-def _parse_reminder_body(raw: dict, where: str) -> ReminderBehavior | None:
+def _parse_reminder_body(raw: dict, where: str) -> ReminderBehavior:
     """Parse the flat reminder-template fields, each falling back per-key."""
     defaults = ReminderBehavior()
-
-    message = raw.get("message", defaults.message)
-    if not isinstance(message, str):
-        log.error("config: %s.message must be a string - using default", where)
-        message = defaults.message
-
-    label = raw.get("label", defaults.label)
-    if not isinstance(label, str):
-        log.error("config: %s.label must be a string - using default", where)
-        label = defaults.label
-
-    chime = raw.get("chime", defaults.chime)
-    if not isinstance(chime, bool):
-        log.error("config: %s.chime must be true or false - using default", where)
-        chime = defaults.chime
-
-    cleared_event = raw.get("cleared_event", defaults.cleared_event)
-    if not isinstance(cleared_event, str):
-        log.error("config: %s.cleared_event must be a string - using default", where)
-        cleared_event = defaults.cleared_event
-
-    timeout = raw.get("timeout_minutes", defaults.timeout_minutes)
-    if not (isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout >= 0):
-        log.error(
-            "config: %s.timeout_minutes must be a number >= 0 - using default", where
-        )
-        timeout = defaults.timeout_minutes
-
     return ReminderBehavior(
-        message=message, label=label, chime=chime,
-        cleared_event=cleared_event, timeout_minutes=float(timeout),
+        message=_string(raw, "message", where, defaults.message),
+        label=_string(raw, "label", where, defaults.label),
+        chime=_flag(raw, "chime", where, defaults.chime),
+        cleared_event=_string(raw, "cleared_event", where, defaults.cleared_event),
+        timeout_minutes=_nonneg(
+            raw, "timeout_minutes", where, defaults.timeout_minutes
+        ),
     )
 
 
-def _parse_launcher_body(raw: dict, where: str) -> LauncherBehavior | None:
+def _parse_launcher_body(raw: dict, where: str) -> LauncherBehavior:
     """Parse the flat launcher fields, each falling back per-key."""
     defaults = LauncherBehavior()
 
@@ -2192,44 +2001,29 @@ def _parse_launcher_body(raw: dict, where: str) -> LauncherBehavior | None:
         log.error("config: %s.targets must be a list - offering every app", where)
         targets = defaults.targets
 
-    return_after = raw.get("return_after", defaults.return_after)
-    if not isinstance(return_after, bool):
-        log.error("config: %s.return_after must be true or false - using default", where)
-        return_after = defaults.return_after
-
-    log_as = raw.get("log_as", defaults.log_as)
-    if not isinstance(log_as, str):
-        log.error("config: %s.log_as must be a string - using default", where)
-        log_as = defaults.log_as
-
     return LauncherBehavior(
-        targets=targets, return_after=return_after, log_as=log_as
+        targets=targets,
+        return_after=_flag(raw, "return_after", where, defaults.return_after),
+        log_as=_string(raw, "log_as", where, defaults.log_as),
     )
 
 
-def _parse_stopwatch_body(raw: dict, where: str) -> StopwatchBehavior | None:
-    """Parse the flat stopwatch-template field, falling back per-key."""
+def _parse_stopwatch_body(raw: dict, where: str) -> StopwatchBehavior:
+    """Parse the flat stopwatch-template fields, falling back per-key."""
     defaults = StopwatchBehavior()
-    log_as = raw.get("log_as", defaults.log_as)
-    if not isinstance(log_as, str):
-        log.error("config: %s.log_as must be a string - using default", where)
-        log_as = defaults.log_as
     return StopwatchBehavior(
-        log_as=log_as, ladder=_parse_ladder(raw.get("ladder"), f"{where}.ladder")
+        log_as=_string(raw, "log_as", where, defaults.log_as),
+        ladder=_parse_ladder(raw.get("ladder"), f"{where}.ladder"),
     )
 
 
-def _parse_counter_body(raw: dict, where: str) -> CounterBehavior | None:
+def _parse_counter_body(raw: dict, where: str) -> CounterBehavior:
     """Parse the flat counter-template field, falling back per-key."""
     defaults = CounterBehavior()
-    event = raw.get("event", defaults.event)
-    if not isinstance(event, str):
-        log.error("config: %s.event must be a string - using default", where)
-        event = defaults.event
-    return CounterBehavior(event=event)
+    return CounterBehavior(event=_string(raw, "event", where, defaults.event))
 
 
-def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior | None:
+def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior:
     """Parse the flat pomodoro-template fields, falling back per key. A bad
     duration costs you that duration, not the whole mode."""
     defaults = PomodoroBehavior()
@@ -2239,9 +2033,7 @@ def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior | None:
 
         The legacy name is read only when the seconds one is absent, so a
         config carrying both (a hand-edit mid-migration) resolves to the
-        canonical field rather than to whichever the parser happened to try
-        second. Both are validated identically - a bad duration costs you that
-        duration, never the mode.
+        canonical field rather than to whichever the parser tried second.
         """
         seconds_key, minutes_key = f"{key}_s", f"{key}_minutes"
         if seconds_key in raw:
@@ -2250,7 +2042,7 @@ def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior | None:
             value, name, scale = raw[minutes_key], minutes_key, 60.0
         else:
             return default
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        if _is_num(value) and value > 0:
             return float(value) * scale
         log.error(
             "config: %s.%s must be a number > 0 - using %s seconds",
@@ -2258,33 +2050,14 @@ def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior | None:
         )
         return default
 
-    rounds = raw.get("rounds", defaults.rounds)
-    if not (isinstance(rounds, int) and not isinstance(rounds, bool) and rounds >= 0):
-        log.error(
-            "config: %s.rounds must be a whole number >= 0 (0 = until you leave)"
-            " - using %s", where, defaults.rounds,
-        )
-        rounds = defaults.rounds
-
-    lead_in = raw.get("lead_in_s", defaults.lead_in_s)
-    if not (
-        isinstance(lead_in, (int, float))
-        and not isinstance(lead_in, bool)
-        and lead_in >= 0
-    ):
-        log.error(
-            "config: %s.lead_in_s must be a number >= 0 - using %s",
-            where, defaults.lead_in_s,
-        )
-        lead_in = defaults.lead_in_s
-
-    blocks = raw.get("blocks_before_long_break", defaults.blocks_before_long_break)
-    if not (isinstance(blocks, int) and not isinstance(blocks, bool) and blocks > 0):
-        log.error(
-            "config: %s.blocks_before_long_break must be a whole number > 0 - using %s",
-            where, defaults.blocks_before_long_break,
-        )
-        blocks = defaults.blocks_before_long_break
+    rounds = _whole(
+        raw, "rounds", where, defaults.rounds, note=" (0 = until you leave)"
+    )
+    lead_in = _nonneg(raw, "lead_in_s", where, defaults.lead_in_s)
+    blocks = _whole(
+        raw, "blocks_before_long_break", where,
+        defaults.blocks_before_long_break, minimum=1,
+    )
 
     advance = raw.get("advance", defaults.advance)
     if not (isinstance(advance, str) and advance in POMODORO_ADVANCE):
@@ -2293,20 +2066,6 @@ def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior | None:
             where, "/".join(POMODORO_ADVANCE), defaults.advance,
         )
         advance = defaults.advance
-
-    log_as = raw.get("log_as", defaults.log_as)
-    if not (isinstance(log_as, str) and log_as):
-        log.error("config: %s.log_as must be a non-empty string - using %r",
-                  where, defaults.log_as)
-        log_as = defaults.log_as
-
-    waiting_style = raw.get("waiting_style", defaults.waiting_style)
-    if not (isinstance(waiting_style, str) and waiting_style in LED_STYLES):
-        log.error(
-            "config: %s.waiting_style must be one of %s - using %r",
-            where, "/".join(LED_STYLES), defaults.waiting_style,
-        )
-        waiting_style = defaults.waiting_style
 
     gestures = dict(defaults.gestures)
     for trigger in TRIGGER_TYPES:
@@ -2337,10 +2096,10 @@ def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior | None:
         blocks_before_long_break=blocks,
         extend_s=duration("extend", defaults.extend_s),
         rounds=rounds,
-        lead_in_s=float(lead_in),
+        lead_in_s=lead_in,
         advance=advance,
-        log_as=log_as,
-        waiting_style=waiting_style,
+        log_as=_nonempty(raw, "log_as", where, defaults.log_as),
+        waiting_style=_style(raw, "waiting_style", where, defaults.waiting_style),
         gestures=gestures,
     )
 
@@ -2350,15 +2109,8 @@ def _parse_metronome_body(raw: dict, where: str) -> MetronomeBehavior:
     tempo costs you that tempo, not the whole mode."""
     defaults = MetronomeBehavior()
 
-    def positive(key: str, default: float) -> float:
-        value = raw.get(key, default)
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-            return float(value)
-        log.error("config: %s.%s must be a number > 0 - using %s", where, key, default)
-        return default
-
-    start_bpm = positive("start_bpm", defaults.start_bpm)
-    max_bpm = positive("max_bpm", defaults.max_bpm)
+    start_bpm = _positive(raw, "start_bpm", where, defaults.start_bpm)
+    max_bpm = _positive(raw, "max_bpm", where, defaults.max_bpm)
     if start_bpm > max_bpm:
         # Not a fallback but a reconciliation: both values parsed fine, they
         # just disagree. Lifting the ceiling keeps the tempo the user actually
@@ -2369,40 +2121,19 @@ def _parse_metronome_body(raw: dict, where: str) -> MetronomeBehavior:
         )
         max_bpm = start_bpm
 
-    tap_history = raw.get("tap_history", defaults.tap_history)
-    if not (isinstance(tap_history, int) and not isinstance(tap_history, bool) and tap_history >= 2):
-        # Two taps is one interval - the least you can average anything over.
-        log.error(
-            "config: %s.tap_history must be a whole number >= 2 - using %s",
-            where, defaults.tap_history,
-        )
-        tap_history = defaults.tap_history
-
-    sound_on_tap = raw.get("sound_on_tap", defaults.sound_on_tap)
-    if not isinstance(sound_on_tap, bool):
-        log.error("config: %s.sound_on_tap must be true or false - using %s",
-                  where, defaults.sound_on_tap)
-        sound_on_tap = defaults.sound_on_tap
-
-    log_as = raw.get("log_as", defaults.log_as)
-    if not (isinstance(log_as, str) and log_as):
-        log.error("config: %s.log_as must be a non-empty string - using %r",
-                  where, defaults.log_as)
-        log_as = defaults.log_as
-
     clock_port = raw.get("clock_port", defaults.clock_port)
     if not isinstance(clock_port, str):
-        log.error("config: %s.clock_port must be a string - using tap tempo",
-                  where)
+        log.error("config: %s.clock_port must be a string - using tap tempo", where)
         clock_port = defaults.clock_port
 
     return MetronomeBehavior(
         start_bpm=start_bpm,
-        tap_history=tap_history,
-        reset_gap_s=positive("reset_gap_s", defaults.reset_gap_s),
+        # Two taps is one interval - the least you can average anything over.
+        tap_history=_whole(raw, "tap_history", where, defaults.tap_history, minimum=2),
+        reset_gap_s=_positive(raw, "reset_gap_s", where, defaults.reset_gap_s),
         max_bpm=max_bpm,
-        sound_on_tap=sound_on_tap,
-        log_as=log_as,
+        sound_on_tap=_flag(raw, "sound_on_tap", where, defaults.sound_on_tap),
+        log_as=_nonempty(raw, "log_as", where, defaults.log_as),
         clock_port=clock_port,
         ladder=_parse_ladder(raw.get("ladder"), f"{where}.ladder"),
     )
@@ -2411,49 +2142,15 @@ def _parse_metronome_body(raw: dict, where: str) -> MetronomeBehavior:
 def _parse_countdown_body(raw: dict, where: str) -> CountdownBehavior:
     """Parse the flat countdown-template fields, falling back per key."""
     defaults = CountdownBehavior()
-
-    minutes = raw.get("minutes", defaults.minutes)
-    if not (isinstance(minutes, (int, float)) and not isinstance(minutes, bool) and minutes > 0):
-        log.error("config: %s.minutes must be a number > 0 - using %s", where, defaults.minutes)
-        minutes = defaults.minutes
-
-    label = raw.get("label", defaults.label)
-    if not isinstance(label, str):
-        log.error("config: %s.label must be a string - using default", where)
-        label = defaults.label
-
-    style = raw.get("style", defaults.style)
-    if not (isinstance(style, str) and style in LED_STYLES):
-        log.error(
-            "config: %s.style must be one of %s - using %r",
-            where, "/".join(LED_STYLES), defaults.style,
-        )
-        style = defaults.style
-
-    period = raw.get("period_s", defaults.period_s)
-    if not (isinstance(period, (int, float)) and not isinstance(period, bool) and period > 0):
-        log.error("config: %s.period_s must be a number > 0 - using %s", where, defaults.period_s)
-        period = defaults.period_s
-
-    ring = raw.get("ring_on_finish", defaults.ring_on_finish)
-    if not isinstance(ring, bool):
-        log.error("config: %s.ring_on_finish must be true or false - using %s",
-                  where, defaults.ring_on_finish)
-        ring = defaults.ring_on_finish
-
-    log_as = raw.get("log_as", defaults.log_as)
-    if not (isinstance(log_as, str) and log_as):
-        log.error("config: %s.log_as must be a non-empty string - using %r",
-                  where, defaults.log_as)
-        log_as = defaults.log_as
-
-    stops = defaults.ramp
-    if "ramp" in raw:
-        stops = _parse_ramp(raw["ramp"], f"{where}.ramp", defaults.ramp)
-
     return CountdownBehavior(
-        minutes=float(minutes), label=label, style=style, period_s=float(period),
-        ramp=stops, ring_on_finish=ring, log_as=log_as,
+        minutes=_positive(raw, "minutes", where, defaults.minutes),
+        label=_string(raw, "label", where, defaults.label),
+        style=_style(raw, "style", where, defaults.style),
+        period_s=_positive(raw, "period_s", where, defaults.period_s),
+        ramp=_parse_ramp(raw["ramp"], f"{where}.ramp", defaults.ramp)
+        if "ramp" in raw else defaults.ramp,
+        ring_on_finish=_flag(raw, "ring_on_finish", where, defaults.ring_on_finish),
+        log_as=_nonempty(raw, "log_as", where, defaults.log_as),
         ladder=_parse_ladder(raw.get("ladder"), f"{where}.ladder"),
     )
 
@@ -2462,69 +2159,31 @@ def _parse_hotcold_body(raw: dict, where: str) -> HotColdBehavior:
     """Parse the flat hot/cold fields, falling back per key."""
     defaults = HotColdBehavior()
 
-    def positive(key: str, default: float) -> float:
-        value = raw.get(key, default)
-        if not (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and value > 0
-        ):
-            log.error("config: %s.%s must be a number > 0 - using %s", where, key, default)
-            return default
-        return float(value)
-
-    rounds = raw.get("rounds", defaults.rounds)
-    if not (isinstance(rounds, int) and not isinstance(rounds, bool) and rounds >= 0):
-        log.error(
-            "config: %s.rounds must be a whole number >= 0 (0 = until you leave)"
-            " - using %s", where, defaults.rounds,
-        )
-        rounds = defaults.rounds
-
-    segments = raw.get("segments", defaults.segments)
-    if not (
-        isinstance(segments, int) and not isinstance(segments, bool) and segments >= 0
-    ):
-        log.error(
-            "config: %s.segments must be a whole number >= 0 (0 = a smooth"
-            " wheel) - using %s", where, defaults.segments,
-        )
-        segments = defaults.segments
-
-    # Bounded above by 1.0 because that is *half a turn* in the normalised
-    # distance hotcold.distance returns - a tolerance of 1 already means every
-    # guess is a hit, and anything beyond it is the same game with a number
-    # that lies about how generous it is.
+    # Tolerance is bounded above by 1.0 because that is *half a turn* in the
+    # normalised distance hotcold.distance returns - a tolerance of 1 already
+    # means every guess is a hit, and anything beyond it is the same game with
+    # a number that lies about how generous it is.
     tolerance = raw.get("tolerance", defaults.tolerance)
-    if not (
-        isinstance(tolerance, (int, float))
-        and not isinstance(tolerance, bool)
-        and 0 < tolerance <= 1.0
-    ):
+    if not (_is_num(tolerance) and 0 < tolerance <= 1.0):
         log.error(
             "config: %s.tolerance must be a number > 0 and <= 1 - using %s",
             where, defaults.tolerance,
         )
         tolerance = defaults.tolerance
 
-    log_as = raw.get("log_as", defaults.log_as)
-    if not (isinstance(log_as, str) and log_as):
-        log.error("config: %s.log_as must be a non-empty string - using %r",
-                  where, defaults.log_as)
-        log_as = defaults.log_as
-
-    stops = defaults.ramp
-    if "ramp" in raw:
-        stops = _parse_ramp(raw["ramp"], f"{where}.ramp", defaults.ramp)
-
     return HotColdBehavior(
-        sweep_s=positive("sweep_s", defaults.sweep_s),
-        rounds=rounds,
-        segments=segments,
+        sweep_s=_positive(raw, "sweep_s", where, defaults.sweep_s),
+        rounds=_whole(
+            raw, "rounds", where, defaults.rounds, note=" (0 = until you leave)"
+        ),
+        segments=_whole(
+            raw, "segments", where, defaults.segments, note=" (0 = a smooth wheel)"
+        ),
         tolerance=float(tolerance),
-        reveal_s=positive("reveal_s", defaults.reveal_s),
-        log_as=log_as,
-        ramp=stops,
+        reveal_s=_positive(raw, "reveal_s", where, defaults.reveal_s),
+        log_as=_nonempty(raw, "log_as", where, defaults.log_as),
+        ramp=_parse_ramp(raw["ramp"], f"{where}.ramp", defaults.ramp)
+        if "ramp" in raw else defaults.ramp,
     )
 
 
@@ -2557,13 +2216,6 @@ def _parse_signal_body(
             if not (isinstance(name, str) and name):
                 log.error("config: %s.name must be a non-empty string - skipped", spot)
                 continue
-            style = entry.get("style", "solid")
-            if not (isinstance(style, str) and style in LED_STYLES):
-                log.error(
-                    "config: %s.style must be one of %s - using 'solid'",
-                    spot, "/".join(LED_STYLES),
-                )
-                style = "solid"
             action = None
             if entry.get("action") is not None:
                 # A broken message costs the message, not the position: a
@@ -2572,7 +2224,7 @@ def _parse_signal_body(
             states.append(SignalState(
                 name=name,
                 color=_parse_color(entry.get("color"), f"{spot}.color", "#ffffff"),
-                style=style,
+                style=_style(entry, "style", spot, "solid"),
                 action=action,
             ))
         if not states:
@@ -2582,24 +2234,17 @@ def _parse_signal_body(
             states = list(defaults.states)
 
     start_at = raw.get("start_at", defaults.start_at)
-    if not (
-        isinstance(start_at, int)
-        and not isinstance(start_at, bool)
-        and 0 <= start_at < len(states)
-    ):
+    if not (_is_whole(start_at) and 0 <= start_at < len(states)):
         log.error(
             "config: %s.start_at must be a whole number from 0 to %s - using 0",
             where, len(states) - 1,
         )
         start_at = 0
 
-    log_as = raw.get("log_as", defaults.log_as)
-    if not isinstance(log_as, str):
-        log.error("config: %s.log_as must be a string - using %r", where, defaults.log_as)
-        log_as = defaults.log_as
-
     return SignalBehavior(
-        states=tuple(states), start_at=start_at, log_as=log_as,
+        states=tuple(states),
+        start_at=start_at,
+        log_as=_string(raw, "log_as", where, defaults.log_as),
     )
 
 
@@ -2607,33 +2252,8 @@ def _parse_reaction_body(raw: dict, where: str) -> ReactionBehavior:
     """Parse the flat reaction-timer fields, falling back per key."""
     defaults = ReactionBehavior()
 
-    def positive(key: str, default: float) -> float:
-        value = raw.get(key, default)
-        if not (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and value > 0
-        ):
-            log.error("config: %s.%s must be a number > 0 - using %s", where, key, default)
-            return default
-        return float(value)
-
-    rounds = raw.get("rounds", defaults.rounds)
-    if not (isinstance(rounds, int) and not isinstance(rounds, bool) and rounds >= 0):
-        log.error(
-            "config: %s.rounds must be a whole number >= 0 (0 = until you leave)"
-            " - using %s", where, defaults.rounds,
-        )
-        rounds = defaults.rounds
-
-    log_as = raw.get("log_as", defaults.log_as)
-    if not (isinstance(log_as, str) and log_as):
-        log.error("config: %s.log_as must be a non-empty string - using %r",
-                  where, defaults.log_as)
-        log_as = defaults.log_as
-
-    minimum = positive("min_delay_s", defaults.min_delay_s)
-    maximum = positive("max_delay_s", defaults.max_delay_s)
+    minimum = _positive(raw, "min_delay_s", where, defaults.min_delay_s)
+    maximum = _positive(raw, "max_delay_s", where, defaults.max_delay_s)
     if maximum < minimum:
         # Swapped rather than rejected: the pair is obviously meant as a range,
         # and picking a delay out of an inverted one would hang on the first
@@ -2644,18 +2264,17 @@ def _parse_reaction_body(raw: dict, where: str) -> ReactionBehavior:
         )
         minimum, maximum = maximum, minimum
 
-    stops = defaults.ramp
-    if "ramp" in raw:
-        stops = _parse_ramp(raw["ramp"], f"{where}.ramp", defaults.ramp)
-
     return ReactionBehavior(
         min_delay_s=minimum,
         max_delay_s=maximum,
-        rounds=rounds,
-        slowest_ms=positive("slowest_ms", defaults.slowest_ms),
-        reveal_s=positive("reveal_s", defaults.reveal_s),
-        log_as=log_as,
-        ramp=stops,
+        rounds=_whole(
+            raw, "rounds", where, defaults.rounds, note=" (0 = until you leave)"
+        ),
+        slowest_ms=_positive(raw, "slowest_ms", where, defaults.slowest_ms),
+        reveal_s=_positive(raw, "reveal_s", where, defaults.reveal_s),
+        log_as=_nonempty(raw, "log_as", where, defaults.log_as),
+        ramp=_parse_ramp(raw["ramp"], f"{where}.ramp", defaults.ramp)
+        if "ramp" in raw else defaults.ramp,
     )
 
 

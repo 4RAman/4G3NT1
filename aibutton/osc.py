@@ -18,12 +18,9 @@ which is the same contract the LED writes have (CLAUDE.md's invariants): the
 button must never block on something at the other end of a wire. A webhook
 that hangs costs a press; an OSC send physically cannot.
 
-**If MIDI is wanted later** it is a sibling of this module and of `OscAction`,
-not a mode of them - a MIDI note does not travel over OSC and vice versa. It
-would also cost a real dependency (`python-rtmidi`) and, on Windows, a virtual
-port such as loopMIDI, because there is no built-in way to hand MIDI to
-another application. That is the trade to weigh at the time; nothing here
-prejudges it.
+**MIDI is a sibling of this module and of `OscAction`**, not a mode of them - a
+MIDI note does not travel over OSC and vice versa. See [midi.py](midi.py) and
+[midi_io.py](midi_io.py).
 """
 
 from __future__ import annotations

@@ -16,13 +16,13 @@ Timing rules
 - a burst of taps is presses less than 0.4 s apart. It emits as soon as it
   reaches `max_taps` - nothing longer is being listened for - and otherwise
   when the window closes with no further tap.
-- so at max_taps=2, the default, this is what it has always been: a double
-  tap fires the instant the second press lands, and a single tap waits out
-  the window to prove it is not a double. Worst-case latency: 0.4 s.
+- so at max_taps=2, the default: a double tap fires the instant the second
+  press lands, and a single tap waits out the window to prove it is not a
+  double. Worst-case latency: 0.4 s.
 
 `max_taps` is host state the device is told (`device.max_taps_for`), not a
-preference: counting to three costs the double tap its instant response, so
-it is paid only by a button that has a triple tap bound to something.
+preference: counting to three costs the double tap its instant response, so it
+is paid only by a button with a triple tap bound to something.
 
 Debounce (50 ms) is the firmware's job, as is calling on_timeout() at the
 deadline on_release() hands back.

@@ -7,6 +7,12 @@
  * the node (value, checked, type, className, textContent, min, …) and as
  * attributes otherwise. `children` may be a node, a string, an array, or
  * null entries (skipped).
+ *
+ * Handlers ride in `props` as `onclick`/`oninput`/`onchange` - they are
+ * properties like any other, so a control and what it does stay one
+ * expression. A handler may name the node it is attached to: the arrow runs
+ * long after the `const` is bound. Use addEventListener only where a second
+ * listener for the same event is genuinely wanted.
  */
 export function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
