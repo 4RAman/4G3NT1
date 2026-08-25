@@ -1554,7 +1554,9 @@ export function findEntryPoints(mode, allModes) {
 // rather than inviting edits with no effect. index.html renders the virtual
 // device from these same definitions.
 
-/** A rainbow's brightness, 1-100, read off the colour's brightest channel.
+/** A percentage, 1-100, read off a colour's brightest channel. Two of a
+ *  rainbow's fields ride this way - brightness in `color`, saturation in
+ *  `color2` - because neither is a hue and the bytes were going spare.
  *  0 is what "never set" looks like in an old config, and the firmware renders
  *  that as full - so the editor shows it as full too rather than as off. */
 export function levelPercent(hex) {
@@ -1569,7 +1571,7 @@ export function levelPercent(hex) {
   return Math.round((top / 255) * 100);
 }
 
-/** The grey that stores `percent` as a level. */
+/** The grey that stores `percent` as a level or a saturation. */
 export function levelHex(percent) {
   const byte = Math.max(1, Math.min(255, Math.round((percent / 100) * 255)));
   const pair = byte.toString(16).padStart(2, '0');
@@ -1633,11 +1635,13 @@ export const LED_STYLES = [
     describe: (e) => `swapping every ${e.period_s}s` },
   { type: 'fade', label: 'Fade between two colours', uses: ['color', 'color2', 'period_s'],
     describe: (e) => `crossfading every ${e.period_s}s` },
-  // `level` rather than `color`: a rainbow generates its own hues and reads
-  // the colour's brightest channel as brightness. Mirrors device.py's
-  // STYLE_USES_LEVEL; test_schema_mirror.py fails on drift.
-  { type: 'rainbow', label: 'Rainbow', uses: ['period_s', 'level'],
-    describe: (e) => `cycling every ${e.period_s}s at ${levelPercent(e.color)}%` },
+  // `level` and `saturation` rather than `color`/`color2`: a rainbow generates
+  // its own hues and reads the two colour fields as brightness and colour
+  // strength. Mirrors device.py's STYLE_USES_LEVEL / STYLE_USES_SATURATION;
+  // test_schema_mirror.py fails on drift.
+  { type: 'rainbow', label: 'Rainbow', uses: ['period_s', 'level', 'saturation'],
+    describe: (e) => `cycling every ${e.period_s}s at ${levelPercent(e.color)}%`
+      + `, ${levelPercent(e.color2)}% colour` },
 ];
 
 export const LED_STYLE_BY_TYPE = Object.fromEntries(LED_STYLES.map((s) => [s.type, s]));
@@ -1763,7 +1767,8 @@ export const LOOK_PRESETS = [
   { "id": "three-cheers", "label": "Three Cheers", "group": "Patterns", "sequence": { "repeat": false, "stops": [
     { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
     { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.2, "fade_s": 0 },
-    { "color": "#00ff2a", "hold_s": 0.9, "fade_s": 0, "style": "flash", "period_s": 0.45 } ] } },
+    { "color": "#00ff2a", "hold_s": 0.22, "fade_s": 0 }, { "color": "#000000", "hold_s": 0.22, "fade_s": 0 },
+    { "color": "#00ff2a", "hold_s": 0.46, "fade_s": 0 } ] } },
   { "id": "sunrise-run", "label": "Sunrise Run", "group": "Patterns", "sequence": { "repeat": false, "stops": [
     { "color": "#ff1a00", "hold_s": 1.1, "fade_s": 0 }, { "color": "#ffd400", "hold_s": 0.4, "fade_s": 0.7, "curve": "exponential" },
     { "color": "#00ff2a", "hold_s": 0.6, "fade_s": 0.9, "curve": "linear" } ] } },
@@ -1797,7 +1802,8 @@ export const LOOK_PRESETS = [
     { "color": "#ffb400", "hold_s": 0.5, "fade_s": 0.3, "curve": "ease_in" },
     { "color": "#241400", "hold_s": 0.3, "fade_s": 0.4, "curve": "ease_out" } ] } },
   { "id": "denied", "label": "Denied", "group": "Confirm", "sequence": { "repeat": false, "stops": [
-    { "color": "#ff0022", "hold_s": 0.9, "fade_s": 0, "style": "flash", "period_s": 0.45 } ] } },
+    { "color": "#ff0022", "hold_s": 0.22, "fade_s": 0 }, { "color": "#2a0006", "hold_s": 0.22, "fade_s": 0 },
+    { "color": "#ff0022", "hold_s": 0.46, "fade_s": 0 } ] } },
   { "id": "queued", "label": "Queued", "group": "Confirm", "sequence": { "repeat": false, "stops": [
     { "color": "#3a6bff", "hold_s": 0.3, "fade_s": 0.35, "curve": "ease_in_out" },
     { "color": "#08122e", "hold_s": 0.3, "fade_s": 0.35, "curve": "ease_in_out" } ] } },
@@ -1810,7 +1816,8 @@ export const LOOK_PRESETS = [
     { "color": "#ff0000", "hold_s": 1, "fade_s": 2, "curve": "exponential" } ] } },
   { "id": "last-minute", "label": "Last Minute", "group": "Countdown", "sequence": { "drive": "progress", "repeat": false, "stops": [
     { "color": "#0a3a1a", "hold_s": 5, "fade_s": 0 }, { "color": "#ffb400", "hold_s": 1, "fade_s": 1, "curve": "ease_in" },
-    { "color": "#ff0000", "hold_s": 1.2, "fade_s": 0.8, "curve": "exponential", "style": "flash", "period_s": 0.5 } ] } },
+    { "color": "#ff0000", "hold_s": 0.4, "fade_s": 0.8, "curve": "exponential" },
+    { "color": "#2b0000", "hold_s": 0.4, "fade_s": 0 }, { "color": "#ff0000", "hold_s": 0.4, "fade_s": 0 } ] } },
   { "id": "tea-steep", "label": "Tea Steep", "group": "Countdown", "sequence": { "drive": "progress", "repeat": false, "stops": [
     { "color": "#f2e0b0", "hold_s": 1, "fade_s": 0 }, { "color": "#b2711e", "hold_s": 3, "fade_s": 4 },
     { "color": "#5a2c00", "hold_s": 1, "fade_s": 1, "curve": "ease_out" } ] } },
@@ -1907,7 +1914,8 @@ export const LOOK_PRESETS = [
     { "color": "#ff0022", "hold_s": 0.3, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.3, "fade_s": 0 },
     { "color": "#ff0022", "hold_s": 0.3, "fade_s": 0 }, { "color": "#0a0000", "hold_s": 0.6, "fade_s": 0 } ] } },
   { "id": "fire-truck", "label": "Fire Truck", "group": "Signals", "sequence": { "repeat": true, "stops": [
-    { "color": "#ff0000", "hold_s": 0.5, "fade_s": 0, "style": "flash", "period_s": 0.5 }, { "color": "#ffffff", "hold_s": 0.5, "fade_s": 0 } ] } },
+    { "color": "#ff0000", "hold_s": 0.25, "fade_s": 0 }, { "color": "#1a0000", "hold_s": 0.25, "fade_s": 0 },
+    { "color": "#ff0000", "hold_s": 0.25, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.5, "fade_s": 0 } ] } },
   { "id": "lighthouse", "label": "Lighthouse", "group": "Signals", "sequence": { "repeat": true, "stops": [
     { "color": "#ffffff", "hold_s": 0.35, "fade_s": 0.35, "curve": "ease_in_out" },
     { "color": "#02040a", "hold_s": 2.4, "fade_s": 0.5, "curve": "ease_out" } ] } },
@@ -1973,9 +1981,11 @@ export const LOOK_PRESETS = [
     { "color": "#00d488", "hold_s": 2.5, "fade_s": 2.5, "curve": "ease_in_out" },
     { "color": "#00543a", "hold_s": 1.5, "fade_s": 2.5, "curve": "ease_in_out" } ] } },
   { "id": "work-block", "label": "Work Block", "group": "Focus", "sequence": { "repeat": true, "stops": [
-    { "color": "#00a866", "hold_s": 3, "fade_s": 0, "style": "breathe", "period_s": 6 } ] } },
+    { "color": "#00a866", "hold_s": 0.4, "fade_s": 2.6, "curve": "ease_in_out" },
+    { "color": "#00170e", "hold_s": 0.4, "fade_s": 2.6, "curve": "ease_in_out" } ] } },
   { "id": "break-block", "label": "Break Block", "group": "Focus", "sequence": { "repeat": true, "stops": [
-    { "color": "#00a8ff", "hold_s": 3, "fade_s": 0, "style": "breathe", "period_s": 4 } ] } },
+    { "color": "#00a8ff", "hold_s": 0.3, "fade_s": 1.7, "curve": "ease_in_out" },
+    { "color": "#001a29", "hold_s": 0.3, "fade_s": 1.7, "curve": "ease_in_out" } ] } },
   { "id": "dnd-pulse", "label": "Busy Pulse", "group": "Focus", "sequence": { "repeat": true, "stops": [
     { "color": "#ff0033", "hold_s": 0.8, "fade_s": 1.4, "curve": "ease_in_out" },
     { "color": "#2a0008", "hold_s": 1, "fade_s": 1.4, "curve": "ease_in_out" } ] } },
@@ -2026,8 +2036,9 @@ export const LOOK_PRESETS = [
     { "color": "#ff00ff", "hold_s": 0.25, "fade_s": 0 }, { "color": "#00ffff", "hold_s": 0.25, "fade_s": 0 },
     { "color": "#ffff00", "hold_s": 0.25, "fade_s": 0 } ] } },
   { "id": "rainbow-chase", "label": "Rainbow Chase", "group": "Play", "sequence": { "repeat": true, "stops": [
-    { "color": "#ffffff", "hold_s": 1.2, "fade_s": 0, "style": "rainbow", "period_s": 0.5 },
-    { "color": "#ffffff", "hold_s": 1.2, "fade_s": 0, "style": "rainbow", "period_s": 1.4 } ] } },
+    { "color": "#ff0000", "hold_s": 0.2, "fade_s": 0.3 }, { "color": "#ffaa00", "hold_s": 0.2, "fade_s": 0.3 },
+    { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0.3 }, { "color": "#00d5ff", "hold_s": 0.2, "fade_s": 0.3 },
+    { "color": "#3a2bff", "hold_s": 0.2, "fade_s": 0.3 }, { "color": "#ff00c8", "hold_s": 0.2, "fade_s": 0.3 } ] } },
   { "id": "candy", "label": "Candy", "group": "Play", "sequence": { "repeat": true, "stops": [
     { "color": "#ff69b4", "hold_s": 0.5, "fade_s": 0.3, "curve": "ease_in_out" },
     { "color": "#7cf0ff", "hold_s": 0.5, "fade_s": 0.3, "curve": "ease_in_out" },
@@ -2057,7 +2068,8 @@ export const LOOK_PRESETS = [
   { "id": "jackpot", "label": "Jackpot", "group": "Play", "sequence": { "repeat": false, "stops": [
     { "color": "#ffd400", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
     { "color": "#ffd400", "hold_s": 0.2, "fade_s": 0 }, { "color": "#ffffff", "hold_s": 0.2, "fade_s": 0 },
-    { "color": "#ffd400", "hold_s": 1.6, "fade_s": 0, "style": "rainbow", "period_s": 0.7 } ] } },
+    { "color": "#ff0059", "hold_s": 0.2, "fade_s": 0.2 }, { "color": "#00ff2a", "hold_s": 0.2, "fade_s": 0.2 },
+    { "color": "#00d5ff", "hold_s": 0.2, "fade_s": 0.2 }, { "color": "#ffd400", "hold_s": 0.4, "fade_s": 0.2 } ] } },
 
   { "id": "lava-flow", "label": "Lava Flow", "group": "Ambient", "sequence": { "repeat": true, "stops": [
     { "color": "#ff2200", "hold_s": 2, "fade_s": 3.5, "curve": "ease_in_out" },
@@ -2139,6 +2151,13 @@ export const LED_FIELDS = [
   // shows a hue lists 'color' - so this is a data choice, not a branch.
   { key: 'color', shows: 'level', label: 'Brightness', kind: 'level' },
   { key: 'color2', label: 'Second colour', kind: 'color' },
+  // And the same trick one field over: a rainbow has no second hue either, so
+  // `color2` carries how *saturated* the cycle is. Low is a wash of white with
+  // a hint of hue in it; 100% is the full-strength rainbow this style has
+  // always been.
+  { key: 'color2', shows: 'saturation', label: 'Colour strength', kind: 'level',
+    hint: 'Lower washes the whole cycle towards white; higher makes the hues '
+      + 'the loudest thing about it.' },
   // A slider rather than a number box, and its floor is the *configured*
   // flash limit rather than a constant, so it cannot offer a rate the parser
   // has been told to floor. Styles that do not strobe (breathe, fade, rainbow)

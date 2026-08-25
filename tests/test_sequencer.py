@@ -348,35 +348,36 @@ def test_a_curve_shapes_the_fade_it_is_on():
     assert colour_at(bent, 1.0, 0.05) == RED
 
 
-# --- a stop's own style, during its hold only (TODO 36c) --------------------
+# --- a stop is a flat colour (TODO 36e) ------------------------------------
+#
+# A stop briefly carried a style and a period of its own, so one node of a list
+# could be "flashing yellow". It went because a list that walks colours *and*
+# animates inside them is two clocks on one light, and nothing in the editor
+# could say which one you were setting. What it expressed is still expressible,
+# and these two tests are the argument: a flash is on, off, on.
 
-def test_a_stops_style_shows_during_its_hold():
-    seq = Sequence(
-        stops=(Stop(RED, hold_s=1.0, style="flash", period_s=0.5),), repeat=False
-    )
+
+def test_a_hold_shows_one_flat_colour():
+    seq = Sequence(stops=(Stop(RED, hold_s=1.0),), repeat=False)
     frame, _ = sequencer.plan_at(seq, 0.5, 0.1)
-    assert (frame.color, frame.style, frame.period_s) == (RED, "flash", 0.5)
+    assert frame == sequencer.Frame(RED)
 
 
-def test_a_fade_is_always_solid_whatever_the_stop_it_arrives_at():
-    """A flashing target half way through arriving at it would be two clocks
-    on one light - the same call `ladder_paint` makes for its ticks."""
+def test_a_flash_is_three_stops_and_reads_as_one():
+    """The replacement for a flashing hold, and it says the same thing in the
+    one vocabulary the editor can show: colours, in order, each held."""
     seq = Sequence(
-        stops=(Stop(RED, hold_s=1.0, fade_s=1.0, style="flash", period_s=0.5),),
+        stops=(Stop(RED, hold_s=0.25), Stop(BLACK, hold_s=0.25), Stop(RED, hold_s=0.25)),
         repeat=False,
     )
-    frame, _ = sequencer.plan_at(seq, 0.5, 0.1)
-    assert frame.style == "solid"
-    # ...and the style arrives with the hold, on the very next instant.
-    frame, _ = sequencer.plan_at(seq, 1.0, 0.1)
-    assert frame.style == "flash"
+    seen = [sequencer.plan_at(seq, t, 0.05)[0].color for t in (0.1, 0.35, 0.6)]
+    assert seen == [RED, BLACK, RED]
 
 
 def test_a_stop_defaults_to_a_plain_solid():
-    """Every stop written before TODO 36 means exactly this, so the defaults
-    are what keep those looks rendering identically."""
-    stop = Stop(RED)
-    assert (stop.curve, stop.style, stop.period_s) == ("linear", "solid", 1.0)
+    """Every stop written before TODO 36 means exactly this, so the default is
+    what keeps those looks rendering identically."""
+    assert Stop(RED).curve == "linear"
 
 
 # --- sample_at: the same list, driven from outside (TODO 36d) ---------------

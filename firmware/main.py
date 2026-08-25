@@ -86,10 +86,12 @@ class ButtonPeripheral:
         # an ephemeral look is something you can only be shown.
         capabilities = protocol.CAP_PALETTE | protocol.CAP_GESTURE_PARAMS
         if self.led.usable:
-            # Rainbow brightness rides with the LED: it is how this build's
-            # renderer reads an effect, so a working LED is the whole condition.
+            # Rainbow brightness and saturation ride with the LED: they are how
+            # this build's renderer reads an effect, so a working LED is the
+            # whole condition.
             capabilities |= (
-                protocol.CAP_LED | protocol.CAP_EFFECT | protocol.CAP_RAINBOW_LEVEL
+                protocol.CAP_LED | protocol.CAP_EFFECT
+                | protocol.CAP_RAINBOW_LEVEL | protocol.CAP_RAINBOW_SAT
             )
         if self.buzzer.usable:
             capabilities |= protocol.CAP_BUZZER

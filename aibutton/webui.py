@@ -64,6 +64,7 @@ from .config import (
     LedEffect,
     as_dict,
     flash_safe,
+    look_to_dict,
     parse_look_with_warnings,
     parse_with_warnings,
 )
@@ -113,6 +114,13 @@ class WebContext:
     # one (tests, and anything embedding the app), in which case the stop
     # endpoint reports that it cannot oblige rather than pretending it did.
     on_stop: object = None
+    # Shows one look on the LED now and answers with what actually went out -
+    # main.show_look. None when nothing provided one (tests, and anything
+    # embedding the app), in which case the preview endpoint pushes a plain
+    # effect straight at the device and says so for a sequence: driving a
+    # schedule needs the cancellable task and the safety gate main owns, and a
+    # second copy of either here is exactly the drift CLAUDE.md warns about.
+    show_look: object = None
     # The config as it was when this process started, kept only to answer
     # "does switching to that scene need a restart?" - see _STARTUP_ONLY.
     startup_config: AppConfig | None = None
@@ -621,11 +629,14 @@ def create_app(ctx: WebContext) -> FastAPI:
 
         A `stops` body parses through `parse_look_with_warnings`, shared with
         the named-look pool, so a broken sequence is rejected here exactly as
-        it would be on save. It does not *animate*: that needs the cancellable
-        task main.set_led owns behind `sequence_safe`, and a stateless preview
-        endpoint has nowhere to keep one without becoming a second gate. So a
-        sequence previews as its first stop's colour - enough to confirm it
-        parsed, not what it will look like playing.
+        it would be on save - and **it animates**, because the push goes
+        through `ctx.show_look`, which is main's own `set_led` and owns both
+        the cancellable task and the `sequence_safe` gate. Previewing a stop
+        list as its first colour was the honest thing this endpoint could do
+        alone, and it is not a preview of a stop list; asking main for the
+        driver it already has costs one callable rather than a second gate.
+        With no driver attached (tests, embedded) it falls back to that first
+        colour and says so in the warnings.
         """
         raw_state = body.get("state", LEDState.IDLE.value)
         try:
@@ -634,31 +645,38 @@ def create_app(ctx: WebContext) -> FastAPI:
             raise HTTPException(422, f"unknown LED state {raw_state!r}")
 
         if body.get("clear"):
-            effect, warnings = None, []
+            look, warnings = None, []
         else:
-            effect, warnings = parse_look_with_warnings(body, "look")
-            if isinstance(effect, sequencer.Sequence):
-                warnings = warnings + [
-                    "this look is a sequence; the live preview shows only "
-                    "its first stop's colour, not the animation"
-                ]
-                effect = LedEffect(style="solid", color=effect.stops[0].color)
+            look, warnings = parse_look_with_warnings(body, "look")
 
-        # A preview that could strobe past the configured limit would be a hole
-        # in the flash floor rather than a way to check it. The floored effect
-        # is what comes back, so the page reports what is on the light rather
-        # than what was asked for.
-        effect = flash_safe(effect, ctx.cm.config.min_flash_period_s)
-        ctx.device.set_led(state, effect)
-        # Mirrors the tail of main.set_led rather than calling it: that one
-        # resolves the *active mode's* look, and the point here is to assert a
-        # literal one. These fields are what the dashboard and the virtual
-        # device render from.
-        ctx.status.led_state = state.value
-        ctx.status.led_effect = effect
+        if ctx.show_look is not None:
+            # One gate, and it is main's: `set_led` floors a plain effect with
+            # `flash_safe` and a stop list with `sequence_safe`, then reports
+            # what it actually pushed. A preview that could strobe past the
+            # configured limit would be a hole in the flash floor rather than a
+            # way to check it, and answering with the floored look is what
+            # keeps this page describing the light and not the request.
+            shown = ctx.show_look(state, look)
+        else:
+            if isinstance(look, sequencer.Sequence):
+                warnings = warnings + [
+                    "nothing is attached to drive a sequence here, so this "
+                    "previews as its first stop's colour, not the animation"
+                ]
+                look = LedEffect(style="solid", color=look.stops[0].color)
+            shown = flash_safe(look, ctx.cm.config.min_flash_period_s)
+            ctx.device.set_led(state, shown)
+            # Mirrors the tail of main.set_led rather than calling it - in this
+            # configuration there is nothing to call. These fields are what the
+            # dashboard and the virtual device render from.
+            ctx.status.led_state = state.value
+            ctx.status.led_effect = shown
+
         return {
             "state": state.value,
-            "effect": _effect_dict(effect),
+            # Either shape: a sequence is a look too, and the picker summarises
+            # what came back rather than what it sent.
+            "effect": None if shown is None else look_to_dict(shown),
             "warnings": warnings,
             "connected": ctx.device.connected,
         }

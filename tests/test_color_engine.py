@@ -123,3 +123,65 @@ def test_a_preview_reports_the_state_it_is_editing():
     assert "previewState: state.key" in menu, "the Lights tab knows its state"
     mode = MODE_EDITOR_JS.read_text(encoding="utf-8")
     assert "previewState: key" in mode, "a mode page knows its state too"
+
+
+# --- one control answers one question (TODO 36f) ---------------------------
+#
+# "What does this state look like?" was asked twice on the Lights tab: once by
+# the Style dropdown and once by a separate named-look select underneath. Two
+# controls for one question is why a named look read as broken - the row went
+# on describing and previewing the palette entry while the button wore the
+# look. It is one dropdown now, and the look picker appears only inside it.
+
+
+def test_a_named_look_is_an_option_in_the_style_dropdown():
+    engine = ENGINE_JS.read_text(encoding="utf-8")
+    assert "NAMED_STYLE" in engine
+    # Never written into the effect: `__look__` is not a style, and a config
+    # carrying one would be a look nothing can render.
+    assert "const scratch = { style: wantNamed ? NAMED_STYLE : effect().style };" in engine
+
+
+def test_the_lights_tab_has_no_second_look_picker():
+    menu = MENU_JS.read_text(encoding="utf-8")
+    assert "_renderStateLookRow" not in menu, "the picker lives in the style dropdown now"
+    assert "_stateLookHandle" in menu, "and the tab supplies it as a handle"
+
+
+def test_the_head_describes_the_look_that_will_run():
+    """The swatch and the summary follow the named look, not the fallback
+    underneath it. Reporting the other layer is the whole bug this replaced."""
+    engine = ENGINE_JS.read_text(encoding="utf-8")
+    assert "const shownLook = () =>" in engine
+    assert "show(shownLook())" in engine, "and so does the preview button"
+
+
+def test_a_pool_look_cannot_name_another_pool_look():
+    """One level only, guaranteed the way `resolve_action`'s is: by nobody
+    offering the option. The Lights tab passes `namedLook` for a *state* row
+    and not for a pool row."""
+    menu = MENU_JS.read_text(encoding="utf-8")
+    pool = menu[menu.index("_renderLookEntry(name)"):menu.index("_looksUsedBy(name)")]
+    assert "namedLook" not in pool
+
+
+# --- a stop is a flat colour, and the fade is between two of them ----------
+
+
+def test_a_stop_has_no_movement_of_its_own():
+    """TODO 36e. A list that walks colours and animates inside them is two
+    clocks on one light; what the style expressed is expressible as stops."""
+    engine = ENGINE_JS.read_text(encoding="utf-8")
+    block = engine[engine.index("const STOP_FIELDS"):engine.index("const FADE_FIELDS")]
+    assert "'style'" not in block
+    assert "period_s" not in block
+
+
+def test_the_fade_is_edited_in_the_gap_it_crosses():
+    """`fade_s` still lives on the stop being arrived at - that is the data -
+    but a field called Fade inside one stop's row cannot say which two colours
+    it joins. The gap can, and names both ends."""
+    engine = ENGINE_JS.read_text(encoding="utf-8")
+    assert "const gap = (index)" in engine
+    assert "FADE_FIELDS" in engine
+    assert "sequence-gap" in engine

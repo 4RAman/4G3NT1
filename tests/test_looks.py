@@ -16,6 +16,7 @@ import json
 
 import pytest
 
+import aibutton.config
 import aibutton.main as main
 from aibutton import sequencer
 from aibutton.config import (
@@ -505,6 +506,113 @@ def test_a_mode_owned_state_cannot_be_named_globally():
     })
     assert cfg.state_looks == {}
     assert any("not one of the button's own states" in w for w in warnings), warnings
+
+
+async def test_a_named_look_on_a_system_state_reaches_the_light(tmp_path):
+    """`look_for` resolving it is not the same claim as the button wearing it,
+    and the difference is where a bug would hide: the ambient layer sets IDLE
+    with no effect argument, so the whole feature rests on `set_led` asking
+    for the state's look when it is handed none."""
+    raw = {
+        "sounds_enabled": False, "web_enabled": False,
+        "looks": {"cops": {"style": "alternate", "color": "#ff0000",
+                           "color2": "#0033ff", "period_s": 0.9}},
+        "state_looks": {"IDLE": "cops"},
+        "modes": [{"name": "Base", "template": "actions",
+                   "activation": {"type": "always"},
+                   "short_press": {"action": "log", "event": "x"}}],
+    }
+    seen = {}
+
+    async def script(device):
+        seen["idle"] = device.led_effect
+
+    await _run(tmp_path, raw, script)
+    assert seen["idle"].color == "#ff0000"
+    assert seen["idle"].style == "alternate"
+
+
+async def test_a_sequence_on_a_system_state_is_walked_not_pushed_whole(tmp_path):
+    """A stop list is a schedule, so the device never sees one: it sees the
+    solid frames the host walks it into, and it sees more than one of them."""
+    raw = {
+        "sounds_enabled": False, "web_enabled": False,
+        "looks": {"blip": {"repeat": True, "stops": [
+            {"color": "#04ff00", "hold_s": 0.2}, {"color": "#000000", "hold_s": 0.2},
+        ]}},
+        "state_looks": {"IDLE": "blip"},
+        "modes": [{"name": "Base", "template": "actions",
+                   "activation": {"type": "always"},
+                   "short_press": {"action": "log", "event": "x"}}],
+    }
+    seen = []
+
+    async def script(device):
+        for _ in range(12):
+            seen.append(device.led_effect.color)
+            await asyncio.sleep(0.05)
+
+    await _run(tmp_path, raw, script)
+    assert {"#04ff00", "#000000"} <= set(seen), seen
+
+
+async def test_changing_the_idle_look_shows_up_without_a_press(tmp_path, monkeypatch):
+    """The other half of "named looks don't work": a look is *asserted*, not
+    stored on the device like a palette entry, so a saved edit that nothing
+    re-asserts sits behind whatever is already on the light until the next
+    press. Indistinguishable from a broken feature, and reported as one.
+
+    Driven by reloading the config the way SIGHUP and the web UI's Save both
+    do - `ConfigManager.reload` - since what is being tested is the loop
+    noticing, not how the file got there.
+    """
+    cfg_path = tmp_path / "config.json"
+
+    def write(state_looks):
+        cfg_path.write_text(json.dumps({
+            "sounds_enabled": False, "web_enabled": False,
+            "database_path": str(tmp_path / "e.db"),
+            "looks": {
+                "cops": {"style": "alternate", "color": "#ff0000",
+                         "color2": "#0033ff", "period_s": 0.9},
+                "amber": {"style": "solid", "color": "#ffb400"},
+            },
+            "state_looks": state_looks,
+            "modes": [{"name": "Base", "template": "actions",
+                       "activation": {"type": "always"},
+                       "short_press": {"action": "log", "event": "x"}}],
+        }), encoding="utf-8")
+
+    # The manager main.run builds, captured on the way past - the test needs
+    # the same object the loop is reading from.
+    made = []
+    real = aibutton.config.ConfigManager
+
+    def spy(*args, **kwargs):
+        cm = real(*args, **kwargs)
+        made.append(cm)
+        return cm
+
+    monkeypatch.setattr(aibutton.config, "ConfigManager", spy)
+
+    write({"IDLE": "cops"})
+    device = MockDevice()
+    args = main._parse_args(["--no-web", "--config", str(cfg_path)])
+    task = asyncio.create_task(main.run(args, device=device))
+    try:
+        await asyncio.sleep(0.2)
+        assert device.led_effect.color == "#ff0000"
+        write({"IDLE": "amber"})
+        made[0].reload()
+        for _ in range(60):
+            await asyncio.sleep(0.05)
+            if device.led_effect.color == "#ffb400":
+                break
+        assert device.led_effect.color == "#ffb400"
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
 
 def test_state_looks_round_trip():

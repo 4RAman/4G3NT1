@@ -281,6 +281,25 @@ in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
   construction** (`api.showLook` may be absent): the offline editor has no
   device, so a colour control that required one would be the wrong seam. New
   places that need a colour mount the engine; they do not grow their own.
+- **One control answers "what does this look like", never two.** A state that
+  can wear a named look offers it as the last option in its **Style dropdown**
+  (`o.namedLook`, `__look__`), and the pool picker appears only once it is
+  chosen. It was a second select of its own, and the cost was not tidiness:
+  the row went on summarising, swatching and previewing the *palette entry*
+  while the button wore the look, so a feature that worked read as broken.
+  Whatever the control decides is what its head describes and what "Show on
+  the button" pushes — `shownLook()` is the one answer, used three times.
+  *A new way to colour something appears inside that dropdown or explains
+  why not.*
+- **A look is asserted; a palette entry is stored.** The device holds the
+  palette and re-renders it unasked, so pushing an edited palette is enough.
+  Nothing on the device holds a *look*, so an edited look has to be
+  re-asserted or the light keeps showing the old one until the next press —
+  which is indistinguishable from the edit not working, and was reported as
+  exactly that. `main`'s tick re-asserts **IDLE** when its resolved look
+  changes, alongside the palette push. IDLE alone, because it is the only
+  state the ambient layer rests in; every other state is repainted by the next
+  press anyway.
 - **The Lights tab is the button's vocabulary; a mode's colour lives on the
   mode.** IDLE/LISTENING/THINKING/SUCCESS/ERROR are edited once, globally.
   LISTENING is the one dual citizen (TODO 26): the ambient layer wears it
@@ -293,18 +312,27 @@ in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
   modular. Their palette entries **stay in config** as the invisible fallback a
   mode with no named look renders (`base_look` reads them) — only the editor
   group went away. Deleting the entries would leave such a mode with nothing.
+  The mode list shows each mode's **first owned state** as a live swatch
+  (`_modeLook`, mirroring `main.app_look`): a mode is a thing you recognise by
+  its light, and a template that owns no state gets an empty ring rather than
+  an invented colour.
+- **The named-look pool is a list; one entry is open at a time.** Every entry
+  used to be an expanded editor, which made six looks six editors and "which
+  one is Ember?" a scrolling problem. A look is identified by its light and
+  its name, so those are the line — with where it is worn, because *editing a
+  shared look changes it everywhere* and that has to be visible before the
+  edit, not after it.
 - **A stop list is the rich form; a palette entry is the fallback form.**
-  A `sequencer.Sequence` may now shape each fade (`Stop.curve`) and animate
-  each hold (`Stop.style`/`period_s`), which makes it able to express nearly
-  every look in the system — *except* the one thing that matters most: a
-  palette entry ships to the device and renders with **no host attached**, and
-  a sequence is a schedule only the host can walk. So a sequence never goes in
-  `led_palette`. The system states name one instead (`AppConfig.state_looks`),
-  and resolution runs **explicit effect → the active mode's look → the global
-  state look → None**, where None still means "the device's palette entry".
-  Both layers stay populated on purpose. *Do not "simplify" this by moving
-  sequences into the palette — that is the button going dark when the host
-  does.*
+  A `sequencer.Sequence` shapes each fade (`Stop.curve`), which makes it able
+  to express nearly every look in the system — *except* the one thing that
+  matters most: a palette entry ships to the device and renders with **no host
+  attached**, and a sequence is a schedule only the host can walk. So a
+  sequence never goes in `led_palette`. The system states name one instead
+  (`AppConfig.state_looks`), and resolution runs **explicit effect → the active
+  mode's look → the global state look → None**, where None still means "the
+  device's palette entry". Both layers stay populated on purpose. *Do not
+  "simplify" this by moving sequences into the palette — that is the button
+  going dark when the host does.*
 - **A stop list is walked or sampled, and that decides which function reads
   it.** `Sequence.drive` is `clock` (walked by `plan_at`, which returns a
   wait), `progress` or `beats` (sampled by `sample_at`, which returns none —
@@ -322,18 +350,34 @@ in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
   and a look you had to build, name and point a mode at is the most deliberate
   of the three. *A fourth colour source obeys the same ordering or explains
   why not.*
-- **A stop's style belongs to its hold, never to its fade.** A fade is always
-  plain solid interpolation between two colours; the curve decides *which*
-  colour a step lands on and the style waits for the stop it belongs to. A
-  flashing target half-way through arriving at it is two clocks on one light,
-  which is the same call `ladder_paint` already makes.
-- **`sequence_safe` floors two axes, and the one-shot exemption covers only
-  one of them.** Stop *dwells* are exempt for a one-shot of ≤3 stops (a
-  handful of transitions played once sustains nothing — the confirmation-flash
-  rule). A stop's own *style period* is floored **unconditionally**, because a
-  0.05 s flash held for two seconds is forty flashes whether the sequence
-  repeats or not. Still one call site, still `main.set_led`; `_stop_style_safe`
-  routes through `flash_safe` rather than re-deriving which styles strobe.
+- **A stop is one flat colour, and the movement is the walk between stops.**
+  A stop briefly carried its own `style`/`period_s`, so one node could be
+  "flashing yellow" (TODO 36c, removed in 36e). It went because a list that
+  walks colours *and* animates inside them is two clocks on one light and no
+  layout could say which one you were setting — and because everything it
+  expressed is expressible as more stops: a flash is on, off, on. *Resist
+  putting a rate back on a stop.* The `style`/`period_s` keys are still
+  accepted and ignored in silence — they were ours to write and ours to drop,
+  and warning about a key we put there ourselves is scolding, not a fallback.
+- **`sequence_safe` floors one axis: a stop's dwell.** `hold_s + fade_s`, at
+  half the flash period, exempt for a one-shot of ≤3 stops (a handful of
+  transitions played once sustains nothing — the confirmation-flash rule).
+  There used to be a second axis, a stop's own style period, floored
+  unconditionally because the exemption's reasoning did not reach inside a
+  single stop; stops are flat now, so the dwell is the whole floor. Spelling
+  a flash out as stops does not get round it — three stops 0.05 s apart are
+  three transitions 0.05 s apart. Still one call site, still `main.set_led`.
+- **A rainbow's two colour fields are its brightness and its saturation.**
+  Neither is a hue — a rainbow is all of them — so `color`'s brightest channel
+  is the level and `color2`'s is the colour strength, each **0 meaning full**
+  because that is what an unset field looks like in a config written before
+  the meaning existed. An addition rather than a repurpose (those bytes were
+  discarded for this style), no wire change, and a capability bit each
+  (`CAP_RAINBOW_LEVEL`, `CAP_RAINBOW_SAT`) — without one, a slider doing
+  nothing on un-reflashed firmware is indistinguishable from one that works.
+  `STYLE_USES_LEVEL` / `STYLE_USES_SATURATION` stay disjoint from
+  `STYLE_USES_COLOR` / `STYLE_USES_COLOR2`: one byte, one control, or only
+  one of them is telling the truth.
 - **A gesture holds an action or names one, and the name is resolved at use
   time.** The pool is `AppConfig.actions`; a binding that is a **bare string**
   is a reference into it (`NamedAction`). One resolver,

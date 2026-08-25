@@ -45,9 +45,9 @@ OTA_CONTROL_UUID = "f3641406-00b0-4240-ba50-05ca45bf8abc"
 
 PROTOCOL_VERSION = 1
 # Bumped on any behaviour change, wire change or not, because the version is the
-# only way to tell a flashed board from an un-flashed one. 0.6.1: a press is
-# dated at the edge rather than at the debounce (main.read_button_forever).
-FIRMWARE_VERSION = (0, 6, 1)
+# only way to tell a flashed board from an un-flashed one. 0.7.0: a rainbow
+# reads its saturation from colour2 (led.Renderer._rainbow).
+FIRMWARE_VERSION = (0, 7, 0)
 
 CAP_LED = 0x0001      # an LED came up and can be driven
 CAP_BUZZER = 0x0002   # a buzzer came up and can be driven
@@ -68,6 +68,11 @@ CAP_GESTURE_PARAMS = 0x0200  # gestures carry a parameter, and GESTURE_CONFIG is
 # anyway, because without one a slider doing nothing on un-reflashed firmware is
 # indistinguishable from a slider that worked.
 CAP_RAINBOW_LEVEL = 0x0400
+# ...and its saturation from the effect's *second* colour, the same way and for
+# the same reason: those bytes were discarded for this style, zero means full,
+# and a slider that does nothing on un-reflashed firmware has to be tellable
+# from one that works.
+CAP_RAINBOW_SAT = 0x0800
 
 DEVICE_INFO_LEN = 6
 

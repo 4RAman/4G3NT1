@@ -378,6 +378,39 @@ async def test_test_bench_validates_like_the_config_does(client, ctx):
     assert res.json()["effect"]["color"] != "not-a-colour"
 
 
+async def test_a_sequence_preview_is_handed_to_whatever_can_drive_one(client, ctx):
+    """A stop list is a schedule, so previewing one means *playing* it - which
+    needs the cancellable task and the `sequence_safe` gate main.set_led owns.
+    The endpoint asks for that driver rather than growing a second one, and a
+    sequence comes back as a sequence rather than as its first colour."""
+    shown = []
+    ctx.show_look = lambda state, look: shown.append((state, look)) or look
+    body = {"state": "SUCCESS", "repeat": False, "stops": [
+        {"color": "#00ff00", "hold_s": 0.2}, {"color": "#000000", "hold_s": 0.2},
+    ]}
+    res = await client.post("/api/dev/led", json=body)
+    assert res.status_code == 200
+    assert res.json()["warnings"] == []
+    # Answered with the whole list, not with stops[0] - the picker summarises
+    # what came back, and "solid green" is not what this look does.
+    assert len(res.json()["effect"]["stops"]) == 2
+    assert shown and shown[0][0] is LEDState.SUCCESS
+    assert len(shown[0][1].stops) == 2
+
+
+async def test_a_sequence_preview_says_so_when_nothing_can_drive_it(client, ctx):
+    """No driver attached (a test, an embedded app) is not an error: the first
+    stop's colour confirms the look parsed, and the warning says that is all
+    it is. Growing a driver here instead would be a second flash-floor gate."""
+    assert ctx.show_look is None
+    res = await client.post("/api/dev/led", json={
+        "repeat": False, "stops": [{"color": "#00ff00", "hold_s": 0.2}],
+    })
+    assert res.status_code == 200
+    assert any("first stop" in w for w in res.json()["warnings"])
+    assert res.json()["effect"]["color"] == "#00ff00"
+
+
 async def test_test_bench_rejects_an_unknown_state(client):
     res = await client.post("/api/dev/led", json={"state": "NONSENSE"})
     assert res.status_code == 422

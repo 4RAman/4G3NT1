@@ -65,52 +65,49 @@ function ledCtx(style, floor) {
 // is why it has none of LED_STYLES' machinery (sequencer.py: "a sequence is
 // not an effect").
 
-/** One row per stop: the engine's own colour field, plus the two seconds a
- *  stop knows about. Module-level like DIAGNOSTIC - pure data, no `o`. */
+/** What a stop *is*: a colour, and how long it stays once it has arrived.
+ *  Module-level like DIAGNOSTIC - pure data, no `o`.
+ *
+ *  Deliberately two fields. A stop briefly also carried a style and a period,
+ *  so one node of a list could be "flashing yellow" (TODO 36c, removed in
+ *  36e): a list that walks colours *and* animates inside them is two clocks on
+ *  one light, and no layout made it clear which one you were setting.
+ *  Everything it could say is sayable as more stops - a flash is on, off, on. */
 const STOP_FIELDS = [
   { key: 'color', label: 'Colour', kind: 'color' },
   { key: 'hold_s', label: 'Hold (s)', kind: 'number', min: 0, step: 0.05,
     hint: 'How long this colour stays once it has arrived.' },
-  { key: 'fade_s', label: 'Fade (s)', kind: 'number', min: 0, step: 0.05,
-    hint: "How long arriving here takes. 0 is a hard cut from the stop before it." },
+];
+
+/** What happens in the *gap* between two stops. Both keys live on the later
+ *  of the two - a fade belongs to the stop being arrived at - but a field
+ *  called "Fade" sitting inside a row full of that stop's own settings is the
+ *  question "between which two colours?" with no answer on screen. So they are
+ *  edited in the gap they actually occupy, and the gap says what it joins. */
+const FADE_FIELDS = [
+  { key: 'fade_s', label: 'Fade (s)', kind: 'number', min: 0, step: 0.05 },
   // The shape of that fade (TODO 36b). Basic tier, not tinker: it is the
   // difference between a colour changing and a colour *arriving*, which is
   // the whole reason the field exists.
-  { key: 'curve', label: 'Fade shape', kind: 'select',
+  { key: 'curve', label: 'Shape', kind: 'select',
     options: CURVES.map((c) => ({ value: c.value, label: c.label })),
-    hint: 'Only applies while fading. Slow start then a rush reads as a build; '
-      + 'slow finish reads as a landing.' },
-  // What the *hold* does (TODO 36c). A fade is always a plain crossfade, so
-  // this never applies mid-arrival - that would be two clocks on one light.
-  { key: 'style', label: 'Movement', kind: 'select',
-    options: LED_STYLES.map((st) => ({ value: st.type, label: st.label })),
-    hint: 'How this stop moves once it has arrived. Solid is a held colour; '
-      + 'anything else animates for as long as the stop lasts.' },
-  { key: 'period_s', label: 'Movement rate (s)', kind: 'number', min: 0.05, step: 0.05,
-    tier: 'tinker',
-    hint: 'Only used when Movement is not Solid. Floored the same way any '
-      + 'other flashing look is.' },
+    hint: 'Slow start then a rush reads as a build; slow finish reads as a landing.' },
 ];
 
-/** `STOP_FIELDS` with the Hold and Fade labels saying what their numbers
- *  actually mean under `drive`. The values are the same two keys either way -
- *  `hold_s`/`fade_s` keep the `_s` because renaming them would break every
- *  config written before drives existed - so this is a label change, and the
- *  label is the only place the unit is ever stated. */
-function stopFieldsFor(drive) {
-  if (drive === 'beats') {
-    return STOP_FIELDS.map((spec) => (
-      spec.key === 'hold_s' ? { ...spec, label: 'Hold (beats)', step: 1 }
-        : spec.key === 'fade_s' ? { ...spec, label: 'Fade (beats)', step: 1 }
-          : spec));
-  }
-  if (drive === 'progress') {
-    return STOP_FIELDS.map((spec) => (
-      spec.key === 'hold_s' ? { ...spec, label: 'Hold (share)' }
-        : spec.key === 'fade_s' ? { ...spec, label: 'Fade (share)' }
-          : spec));
-  }
-  return STOP_FIELDS;
+/** `label` with the unit `drive` actually measures in. The values are the
+ *  same two keys either way - `hold_s`/`fade_s` keep the `_s` because renaming
+ *  them would break every config written before drives existed - so this is a
+ *  label change, and the label is the only place the unit is ever stated. */
+const UNITS = { clock: 's', progress: 'share', beats: 'beats' };
+
+function unitFields(specs, drive) {
+  if (drive === 'clock') return specs;
+  const unit = UNITS[drive] || 's';
+  return specs.map((spec) => (
+    spec.key === 'hold_s' || spec.key === 'fade_s'
+      ? { ...spec, label: `${spec.label.replace(/ \(.*\)$/, '')} (${unit})`,
+        ...(drive === 'beats' ? { step: 1 } : {}) }
+      : spec));
 }
 
 /**
@@ -147,6 +144,11 @@ function sequenceFloor(floor) {
  * @param {Function} [o.onRemove]- shows a Delete button
  * @param {string}   [o.previewState] - LED state a live preview reports as
  * @param {boolean}  [o.openPresets] - start with the library expanded
+ * @param {object}   [o.namedLook] - lets this control answer "a named look"
+ *   instead of a style: `{ get, set, names, look }`. Offered where a *state*
+ *   is being coloured (the Lights tab), not where a look itself is being
+ *   edited - a pool entry that could name another pool entry would be the
+ *   one-level-only guarantee `resolve_action` gets for free, thrown away.
  * @param {boolean}  [o.allowSequence] - offer switching this look to a stop
  *   list (sequencer.Sequence). Off by default: only the named-look pool may
  *   hold a sequence - the system palette must stay effect-only, because a
@@ -168,13 +170,23 @@ export function createLookEditor(o) {
   const isSequence = () => Array.isArray(effect().stops);
 
   const refresh = () => {
+    // What the *button* will do, which is not always what this control is
+    // editing: a state wearing a named look shows that look, and the palette
+    // entry underneath it is the offline fallback. Showing the fallback here
+    // was the whole "named looks don't work" report - the runtime had it
+    // right and this line was describing the other layer.
+    //
     // Both shapes: ledPreview's colorAt and schema.js's describeEffect know
-    // stop lists now - they had to, because a pool look that is a sequence
-    // also shows up in modeEditor.js's compact swatch, well outside this
-    // control. One implementation there beats a private twin here.
-    const eff = effect();
-    applySwatch(swatch, eff);
-    summary.textContent = describeEffect(eff);
+    // stop lists - they had to, because a pool look that is a sequence also
+    // shows up in modeEditor.js's compact swatch, well outside this control.
+    const name = namedName();
+    const look = shownLook();
+    applySwatch(swatch, look);
+    summary.textContent = name
+      ? (o.namedLook.look(name)
+        ? `${name} - ${describeEffect(look)}`
+        : `${name} (missing) - falling back to ${describeEffect(look)}`)
+      : describeEffect(look);
   };
 
   // --- live preview ---------------------------------------------------
@@ -213,18 +225,161 @@ export function createLookEditor(o) {
     }
   };
 
+  // --- naming a look instead of choosing a colour -----------------------
+  // A named look is not a *style* - it is a whole other object, possibly a
+  // sequence - but it is the same question the Style dropdown already asks
+  // ("what does this state look like?"), and answering one question in two
+  // controls is what made the old separate picker read as belonging to the
+  // row below it. So it becomes the last option in that dropdown, and the
+  // pool picker appears only once it is chosen.
+  const NAMED_STYLE = '__look__';
+  // Kept locally as well as in the config because the empty pool has to be
+  // reachable: picking "a named look" with nothing to name has to leave the
+  // control in that mode saying so, rather than snapping back to a style.
+  let wantNamed = Boolean(o.namedLook && o.namedLook.get());
+
+  /** The name this state currently wears, or '' - only ever non-empty when
+   *  the caller offered the option at all. */
+  const namedName = () => (o.namedLook && wantNamed ? o.namedLook.get() || '' : '');
+
+  /** What the light will actually show: the named look when one resolves,
+   *  the edited effect otherwise (which is also what a dangling name falls
+   *  back to, exactly as `config.look_for` does). */
+  const shownLook = () => {
+    const name = namedName();
+    return (name && o.namedLook.look(name)) || effect();
+  };
+
   // --- the fields -----------------------------------------------------
 
-  const renderEffectFields = () => {
+  /** The Style dropdown, with "a named look" appended where the caller allows
+   *  one. Bound to a scratch object rather than to the effect, because
+   *  `__look__` is not a style and must never be written into one. */
+  const renderStyleField = () => {
+    const base = LED_FIELDS.find((spec) => spec.key === 'style');
+    const style = LED_STYLE_BY_TYPE[effect().style] || LED_STYLE_BY_TYPE.solid;
+    if (!o.namedLook) {
+      const field = createField(base, effect(), () => {
+        refresh();
+        o.onChange?.();
+        renderFields();  // switching style changes which fields belong here
+      }, ledCtx(style, o.floor));
+      validators.push(field.validate);
+      fields.append(field.el);
+      return;
+    }
+
+    const scratch = { style: wantNamed ? NAMED_STYLE : effect().style };
+    const spec = {
+      ...base,
+      options: [...base.options, { value: NAMED_STYLE, label: 'A named look…' }],
+      hint: 'The styles are single colours the button renders on its own. A '
+        + 'named look is one you have built and named below - it can be a whole '
+        + 'sequence, and it is what this state wears while the service is running.',
+    };
+    const field = createField(spec, scratch, () => {
+      if (scratch.style === NAMED_STYLE) {
+        wantNamed = true;
+        // Land on something rather than on an empty picker when the pool has
+        // anything in it: choosing "a named look" and getting no look is a
+        // dead end, and the picker right below makes changing it one click.
+        const first = o.namedLook.names()[0];
+        if (first && !o.namedLook.get()) o.namedLook.set(first);
+      } else {
+        wantNamed = false;
+        o.namedLook.set('');
+        effect().style = scratch.style;
+      }
+      refresh();
+      o.onChange?.();
+      renderFields();
+    }, ledCtx(style, o.floor));
+    validators.push(field.validate);
+    fields.append(field.el);
+  };
+
+  /** The pool picker plus the fallback drawer, shown only while the Style
+   *  dropdown says "a named look". */
+  const renderNamedLookFields = () => {
+    const names = o.namedLook.names();
+    const current = o.namedLook.get() || '';
+
+    const pick = el('select', {
+      className: 'inp',
+      onchange: () => {
+        o.namedLook.set(pick.value);
+        refresh();
+        o.onChange?.();
+        renderFields();
+      },
+    });
+    if (!names.length) {
+      pick.append(el('option', { value: '', textContent: '- no named looks yet -' }));
+    } else if (!current) {
+      pick.append(el('option', { value: '', textContent: '- pick one -' }));
+    }
+    // A look deleted from the pool stays selected and marked, for the reason a
+    // dangling action name does: silently falling back would change what the
+    // button does without saying so.
+    if (current && !names.includes(current)) {
+      pick.append(el('option', { value: current, textContent: `${current} (missing)` }));
+    }
+    for (const name of names) pick.append(el('option', { value: name, textContent: name }));
+    pick.value = current;
+
+    fields.append(el('label', { className: 'fld' }, [
+      el('span', { className: 'fld-label', textContent: 'Which look' }),
+      pick,
+      el('span', {
+        className: 'fld-hint', 'data-help': true,
+        textContent: names.length
+          ? 'Edit the look itself under Named looks below - every state and mode '
+            + 'pointing at it changes together, which is what naming one is for.'
+          : 'Add one under Named looks below, then come back and pick it here.',
+      }),
+    ]));
+
+    // The palette entry does not go away and that is the design (TODO 36a):
+    // it ships to the device and is what a host-less button renders, where a
+    // named look is a schedule only the service can walk. Folded away rather
+    // than deleted, because it is the second question about this state and
+    // leaving it open beside the picker is what made this tab crowded.
+    const fallback = el('div', { className: 'settings-grid' });
     const style = LED_STYLE_BY_TYPE[effect().style] || LED_STYLE_BY_TYPE.solid;
     for (const spec of LED_FIELDS) {
-      // Hide what this style ignores: a rainbow has no hue to pick.
-      if (spec.key !== 'style' && !usedBy(style, spec)) continue;
+      if (!usedBy(style, spec)) continue;
       const field = createField(spec, effect(), () => {
         refresh();
         o.onChange?.();
-        // Switching style changes which fields belong here.
-        if (spec.key === 'style') renderFields();
+      }, ledCtx(style, o.floor));
+      validators.push(field.validate);
+      fallback.append(field.el);
+    }
+    fields.append(el('details', { className: 'fallback-drawer' }, [
+      el('summary', { textContent: 'What it shows with nothing connected' }),
+      el('p', {
+        className: 'menu-hint', 'data-help': true,
+        textContent: 'The button keeps a copy of these colours and renders them '
+          + 'on its own when no service is attached. A named look cannot go there, '
+          + 'so this stays as the plain-colour version of the same idea.',
+      }),
+      fallback,
+    ]));
+  };
+
+  const renderEffectFields = () => {
+    renderStyleField();
+    if (namedName() || wantNamed) {
+      renderNamedLookFields();
+      return;
+    }
+    const style = LED_STYLE_BY_TYPE[effect().style] || LED_STYLE_BY_TYPE.solid;
+    for (const spec of LED_FIELDS) {
+      // Hide what this style ignores: a rainbow has no hue to pick.
+      if (spec.key === 'style' || !usedBy(style, spec)) continue;
+      const field = createField(spec, effect(), () => {
+        refresh();
+        o.onChange?.();
       }, ledCtx(style, o.floor));
       validators.push(field.validate);
       fields.append(field.el);
@@ -236,24 +391,21 @@ export function createLookEditor(o) {
     if (!Array.isArray(seq.stops)) seq.stops = [];
     if (typeof seq.repeat !== 'boolean') seq.repeat = true;
     if (typeof seq.drive !== 'string') seq.drive = 'clock';
-    // Fill in the keys a stop written before TODO 36 does not carry. The
-    // parser defaults all three anyway, so this changes no behaviour - but a
-    // `select` whose value is absent from its options renders *blank*, which
-    // would show every existing sequence (and every preset that leaves a
-    // default implicit) as having no fade shape and no movement at all.
-    // Normalised here, at the one place a stop list is about to be edited,
-    // rather than asking each author to spell out the defaults.
+    // Fill in the key a stop written before TODO 36b does not carry. The
+    // parser defaults it anyway, so this changes no behaviour - but a `select`
+    // whose value is absent from its options renders *blank*, which would show
+    // every existing sequence as having no fade shape at all. Normalised here,
+    // at the one place a stop list is about to be edited, rather than asking
+    // each author to spell out the default.
     for (const stop of seq.stops) {
       if (typeof stop.curve !== 'string') stop.curve = 'linear';
-      if (typeof stop.style !== 'string') stop.style = 'solid';
-      if (typeof stop.period_s !== 'number') stop.period_s = 1;
     }
 
-    // Adding, removing or reordering a stop changes which rows and which up
-    // /down buttons exist, so - like a style switch above - that gets a full
-    // rebuild rather than a targeted patch. A row's own field edits (colour,
-    // hold, fade) don't touch row count and skip this, same split as the
-    // effect fields above.
+    // Adding, removing or reordering a stop changes which rows and which gaps
+    // exist, so that gets a full rebuild rather than a targeted patch. A row's
+    // own field edits don't touch row count and skip this - except `color`,
+    // which the gap below it paints a swatch of, so the colour field asks for
+    // a repaint of the gaps rather than of everything.
     const commitStructure = () => {
       renderFields();
       refresh();
@@ -268,15 +420,70 @@ export function createLookEditor(o) {
       commitStructure();
     };
 
+    // Every gap's "from" swatch is some other stop's colour, so one repaint
+    // function serves all of them and a colour edit calls it instead of
+    // rebuilding the list.
+    const gapPainters = [];
+    const repaintGaps = () => { for (const paint of gapPainters) paint(); };
+
+    /**
+     * The gap above stop `index`: what its fade crosses, and the two fields
+     * that shape it. Named from both ends, because "Fade 0.3s" sitting in a
+     * row of that stop's own settings never said which two colours were
+     * involved - the complaint this layout exists to answer.
+     *
+     * The *first* gap is the one worth spelling out: a one-shot arrives out of
+     * black and a repeat arrives out of its own last stop, and that difference
+     * is invisible anywhere else in the editor.
+     */
+    const gap = (index) => {
+      const stop = seq.stops[index];
+      const fromSwatch = el('span', { className: 'gap-swatch' });
+      const toSwatch = el('span', { className: 'gap-swatch' });
+      const label = el('span', { className: 'gap-names' });
+
+      const paint = () => {
+        const prev = index > 0
+          ? seq.stops[index - 1].color
+          : (seq.repeat ? seq.stops[seq.stops.length - 1].color : '#000000');
+        applySwatch(fromSwatch, { style: 'solid', color: prev });
+        applySwatch(toSwatch, { style: 'solid', color: stop.color });
+        const from = index > 0
+          ? `stop ${index}`
+          : (seq.repeat ? 'the last stop, looping round' : 'off');
+        label.textContent = `${from} → stop ${index + 1}`;
+      };
+      gapPainters.push(paint);
+      paint();
+
+      const gapFields = el('div', { className: 'gap-fields' });
+      for (const spec of unitFields(FADE_FIELDS, seq.drive)) {
+        const field = createField(spec, stop, () => { refresh(); o.onChange?.(); });
+        validators.push(field.validate);
+        gapFields.append(field.el);
+      }
+      return el('div', { className: 'sequence-gap' }, [
+        el('span', { className: 'gap-label' }, [fromSwatch, label, toSwatch]),
+        gapFields,
+      ]);
+    };
+
     const rows = el('div', { className: 'sequence-rows' });
     seq.stops.forEach((stop, index) => {
       const rowFields = el('div', { className: 'sequence-row-fields' });
-      for (const spec of stopFieldsFor(seq.drive)) {
-        const field = createField(spec, stop, () => { refresh(); o.onChange?.(); });
+      for (const spec of unitFields(STOP_FIELDS, seq.drive)) {
+        const field = createField(spec, stop, () => {
+          if (spec.key === 'color') repaintGaps();
+          refresh();
+          o.onChange?.();
+        });
         validators.push(field.validate);
         rowFields.append(field.el);
       }
 
+      // The gap first, then the stop it leads into: a list you read downwards
+      // is arrive, hold, arrive, hold.
+      rows.append(gap(index));
       rows.append(el('div', { className: 'sequence-row' }, [
         el('span', { className: 'sequence-index', textContent: String(index + 1) }),
         rowFields,
@@ -300,17 +507,16 @@ export function createLookEditor(o) {
       onclick: () => {
         const last = seq.stops[seq.stops.length - 1];
         seq.stops.push({
-          color: last ? last.color : '#ffffff', hold_s: 0.5, fade_s: 0,
-          curve: 'linear', style: 'solid', period_s: 1,
+          color: last ? last.color : '#ffffff', hold_s: 0.5, fade_s: 0, curve: 'linear',
         });
         commitStructure();
       },
     });
 
     // What moves the list along (TODO 36d). A full rebuild on change, because
-    // the unit words on every row's Hold and Fade labels depend on it - the
-    // same numbers mean seconds, weights or beats depending on what is
-    // driving, and a row saying "(s)" under a beats drive would be a lie.
+    // the unit words on every Hold and Fade label depend on it - the same
+    // numbers mean seconds, weights or beats depending on what is driving, and
+    // a label saying "(s)" under a beats drive would be a lie.
     const driveField = createField(
       {
         key: 'drive', label: 'Driven by', kind: 'select',
@@ -333,25 +539,24 @@ export function createLookEditor(o) {
             + 'at the end.',
       },
       seq,
-      () => { refresh(); o.onChange?.(); },
+      // Repeat decides what the *first* gap fades out of - off for a one-shot,
+      // the last stop for a loop - so its label and swatch have to follow.
+      () => { repaintGaps(); refresh(); o.onChange?.(); },
     );
     validators.push(repeatField.validate);
 
     const floorHint = el('span', {
       className: 'menu-hint', 'data-help': true,
-      // Only the clock drive is floored on dwell, and saying so matters: under
-      // the other two the app's own rate decides how fast stops go by, so a
-      // number of seconds here would describe a limit that is not being
-      // applied. A stop's *movement* is floored under every drive, because
-      // that one is `flash_safe` and runs on every push.
+      // Only the clock drive is floored, and saying so matters: under the other
+      // two the app's own rate decides how fast stops go by, so a number of
+      // seconds here would describe a limit that is not being applied.
       textContent: seq.drive === 'clock'
         ? 'A repeating sequence, or one longer than 3 stops, cannot move faster '
-          + `than the flash safety limit: each stop's hold + fade together is floored to at `
-          + `least ${sequenceFloor(o.floor).toFixed(2)}s, the same way a fast flash or `
-          + 'alternate is slowed down. A one-shot of 3 stops or fewer is exempt.'
+          + 'than the flash safety limit: each stop\'s hold + fade together is floored '
+          + `to at least ${sequenceFloor(o.floor).toFixed(2)}s, the same way a fast flash `
+          + 'or alternate is slowed down. A one-shot of 3 stops or fewer is exempt.'
         : 'How fast stops go by is set by whatever is driving this, not by the '
-          + 'numbers here - so the usual dwell limit does not apply. A stop whose '
-          + 'Movement flashes is still slowed to the flash safety limit.',
+          + 'numbers here - so the usual dwell limit does not apply.',
     });
 
     // Caught here rather than left to `_parse_sequence`'s own fallback: that
@@ -362,8 +567,8 @@ export function createLookEditor(o) {
 
     // Drive and Repeat go *above* the stops, not below them. They are
     // properties of the whole list, and the drive decides what the Hold and
-    // Fade columns even mean - reading eighteen rows of "Hold" before finding
-    // out whether they are seconds, shares or beats is the wrong way round.
+    // Fade numbers even mean - reading eighteen rows before finding out
+    // whether they are seconds, shares or beats is the wrong way round.
     fields.append(el('div', { className: 'sequence-edit' }, [
       driveField.el, repeatField.el, rows, add, floorHint,
     ]));
@@ -385,6 +590,13 @@ export function createLookEditor(o) {
 
   const applyPreset = (preset) => {
     const target = effect();
+    // Choosing a colour out of the library is an answer to "what does this
+    // state look like", so it replaces a named look rather than being written
+    // underneath one and never seen.
+    if (o.namedLook && wantNamed) {
+      wantNamed = false;
+      o.namedLook.set('');
+    }
     // Assigned key by key rather than replaced, because callers hold a
     // reference to this object - the whole point of editing in place.
     //
@@ -501,7 +713,10 @@ export function createLookEditor(o) {
   const actions = el('div', { className: 'test-actions' });
   if (canPreview) {
     const tryIt = el('button', { type: 'button', className: 'primary', textContent: 'Show on the button' });
-    tryIt.addEventListener('click', () => show(effect()));
+    // The look that will actually run, not the fallback underneath it - see
+    // `refresh`. A preview that showed the other layer is what made a working
+    // named look read as a broken one.
+    tryIt.addEventListener('click', () => show(shownLook()));
     const stop = el('button', { type: 'button', textContent: 'Stop' });
     stop.addEventListener('click', () => show({ clear: true }));
     actions.append(tryIt, stop, status);

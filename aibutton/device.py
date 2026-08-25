@@ -112,6 +112,9 @@ CAP_GESTURE_PARAMS = 0x0200  # gestures carry a parameter; GESTURE_CONFIG is rea
 # bit despite being no wire change, because the failure without one is silent -
 # see protocol.CAP_RAINBOW_LEVEL.
 CAP_RAINBOW_LEVEL = 0x0400
+# ...and its saturation from the effect's second colour, the same encoding one
+# field over - see protocol.CAP_RAINBOW_SAT.
+CAP_RAINBOW_SAT = 0x0800
 
 CAPABILITY_NAMES = {
     CAP_LED: "led",
@@ -125,6 +128,7 @@ CAPABILITY_NAMES = {
     CAP_EFFECT: "effect",
     CAP_GESTURE_PARAMS: "gesture-params",
     CAP_RAINBOW_LEVEL: "rainbow-level",
+    CAP_RAINBOW_SAT: "rainbow-sat",
 }
 
 DEVICE_INFO_LEN = 6
@@ -299,6 +303,11 @@ STYLE_USES_COLOR2 = {"alternate", "fade"}
 # offer a brightness slider here, not a colour picker, and a mode walking a ramp
 # must know that pushing a colour into this style shows nothing.
 STYLE_USES_LEVEL = {"rainbow"}
+# ...and those that read `color2` as a *saturation* rather than a second hue.
+# Rainbow again, and the same argument: the editor has to offer a strength
+# slider here rather than a colour picker, and the two readings of `color2` must
+# never both be offered for one style.
+STYLE_USES_SATURATION = {"rainbow"}
 # There is deliberately no STYLE_USES_PERIOD: the only consumer is the editor
 # deciding which fields to show, so it is declared once on the style descriptors
 # in schema.js. A second copy here would have no reader and no drift test, and

@@ -78,7 +78,7 @@ what to do next. This is the other view.
 | Body of work | Items | State |
 |---|---|---|
 | **The colour engine** — named looks, ramps, the safety floor | 3 ✔, 4 ✔, 0b·3 ✔ | Done |
-| **The light as a language** — ladder, stop list, one primitive | 19 ✔, **36** ✔ | Done; **19c** (a repainting tick for Pomodoro) is the one thread left |
+| **The light as a language** — ladder, stop list, one primitive | 19 ✔, **36** ✔, 41 ✔ | Done; **19c** (a repainting tick for Pomodoro) is the one thread left |
 | **The gesture engine** — N taps, hold levels | 0b·2 ✔, 28 ✔ | Taps done. Hold levels need firmware — the cheap half of **29** |
 | **Composition** — hooks, session summaries | 23 ✔, **31** ✔, **32** ✔ | Done |
 | **Actions as a first-class idea** | 30a ✔, **33**, **34** | The pool shipped; the sequence and app documents are open |
@@ -679,10 +679,11 @@ pushes — the preview keeps its never-disagree-with-hardware rule, except
 that a one-shot previews looping, because a swatch that goes dark looks
 broken.
 
-**Still open on this item:** an *animated* device-side live preview —
-`/api/dev/led` previews a sequence as its first stop, static, with a
-warning saying so. Honest, but not a preview; needs a cancellable task in
-webui.py mirroring main.py's driver.
+**The animated device-side preview shipped in 41.** It needed no
+cancellable task in webui.py after all - mirroring main.py's driver there
+would have been a second flash-floor gate. `WebContext.show_look` is main's
+own `set_led`, which already owns both the task and `sequence_safe`; with no
+driver attached the endpoint still degrades to the first stop and says so.
 
 **15 and 17 are now unblocked; Simon-says (16's parked half) too.**
 
@@ -790,6 +791,52 @@ unimplemented, so there is no progress value to ramp over yet (item **29**).
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
 
+- ~~**41. The colour menus say what the button will actually do**~~ -
+  2026-08-23. Seven reports from using it, one cause under most of them: the
+  Lights tab was describing the *palette entry* while the button wore the
+  *named look*, so a working feature read as broken. The runtime was right
+  throughout (`look_for` resolved it; a test now drives it end to end).
+
+  **A named look is an option in the Style dropdown** (`__look__`), with the
+  pool picker appearing only when it is chosen and the palette entry folded
+  into a "what it shows with nothing connected" drawer beneath. That removes
+  the second select, and with it the divider that used to sit between a state
+  and its own second setting - the thing that made that setting look like it
+  belonged to the next state down. The head swatch, the summary and "Show on
+  the button" all follow `shownLook()`.
+
+  **"Show on the button" plays a sequence** instead of flashing its first
+  colour. `/api/dev/led` gained no driver of its own: `WebContext.show_look`
+  is main's `set_led`, which already owns the cancellable task and the
+  `sequence_safe` gate. With no driver attached it degrades to the first
+  colour and says so.
+
+  **A stop lost its `style`/`period_s`** (36e). Two clocks on one light, and
+  no layout could say which one you were setting; everything it expressed is
+  more stops, and the eight presets that used it were rewritten as stop lists -
+  Rainbow Chase is better for it. The keys parse and are ignored in silence.
+  `sequence_safe` is down to one axis as a result.
+
+  **The fade moved into the gap between the two colours it crosses**, named
+  from both ends - including the first gap, which is the only place the editor
+  can say that a one-shot arrives out of black and a loop out of its own last
+  stop.
+
+  **The named-look pool is a list**: swatch, name, where it is worn, and Edit /
+  Duplicate / Delete, with one editor open at a time.
+
+  **A rainbow got a saturation**, riding `color2` exactly as its brightness
+  rides `color` - no wire change, `CAP_RAINBOW_SAT`, zero means full. Needs a
+  reflash to show on hardware.
+
+  **The mode list shows each mode's colour** (`_modeLook`, mirroring
+  `main.app_look`); a template owning no LED state gets an empty ring.
+
+  **One fix was not a UI fix**: a look is *asserted*, not stored on the device
+  like a palette entry, so an edited look sat behind the old one until the next
+  press. The tick re-asserts IDLE when its resolved look changes. That rule,
+  and the rest, are in [CLAUDE.md](CLAUDE.md).
+
 - ~~**37. A `keys` action - the button types, clicks, and runs macros**~~ -
   shipped 2026-08-23, the day it was triaged. A new action, not a template: no
   protocol change, no reflash, and it joins the named-action pool and the
@@ -842,7 +889,8 @@ it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
 
 - ~~**36. One colour primitive**~~ - 2026-08-21, owed tests closed
   2026-08-22. `LOOK_PRESETS` became effect-*or*-sequence, plus `Stop.curve`, a
-  style per stop, and `drive`. **Walked versus sampled turned out to be the
+  style per stop (**removed again in 41** - it was two clocks on one light),
+  and `drive`. **Walked versus sampled turned out to be the
   real distinction, not the unit**: `plan_at` walks and returns a wait,
   `sample_at` samples and returns none. Precedence is named stop list > ladder
   > ramp. The rules are in [CLAUDE.md](CLAUDE.md).

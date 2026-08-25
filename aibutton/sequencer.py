@@ -90,23 +90,19 @@ class Stop:
     `Sequence`), which keeps a stop nameable and reorderable without carrying
     a pointer to whatever happens to precede it.
 
-    `style`/`period_s` let a stop be *animated* rather than flat - "75%
-    flashing yellow" in one node of a list (TODO 36c). Plain strings and floats
-    rather than a `config.LedEffect`, because this module is a leaf and
-    importing config would invert the dependency the whole file is shaped
-    around; main.py assembles the effect where it pushes one.
-
-    **The style applies to the hold, never to the fade.** A target that is
-    flashing half-way through arriving at it puts two clocks on one light -
-    the same reason a ladder tick renders solid.
+    **A stop is one flat colour, and a hold does not move** (TODO 36e). A stop
+    briefly carried a `style`/`period_s` of its own, so that one node of a list
+    could be "flashing yellow"; it was removed because a list that both walks
+    colours *and* animates inside them is two clocks on one light and nobody
+    could say from the editor which one they were setting. Everything it
+    expressed is expressible as more stops - a flash is on, off, on - and that
+    form is the one the editor can show you honestly.
     """
 
     color: str           # "#rrggbb", the colour this stop arrives at
     hold_s: float = 0.5  # how long it stays, once arrived
     fade_s: float = 0.0  # how long arriving takes; 0 is a hard cut
     curve: str = "linear"   # how the fade is shaped - see CURVES
-    style: str = "solid"    # how the *hold* moves; device.LED_STYLES
-    period_s: float = 1.0   # that style's period, when it has one
 
 
 # What moves a sequence along (TODO 36d):
@@ -182,16 +178,16 @@ def _fade_step(t_in_fade: float, fade_s: float, min_step_s: float) -> tuple[floa
 
 @dataclass(frozen=True)
 class Frame:
-    """What to show at one instant: a colour, and how it moves.
+    """What to show at one instant: a colour, held.
 
-    A `Frame` rather than a bare colour string because a stop may be animated
-    (`Stop.style`) - but still only ever *one* effect's worth of state, which
-    is what keeps this module free of any idea that a device exists.
+    A one-field dataclass rather than a bare string, and deliberately kept as
+    one: it is the return type of both `plan_at` and `sample_at`, and the
+    callers that pattern-match on it should not have to change shape the day a
+    frame carries something besides a colour again. `None` still means "there
+    is nothing to show", which a bare string could only have said as `""`.
     """
 
     color: str
-    style: str = "solid"
-    period_s: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -206,8 +202,6 @@ class _Span:
     from_color: str
     to_color: str
     curve: str
-    style: str
-    period_s: float
 
 
 def _spans(seq: Sequence) -> tuple[tuple[_Span, ...], float]:
@@ -220,10 +214,7 @@ def _spans(seq: Sequence) -> tuple[tuple[_Span, ...], float]:
         fade_s = max(stop.fade_s, 0.0)
         hold_s = max(stop.hold_s, 0.0)
         hold_at = t + fade_s
-        spans.append(_Span(
-            t, fade_s, hold_at, hold_s, prev, stop.color,
-            stop.curve, stop.style, stop.period_s,
-        ))
+        spans.append(_Span(t, fade_s, hold_at, hold_s, prev, stop.color, stop.curve))
         t = hold_at + hold_s
         prev = stop.color
     return tuple(spans), t
@@ -236,8 +227,8 @@ def plan_at(
 
     Returns `(frame, next_change_s)`:
       - `frame` is what to push now, or `None` if a one-shot has already
-        finished. Mid-fade it is always a plain solid at the interpolated
-        colour; during a hold it carries that stop's own style (see `Stop`).
+        finished. One flat colour either way: the interpolated one mid-fade,
+        the stop's own during its hold (see `Stop`).
       - `next_change_s` is how long the caller may wait before calling again -
         not necessarily until the colour visibly *changes* (a hold reports the
         time left in it, even though nothing moves), but long enough that
@@ -262,9 +253,8 @@ def plan_at(
 
     if seq.repeat:
         if total <= 0:
-            last = seq.stops[-1]
             return (
-                Frame(last.color, last.style, last.period_s),
+                Frame(seq.stops[-1].color),
                 (min_step_s if min_step_s > 0 else 1.0),
             )
         t = elapsed_s % total
@@ -276,24 +266,20 @@ def plan_at(
     for span in spans:
         if t < span.fade_at + span.fade_s:
             level, remaining = _fade_step(t - span.fade_at, span.fade_s, min_step_s)
-            # Solid, always: the curve shapes *which* colour this step lands on,
-            # and the stop's own style waits for the hold it belongs to.
+            # The curve shapes *which* colour this step lands on; nothing about
+            # a fade is periodic, so there is one colour to report and no rate.
             return (
                 Frame(mix(span.from_color, span.to_color, shape(span.curve, level))),
                 remaining,
             )
         if t < span.hold_at + span.hold_s:
-            return (
-                Frame(span.to_color, span.style, span.period_s),
-                (span.hold_at + span.hold_s) - t,
-            )
+            return Frame(span.to_color), (span.hold_at + span.hold_s) - t
 
     # Floating-point can land `t` exactly on `total` (a repeat's modulo, or a
     # one-shot's last hold ending in a zero-width final stop). The last stop's
     # colour is still the honest answer, nothing is left to wait for at *this*
     # elapsed time, and the next call is what advances it.
-    last = spans[-1]
-    return Frame(last.to_color, last.style, last.period_s), 0.0
+    return Frame(spans[-1].to_color), 0.0
 
 
 def span_total(seq: Sequence) -> float:
@@ -339,8 +325,7 @@ def sample_at(seq: Sequence, position: float) -> Frame | None:
         return None
     spans, total = _spans(seq)
     if total <= 0:
-        last = seq.stops[-1]
-        return Frame(last.color, last.style, last.period_s)
+        return Frame(seq.stops[-1].color)
 
     position = position % 1.0 if seq.repeat else min(max(position, 0.0), 1.0)
     t = position * total
@@ -348,13 +333,11 @@ def sample_at(seq: Sequence, position: float) -> Frame | None:
     for span in spans:
         if span.fade_s > 0 and t < span.fade_at + span.fade_s:
             level = shape(span.curve, (t - span.fade_at) / span.fade_s)
-            # Solid through a fade, exactly as `plan_at` renders one.
             return Frame(mix(span.from_color, span.to_color, level))
         if t < span.hold_at + span.hold_s:
-            return Frame(span.to_color, span.style, span.period_s)
+            return Frame(span.to_color)
 
-    last = spans[-1]
-    return Frame(last.to_color, last.style, last.period_s)
+    return Frame(spans[-1].to_color)
 
 
 # --- readout: a value played as blinks (TODO 15 and 17) --------------------

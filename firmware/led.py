@@ -393,24 +393,29 @@ class LEDController:
     async def _rainbow(self, effect):
         """Hue rotates a full turn per period.
 
-        The colour is not a *hue* here - a rainbow is all of them - but its
-        brightest channel is the **brightness**, which is the one thing about a
-        rainbow worth setting. An addition rather than a repurpose: these bytes
-        never meant anything for this style, so nothing written before can be
-        misread now.
+        Neither colour is a *hue* here - a rainbow is all of them - so the two
+        colour fields carry the two things about a rainbow worth setting: the
+        first's brightest channel is the **brightness**, the second's is the
+        **saturation**, which walks the whole cycle towards white as it drops.
+        An addition rather than a repurpose: these bytes never meant anything
+        for this style, so nothing written before can be misread now.
 
-        Zero means full, deliberately. Rainbows written before this carried
-        whatever was in the colour field, very often #000000, and a rainbow
-        rendering black is indistinguishable from the light being off - which
-        nobody configures a rainbow to do. So the one value we cannot honour is
-        the one meaning "unset", and treating it as full is what makes an
+        Zero means full for both, deliberately. Rainbows written before this
+        carried whatever was in the colour fields, very often #000000, and a
+        rainbow rendering black (or, for the second field, rendering plain
+        white) is indistinguishable from something being broken - which nobody
+        configures a rainbow to do. So the one value we cannot honour is the
+        one meaning "unset", and treating it as full is what makes an
         un-updated config render after a reflash exactly as it always did.
         """
         level = max(effect.color) / 255.0
         if level <= 0:
             level = 1.0
+        sat = max(effect.color2) / 255.0
+        if sat <= 0:
+            sat = 1.0
         start = now_s()
         while True:
             hue = ((now_s() - start) % effect.period_s) / effect.period_s
-            self._backend.set(*_hsv_to_rgb(hue, 1.0, level))
+            self._backend.set(*_hsv_to_rgb(hue, sat, level))
             await asyncio.sleep(_FRAME_S)

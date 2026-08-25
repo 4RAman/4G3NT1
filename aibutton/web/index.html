@@ -242,6 +242,15 @@
      the physical LED it is standing in for. */
   .mode-active-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
                       background: var(--green); box-shadow: 0 0 6px var(--green); }
+  /* What this mode's light does while it runs - animated by ledPreview, the
+     same painter the Lights tab uses, so the list previews the real thing.
+     Round for the same reason the active dot is: it stands for the LED. */
+  .mode-nav-swatch { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+                      background: #20262e; }
+  /* A mode with no colour of its own keeps the slot, so names still line up
+     down the column. A ring rather than a fill: nothing is lit. */
+  .mode-nav-swatch.empty { background: transparent; box-shadow: none;
+                            border: 1px solid var(--line); }
 
   .mode-detail { flex: 1; min-width: 0; }
   .mode-detail-empty { color: var(--dim); font-size: 13px; padding: 8px 0; }
@@ -280,7 +289,12 @@
   .builtin-pick { max-width: 100%; }
   .builtin-blurb { color: var(--dim); font-size: 12px; }
 
-  /* --- lights: one flat divided list, no nested boxes --- */
+  /* --- lights: one flat divided list, no nested boxes ---
+     The rule belongs to the *bottom* of a state's block. It used to sit above
+     a state's named-look row, which put the line between a state and its own
+     second setting and made that setting read as the next state's first. Every
+     control for one state is inside .palette-row now, so there is nothing left
+     for a divider to cut through. */
   .palette-row { border-bottom: 1px solid var(--line); padding: 12px 0; }
   .palette-row:first-child { padding-top: 0; }
   .palette-row:last-child { border-bottom: none; padding-bottom: 0; }
@@ -290,6 +304,11 @@
   .palette-name { font-weight: 600; }
   .palette-meaning { color: var(--dim); font-size: 12px; }
   .palette-summary { color: var(--dim); font-size: 12px; margin-left: auto; }
+  /* The offline fallback, folded away under a state that wears a named look.
+     Indented like .tpl-body so it reads as belonging to the row above it. */
+  .fallback-drawer { grid-column: 1 / -1; border-left: 2px solid var(--line);
+                     padding-left: 10px; margin-top: 4px; }
+  .fallback-drawer > summary { cursor: pointer; color: var(--dim); font-size: 12px; }
   /* Test bench: the swatches are round for the same reason the palette one
      is - they stand for the LED, not for a colour field. */
   .test-swatches { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
@@ -299,6 +318,21 @@
   .color-row { display: flex; align-items: center; gap: 8px; }
   .inp-color { width: 46px; height: 30px; padding: 2px; cursor: pointer; }
   .fld-hex { color: var(--dim); font-size: 12px; font-family: ui-monospace, monospace; }
+
+  /* --- the named-look pool: a list, with one editor open at a time ---
+     Every entry used to be a full colour editor, so six looks was six editors
+     and finding one meant scrolling past all of them. A look is identified by
+     its light and its name, so those are the line. */
+  .looks-list { display: flex; flex-direction: column; }
+  .look-entry { border-bottom: 1px solid var(--line); padding: 8px 0; }
+  .look-entry:last-child { border-bottom: none; }
+  .look-entry.open { padding-bottom: 12px; }
+  .look-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  /* The summary takes the slack so the three buttons stay right-aligned in a
+     column however long the names get. */
+  .look-line .palette-summary { margin-left: auto; }
+  .look-entry.open > .palette-row { border-bottom: none; padding: 10px 0 0 12px;
+                                    border-left: 2px solid var(--line); margin-top: 8px; }
 
   /* --- colorEngine.js: one colour, or a sequence of them --- */
   /* A two-way switch, not a select - there are exactly two shapes a look can
@@ -318,6 +352,19 @@
   .sequence-row-fields { display: flex; gap: 10px; flex-wrap: wrap; flex: 1 1 auto; }
   .sequence-row-fields .fld { min-width: 110px; }
   .sequence-row-actions { display: flex; gap: 4px; flex-shrink: 0; align-self: center; }
+  /* The gap between two stops, where the fade that crosses it is edited. Set
+     off from the rows rather than boxed with either one: the fade belongs to
+     neither stop alone, which is the fact the old in-row "Fade" field could
+     not state. */
+  .sequence-gap { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+                  padding: 4px 0 4px 22px; }
+  .gap-label { display: flex; align-items: center; gap: 6px;
+               color: var(--dim); font-size: 12px; }
+  .gap-swatch { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+                background: #20262e; }
+  .gap-names { white-space: nowrap; }
+  .gap-fields { display: flex; gap: 10px; flex-wrap: wrap; }
+  .gap-fields .fld { min-width: 100px; }
 
   /* Slider + its readout. The readout is monospace and fixed-width so the
      number does not shuffle the slider sideways while you drag it. */

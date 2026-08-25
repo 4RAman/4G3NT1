@@ -67,8 +67,9 @@ that a future phone app can reuse.
   [firmware/README.md](firmware/README.md). Developed against an ESP32-S3
   Mini; other boards are a line in `hardware.py`.
 - **Lights**: eleven device states, each with a configurable style (solid,
-  breathe, flash, alternate, fade, rainbow), colours and speed. Edited in the
-  web UI and pushed to the button live.
+  breathe, flash, alternate, fade, rainbow), colours and speed - or a *named
+  look*, which may be a whole sequence of colours the host walks through.
+  Edited in the web UI and pushed to the button live.
 - **AI**: none on the device, by design. Point the `webhook` action at
   whatever should do the thinking.
 

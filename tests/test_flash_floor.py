@@ -258,61 +258,35 @@ def test_every_strobing_style_is_a_real_style():
     assert STYLE_STROBES <= set(LED_STYLES)
 
 
-# --- the second axis, and the asymmetry in the exemption (TODO 36c) ---------
+# --- one axis, since a stop became a flat colour (TODO 36e) ----------------
 #
-# `sequence_safe` floors two different things now. A stop's *dwell* is how fast
-# one stop follows another; a stop's *style* is how fast that stop flashes on
-# its own. The one-shot exemption covers the first and deliberately not the
-# second, and these tests exist because that is the kind of asymmetry a later
-# tidy-up would "simplify" away.
+# `sequence_safe` used to floor two things: a stop's *dwell* (how fast one stop
+# follows another) and a stop's own *style period* (how fast that stop flashed
+# on its own), with the one-shot exemption deliberately covering the first and
+# not the second. Stops carry no style now, so the dwell is the whole floor -
+# and the exemption is the whole exemption.
 
-def test_a_stops_own_style_is_floored_like_any_other_flashing_look():
-    seq = Sequence(
-        stops=(Stop("#ff0000", hold_s=2.0, style="flash", period_s=0.05),),
-        repeat=True,
-    )
-    floored = sequence_safe(seq, 1 / 3)
-    assert floored.stops[0].period_s == pytest.approx(1 / 3)
-
-
-def test_the_one_shot_exemption_does_not_reach_a_stops_style():
-    """A one-shot of three stops or fewer is exempt from the *dwell* floor -
-    three quick confirmation flashes sustain nothing. A stop that is itself
-    `flash` sustains inside a single stop: 0.05s held for two seconds is forty
-    flashes, one-shot or not, so the exemption's reasoning simply does not
-    apply to it."""
-    seq = Sequence(
-        stops=(Stop("#ff0000", hold_s=2.0, style="flash", period_s=0.05),),
-        repeat=False,
-    )
-    floored = sequence_safe(seq, 1 / 3)
-    # The dwell is left alone (exempt)...
-    assert floored.stops[0].hold_s == pytest.approx(2.0)
-    # ...and the style is not.
-    assert floored.stops[0].period_s == pytest.approx(1 / 3)
+def test_a_stop_has_nothing_left_to_strobe_inside_itself():
+    """The reason the second axis went away, stated as a fact about the data:
+    there is no per-stop rate to floor, so a long hold is a long hold."""
+    stop = Stop("#ff0000", hold_s=2.0)
+    assert not hasattr(stop, "style")
+    assert not hasattr(stop, "period_s")
 
 
-def test_a_non_strobing_stop_style_is_left_alone():
-    """`breathe` travels the same distance smoothly, so a fast one reads as
-    shimmer rather than as a strobe - the same call `flash_safe` makes."""
-    seq = Sequence(
-        stops=(Stop("#ff0000", hold_s=2.0, style="breathe", period_s=0.05),),
-        repeat=True,
-    )
-    assert sequence_safe(seq, 1 / 3).stops[0].period_s == pytest.approx(0.05)
-
-
-def test_both_axes_are_floored_in_the_same_pass():
-    """One call, both properties - not two passes that could disagree about
-    which stops they touched."""
+def test_the_flash_that_used_to_be_a_stop_style_is_floored_as_dwells():
+    """Spelling that flash out as stops does not get round the floor: three
+    stops of 0.05s in a repeating list are three transitions 0.05s apart, and
+    the dwell floor is exactly the rule for that."""
     seq = Sequence(
         stops=(
-            Stop("#ff0000", hold_s=0.01, style="flash", period_s=0.05),
-            Stop("#00ff00", hold_s=0.01),
+            Stop("#ff0000", hold_s=0.05),
+            Stop("#000000", hold_s=0.05),
+            Stop("#ff0000", hold_s=0.05),
         ),
         repeat=True,
     )
     floored = sequence_safe(seq, 1 / 3)
-    assert floored.stops[0].hold_s == pytest.approx(1 / 6)
-    assert floored.stops[0].period_s == pytest.approx(1 / 3)
-    assert floored.stops[1].hold_s == pytest.approx(1 / 6)
+    assert [stop.hold_s for stop in floored.stops] == [
+        pytest.approx(1 / 6), pytest.approx(1 / 6), pytest.approx(1 / 6),
+    ]

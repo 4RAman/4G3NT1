@@ -1284,9 +1284,12 @@ def _parse_stop(raw, where: str) -> sequencer.Stop | None:
     per field. "One bad stop costs that stop" means the shape rule; a typo in
     `hold_s` costs you a number, not the stop.
 
-    `curve` (the fade's shape) and `style`/`period_s` (what the hold does)
-    default to what every stop written before they existed meant, so an old
-    config parses to exactly the sequence it always did.
+    `curve` (the fade's shape) defaults to what every stop written before it
+    existed meant, so an old config parses to exactly the sequence it always
+    did. A `style`/`period_s` left over from when a hold could animate
+    (TODO 36e) is ignored in silence rather than warned about: it is a key we
+    used to write ourselves, and shouting at a config for containing what we
+    put there is not a fallback, it is a scolding.
     """
     if isinstance(raw, str):
         return sequencer.Stop(_parse_color(raw, where, "#000000"))
@@ -1307,8 +1310,6 @@ def _parse_stop(raw, where: str) -> sequencer.Stop | None:
         hold_s=_nonneg(raw, "hold_s", where, 0.5),
         fade_s=_nonneg(raw, "fade_s", where, 0.0),
         curve=curve,
-        style=_style(raw, "style", where, "solid"),
-        period_s=_positive(raw, "period_s", where, 1.0),
     )
 
 
@@ -2632,14 +2633,11 @@ def sequence_safe(seq: sequencer.Sequence, min_period_s: float) -> sequencer.Seq
     long as something keeps it running, which is exactly the strobing-style
     case `flash_safe` already floors.
 
-    **A stop's own style is floored unconditionally, and that exemption does
-    not reach it** (TODO 36c). The exemption is an argument about
-    *transitions between stops*: play three of them once and nothing is
-    sustained. A stop that is itself `flash` sustains inside a single stop -
-    a 0.05 s flash held for two seconds is forty of them, one-shot or not -
-    so the reasoning simply does not apply, and pretending it did would put a
-    hole in the floor exactly where someone reaching for a confirmation
-    pattern would find it.
+    **One axis, since TODO 36e.** A stop used to be able to carry a strobing
+    style of its own, which the exemption above deliberately did not reach - a
+    0.05 s flash held for two seconds is forty of them, one-shot or not. Stops
+    are flat colours now, so the only thing that can move here is the walk
+    between them, and the dwell floor is the whole floor.
 
     Pure, like `flash_safe`, and enforced at the same single point: `main.
     set_led`'s Sequence branch, mirroring where `flash_safe` runs for a plain
@@ -2648,32 +2646,17 @@ def sequence_safe(seq: sequencer.Sequence, min_period_s: float) -> sequencer.Seq
     below rather than reimplemented for stops, so "which styles strobe and how
     slow is slow enough" stays one answer in one place.
     """
-    stops = tuple(_stop_style_safe(stop, min_period_s) for stop in seq.stops)
-    if seq.repeat or len(seq.stops) > 3:
-        floor = min_period_s / 2
-        stops = tuple(
-            stop if stop.hold_s + stop.fade_s >= floor
-            else replace(stop, hold_s=floor - stop.fade_s)
-            for stop in stops
-        )
+    if not (seq.repeat or len(seq.stops) > 3):
+        return seq
+    floor = min_period_s / 2
+    stops = tuple(
+        stop if stop.hold_s + stop.fade_s >= floor
+        else replace(stop, hold_s=floor - stop.fade_s)
+        for stop in seq.stops
+    )
     if stops == seq.stops:
         return seq
     return replace(seq, stops=stops)
-
-
-def _stop_style_safe(stop: sequencer.Stop, min_period_s: float) -> sequencer.Stop:
-    """One stop with its *style's* period floored - `flash_safe`'s rule,
-    applied to the effect a stop's hold renders.
-
-    Routed through `flash_safe` on a throwaway `LedEffect` rather than
-    re-deriving the test: a `Stop` is not an effect (it lives in a leaf module
-    that must not import this one), but what it means by `style` and
-    `period_s` is exactly what an effect means, so the decision belongs to the
-    function that already owns it."""
-    floored = flash_safe(LedEffect(style=stop.style, period_s=stop.period_s), min_period_s)
-    if floored.period_s == stop.period_s:
-        return stop
-    return replace(stop, period_s=floored.period_s)
 
 
 def look_for(
@@ -2934,17 +2917,22 @@ def _effect_to_dict(effect: LedEffect) -> dict:
     }
 
 
-def _look_to_dict(look: LedEffect | sequencer.Sequence) -> dict:
+def look_to_dict(look: LedEffect | sequencer.Sequence) -> dict:
     """One look-pool entry, either shape. A sequence writes back the same
     `stops`/`repeat` keys `_parse_sequence` reads, always in the object form
     (never the bare-colour shorthand `_parse_stop` also accepts) - the
-    round-trip has to be exact the way `ramp`'s does, not merely equivalent."""
+    round-trip has to be exact the way `ramp`'s does, not merely equivalent.
+
+    Public, unlike its neighbours, because the web layer answers with a look
+    too: `/api/dev/led` reports what it actually put on the light, and that may
+    be either shape. One serialiser, so the preview and the saved config can
+    never describe the same look differently."""
     if isinstance(look, sequencer.Sequence):
         return {
             "stops": [
                 {
-                    "color": stop.color, "hold_s": stop.hold_s, "fade_s": stop.fade_s,
-                    "curve": stop.curve, "style": stop.style, "period_s": stop.period_s,
+                    "color": stop.color, "hold_s": stop.hold_s,
+                    "fade_s": stop.fade_s, "curve": stop.curve,
                 }
                 for stop in look.stops
             ],
@@ -3093,7 +3081,7 @@ def as_dict(cfg: AppConfig) -> dict:
         "led_palette": {
             name: _effect_to_dict(effect) for name, effect in cfg.led_palette.items()
         },
-        "looks": {name: _look_to_dict(look) for name, look in cfg.looks.items()},
+        "looks": {name: look_to_dict(look) for name, look in cfg.looks.items()},
         "actions": {
             name: _action_to_dict(action) for name, action in cfg.actions.items()
         },

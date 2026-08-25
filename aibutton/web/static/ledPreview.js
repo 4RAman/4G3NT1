@@ -46,6 +46,15 @@ function hexToRgb(hex) {
   ];
 }
 
+/** A rainbow's brightness or saturation, 0..1, off a colour's brightest
+ *  channel. schema.js's `levelPercent` in the unit this file works in; not
+ *  imported, because that one rounds to whole percent for a readout and this
+ *  one must not quantise what it draws. */
+function levelOf(hex) {
+  const top = Math.max(...hexToRgb(hex));
+  return top > 0 ? top : 1;
+}
+
 const css = ([r, g, b]) =>
   `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
 
@@ -151,7 +160,10 @@ export function colorAt(effect, t) {
       return hexToRgb(effect.color).map((c, i) => c + (to[i] - c) * level);
     }
     case 'rainbow':
-      return hsvToRgb(phase, 1, 1);
+      // Both readings, exactly as led.py's `_rainbow` takes them: brightness
+      // off `color`, saturation off `color2`, and zero means full for each
+      // because that is what an unset field looks like in an old config.
+      return hsvToRgb(phase, levelOf(effect.color2), levelOf(effect.color));
     default: // solid
       return hexToRgb(effect.color);
   }
@@ -173,6 +185,19 @@ function frame(now) {
   }
   if (painted.size) requestAnimationFrame(frame);
   else ticking = false;
+}
+
+/** Stop animating `node` and leave its colours to CSS.
+ *
+ *  Needed because registration is otherwise for the node's lifetime: the
+ *  ticker only forgets a node that has *left* the document, so a node that is
+ *  still on screen but no longer has a look - a mode whose named look was just
+ *  cleared - would keep wearing the last colour it was given, repainted every
+ *  frame over whatever the caller set instead. */
+export function unpaint(node) {
+  painted.delete(node);
+  node.style.background = '';
+  node.style.boxShadow = '';
 }
 
 /** Start (or update) the animation on `node`. */

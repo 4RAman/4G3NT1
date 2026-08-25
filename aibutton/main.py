@@ -365,11 +365,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     sequence_task: asyncio.Task | None = None
 
     async def _drive_sequence(state: LEDState, seq: sequencer.Sequence) -> None:
-        """Walk `seq`'s planner, pushing each frame as a plain `LedEffect` -
-        never a Sequence itself, since `device.set_led` duck-types its
-        `effect` on `.style`/`.color`/`.color2`/`.period_s` (device.py). A
-        frame is solid mid-fade and wears the stop's own style during its hold
-        - `sequencer.plan_at` decides that, per CLAUDE.md.
+        """Walk `seq`'s planner, pushing each frame as a plain solid
+        `LedEffect` - never a Sequence itself, since `device.set_led`
+        duck-types its `effect` on `.style`/`.color`/`.color2`/`.period_s`
+        (device.py). Solid is the only thing a frame can be: a stop is a flat
+        colour, and the movement is the walk between them.
 
         Pushes go straight through `device.set_led`, *not* through the
         `set_led` closure above: that closure cancels this very task on every
@@ -395,15 +395,13 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 status.led_state = state.value
                 status.led_effect = None
                 return
-            effect = LedEffect(
-                style=frame.style, color=frame.color, period_s=frame.period_s
-            )
+            effect = LedEffect(style="solid", color=frame.color)
             device.set_led(state, effect)
             status.led_state = state.value
             status.led_effect = effect
             await asyncio.sleep(wait if wait and wait > 0 else _SEQUENCE_MIN_STEP_S)
 
-    def set_led(state: LEDState, effect=None) -> None:
+    def set_led(state: LEDState, effect=None):
         """Show `state`, optionally wearing a one-off `effect` instead of its
         palette entry - which is how a mode gets its own look without
         allocating a global LEDState (ROADMAP D4).
@@ -419,6 +417,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         whatever sequence task is running, whatever `state`/`effect` turn out
         to be: a sequence lasts until the next state change exactly like an
         ephemeral effect, and that includes this call wanting another one.
+
+        Returns what actually went out - the look after the safety floor, or
+        None for "the device's own palette entry". Callers may ignore it; the
+        one that does not is `show_look` below, which has to *report* what the
+        light is doing and must not re-derive it from the floor a second time.
         """
         nonlocal sequence_task
         if sequence_task is not None:
@@ -451,7 +454,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             # synchronously - set_led stays non-blocking either way. The state
             # is already known, though, so the status line need not wait.
             status.led_state = state.value
-            return
+            return floored
 
         # The one gate every pushed look passes through, which is why the floor
         # lives here rather than in each run_* loop: a mode computing its own
@@ -462,6 +465,27 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         device.set_led(state, effect)
         status.led_state = state.value
         status.led_effect = effect
+        return effect
+
+    def show_look(state: LEDState, look):
+        """Show one look now on behalf of the web UI's colour pickers, and
+        answer with what actually went out.
+
+        A thin wrapper rather than the endpoint calling `device.set_led`
+        itself, and the thinness is the point: a stop list is a *schedule*, so
+        previewing one needs the cancellable task and the `sequence_safe` gate
+        that only this closure owns. The endpoint used to have neither, which
+        is why "Show on the button" could only ever flash a sequence's first
+        colour - the one thing about a sequence that is not the sequence.
+
+        `look=None` means "back to the configured colours", which is already
+        what `set_led` does with no effect: it re-resolves the state's own
+        look, cancelling any preview still playing.
+
+        **Assumes the host is awake and connected**, like everything else that
+        drives the light from here (CLAUDE.md).
+        """
+        return set_led(state, look)
 
     def push_palette(palette: dict) -> None:
         """Send the stored palette, floored. Separate from `set_led` because
@@ -520,9 +544,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         `sequence_safe` is deliberately *not* applied here: its dwell floor
         asks how fast one stop follows another, which for a sampled sequence is
         decided by how fast the app's number moves and not by the stops at all
-        - a countdown steps once a second whatever its stop list says. The half
-        that still applies, a stop's own strobing style, is `flash_safe`'s job
-        inside `set_led`.
+        - a countdown steps once a second whatever its stop list says.
         """
         shown: sequencer.Frame | None = None
 
@@ -531,17 +553,12 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             frame = sequencer.sample_at(seq, fraction)
             if frame is None:
                 return
-            if (
-                shown is not None
-                and shown.style == frame.style
-                and shown.period_s == frame.period_s
-                and not ramp.differs(shown.color, frame.color, _COUNTDOWN_COLOR_STEP)
+            if shown is not None and not ramp.differs(
+                shown.color, frame.color, _COUNTDOWN_COLOR_STEP
             ):
                 return
             shown = frame
-            set_led(state, LedEffect(
-                style=frame.style, color=frame.color, period_s=frame.period_s,
-            ))
+            set_led(state, LedEffect(style="solid", color=frame.color))
 
         return paint
 
@@ -622,6 +639,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 # The endpoint runs on this loop, so setting the event
                 # directly is safe and needs no thread hop.
                 on_stop=stop.set,
+                # The one way in to the light from the web UI. Handed over as
+                # a callable so webui never imports main (dependency
+                # inversion) and never becomes a second flash-floor gate.
+                show_look=show_look,
                 # Frozen here so the scene endpoints can say which changes are
                 # waiting on a restart: the store, the lock, the web bind and
                 # the BLE name were all decided above.
@@ -2304,6 +2325,19 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     # SIGHUP) replaces cm.config wholesale, so the tick below notices and
     # re-sends - which is why a colour picker updates the real LED live.
     pushed_palette = cm.config.led_palette
+    # The look IDLE was last *shown* wearing, for the same reason and the layer
+    # above it: a state may name a look now (TODO 36a), and a named look is
+    # resolved when it is asserted rather than pushed like the palette. Without
+    # this, editing IDLE's look and saving changed nothing anybody could see
+    # until the next press - which is indistinguishable from the feature not
+    # working, and was reported as exactly that.
+    #
+    # IDLE alone, deliberately. It is the only state the ambient layer *rests*
+    # in, so it is the only one an edit can sit in front of; the rest are
+    # transient and get repainted by the very next press. Reaching this line
+    # also means no takeover owns the button - a takeover is awaited inside
+    # `handle` and this loop is not running while one is.
+    shown_idle_look = look_for(cm.config, None, LEDState.IDLE)
     # Nothing inside one iteration may end the service. handle() and the
     # takeover loops guard their own bodies; this is the backstop for the rest
     # of an iteration - the store, the scheduler scan, the palette push -
@@ -2339,6 +2373,14 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                     pushed_palette = cm.config.led_palette
                     push_palette(pushed_palette)
                     log.info("LED palette changed - pushed to the device")
+                # The layer above the palette, hot-reloaded the same way: an
+                # asserted look has to be re-asserted, since nothing on the
+                # device is holding a copy of it to re-render.
+                if (idle_look := look_for(cm.config, None, LEDState.IDLE)) != shown_idle_look:
+                    shown_idle_look = idle_look
+                    if status.led_state == LEDState.IDLE.value:
+                        set_led(LEDState.IDLE)
+                        log.info("the idle look changed - shown now")
                 # Binding (or unbinding) a long tap changes how far the device
                 # counts, so this rides the same hot-reload path the palette
                 # does rather than waiting for a restart.

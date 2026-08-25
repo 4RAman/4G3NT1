@@ -8,13 +8,15 @@
 import { el, clear } from './dom.js';
 import { ConfigApi } from './api.js';
 import {
-  ACTIONS, ACTION_BY_TYPE, BUILTIN_MODES, GESTURES, SYSTEM_LED_STATES,
-  MODE_GROUPS, SETTINGS_GROUPS, TEMPLATE_BY_TYPE, describeAction, describeTemplate,
+  ACTIONS, ACTION_BY_TYPE, BUILTIN_MODES, GESTURES, LED_STATE_BY_KEY,
+  SYSTEM_LED_STATES, MODE_GROUPS, SETTINGS_GROUPS, TEMPLATE_BY_TYPE,
+  describeAction, describeEffect, describeTemplate,
 } from './schema.js';
 import { ModeEditor } from './modeEditor.js';
 import { SceneBar } from './scenes.js';
 import { createField } from './widgets.js';
 import { createLookEditor } from './colorEngine.js';
+import { paint as applySwatch, unpaint } from './ledPreview.js';
 
 export class ConfigMenu {
   /** @param {{modes: Element, lights: Element, device: Element, bar: Element, scenes?: Element}} mounts */
@@ -24,6 +26,10 @@ export class ConfigMenu {
     this.model = null; // working copy of the effective config
     this.dirty = false;
     this.selectedMode = null; // the mode object shown in the detail pane
+    // Which named look has its editor open, if any. One at a time: the pool
+    // is a list you scan, and every entry expanded at once is the state this
+    // replaced.
+    this._expandedLook = null;
     // The scene bar lives outside the tabs and outlives a re-render: a scene
     // spans modes, lights and settings, so rebuilding it per tab render would
     // be both wasteful and a flicker on every keystroke-driven redraw.
@@ -227,15 +233,57 @@ export class ConfigMenu {
         const dot = el('span', { className: 'mode-active-dot', hidden: true });
         const nameEl = el('span', { className: 'mode-nav-name', textContent: mode.name || '(unnamed)' });
         const summaryEl = el('span', { className: 'mode-nav-summary', textContent: describeTemplate(mode) });
-        this.navButtons.set(mode, { dot, nameEl, summaryEl });
+        const swatch = el('span', { className: 'mode-nav-swatch' });
+        const repaint = () => {
+          const look = this._modeLook(mode);
+          swatch.classList.toggle('empty', !look);
+          swatch.title = look
+            ? `While it is running: ${describeEffect(look)}`
+            : "No colour of its own - it runs the button's own lights.";
+          // Unregistered explicitly, not just restyled: the ticker only
+          // forgets a node that has left the document, so a mode that just
+          // lost its look would keep being repainted in it.
+          if (look) applySwatch(swatch, look);
+          else unpaint(swatch);
+        };
+        repaint();
+        this.navButtons.set(mode, { dot, nameEl, summaryEl, repaint });
         groupEl.append(el('button', {
           type: 'button',
           className: 'mode-nav-item' + (mode === this.selectedMode ? ' selected' : ''),
           onclick: () => this._renderModes(mode),
-        }, [dot, nameEl, summaryEl]));
+        }, [dot, swatch, nameEl, summaryEl]));
       }
       this.modeNavEl.append(groupEl);
     }
+  }
+
+  /**
+   * The colour a mode runs in, or null if it has none of its own.
+   *
+   * **Mirrors `main.app_look`** - the resolution a launcher already does to
+   * paint the app it is about to offer: the template's first LED state, the
+   * mode's named look for it, falling back to that state's palette entry. Same
+   * answer here as on the button, which is the whole point of showing it.
+   *
+   * Null for a template that owns no LED state at all (an everyday actions
+   * mode, a launcher, hot/cold, a signal): those wear the button's own
+   * vocabulary or compute every frame, so there is no one colour to show and
+   * inventing one would be worse than the gap.
+   */
+  _modeLook(mode) {
+    const states = TEMPLATE_BY_TYPE[mode.template]?.ledStates || [];
+    if (!states.length) return null;
+    const named = mode.looks?.[states[0]];
+    return (named && this.model.looks?.[named])
+      || this.model.led_palette?.[states[0]]
+      || null;
+  }
+
+  /** Repaint every nav swatch. Called when a *pool* look changes, since that
+   *  is an edit on another tab that several modes may be wearing. */
+  _repaintNavSwatches() {
+    for (const [, entry] of this.navButtons || []) entry.repaint?.();
   }
 
   _renderModeDetail() {
@@ -255,6 +303,7 @@ export class ConfigMenu {
         if (entry) {
           entry.nameEl.textContent = mode.name || '(unnamed)';
           entry.summaryEl.textContent = describeTemplate(mode);
+          entry.repaint();
         }
       },
       onRemove: () => {
@@ -282,6 +331,7 @@ export class ConfigMenu {
       addLook: (name, effect) => this._addLook(name, effect),
       onLooksChanged: () => {
         this._renderLooks();
+        this._repaintNavSwatches();
         this._markDirty();
       },
     });
@@ -354,11 +404,10 @@ export class ConfigMenu {
   _renderPaletteSection() {
     if (!this.model.led_palette) this.model.led_palette = {};
     if (!this.model.looks) this.model.looks = {};
+    // Reset with the section, not appended to: these close over elements that
+    // are about to be thrown away, and keeping the old ones would collect a
+    // validator per re-render for nodes nobody can see.
     this.paletteValidators = [];
-    // Reset with the section, not appended to: these close over `pick`
-    // elements that are about to be thrown away, and keeping the old ones
-    // would leak a refresh per re-render onto detached nodes.
-    this.stateLookRefreshers = [];
 
     const group = (states) => {
       const wrap = el('div', { className: 'palette-wrap' });
@@ -369,13 +418,17 @@ export class ConfigMenu {
           label: state.label,
           meaning: state.meaning,
           previewState: state.key,
+          // What makes "a named look" an option in this row's Style dropdown
+          // (TODO 36f). Handed in rather than reached for, so the engine never
+          // learns where a state look is stored - the same seam the pool and
+          // the mode editor already use.
+          namedLook: this._stateLookHandle(state),
         }));
-        wrap.append(this._renderStateLookRow(state));
       }
       return wrap;
     };
 
-    this.looksWrap = el('div', { className: 'palette-wrap' });
+    this.looksWrap = el('div', { className: 'palette-wrap looks-list' });
     this._renderLooks();
 
     const add = el('button', {
@@ -384,6 +437,7 @@ export class ConfigMenu {
         let name = 'look';
         for (let n = 2; this.model.looks[name]; n += 1) name = `look ${n}`;
         this.model.looks[name] = { style: 'breathe', color: '#ff8800', color2: '#000000', period_s: 2 };
+        this._expandedLook = name;
         this._renderLooks();
         this._markDirty();
       },
@@ -397,10 +451,33 @@ export class ConfigMenu {
       el('p', { className: 'menu-hint', 'data-help': true, textContent: "The button's own vocabulary - what it looks like when it is idle, listening, thinking, or reporting a result. Saving sends these straight to the device: no reflash, no restart." }),
       group(SYSTEM_LED_STATES),
       el('h3', { className: 'palette-group', textContent: 'Named looks' }),
-      el('p', { className: 'menu-hint', 'data-help': true, textContent: 'A shared pool of appearances. Name one here and any mode can wear it, or make one straight from a mode - this is where they all end up either way.' }),
+      el('p', { className: 'menu-hint', 'data-help': true, textContent: 'A shared pool of appearances. Name one here and any mode - or any of the states above - can wear it, or make one straight from a mode. This is where they all end up either way.' }),
       this.looksWrap,
       add,
     ]);
+  }
+
+  /**
+   * How one system state names a look, as the four calls colorEngine needs.
+   *
+   * **The palette entry underneath does not go away, and that is the design**
+   * (TODO 36a) - CLAUDE.md's "a stop list is the rich form; a palette entry is
+   * the fallback form". The engine folds it into a drawer rather than dropping
+   * it, which is what lets one row answer both "what does this state look
+   * like" and "what does it look like with nothing connected".
+   */
+  _stateLookHandle(state) {
+    return {
+      get: () => (this.model.state_looks || {})[state.key] || '',
+      set: (name) => {
+        if (!this.model.state_looks) this.model.state_looks = {};
+        if (name) this.model.state_looks[state.key] = name;
+        else delete this.model.state_looks[state.key];
+        this._markDirty();
+      },
+      names: () => Object.keys(this.model.looks || {}).sort(),
+      look: (name) => (this.model.looks || {})[name],
+    };
   }
 
   /** Put `effect` in the pool under a free name derived from `name`, and
@@ -418,108 +495,130 @@ export class ConfigMenu {
     return chosen;
   }
 
+  /**
+   * The pool as a *list*: one line each, and the colour editor only for the
+   * one being edited.
+   *
+   * Every entry used to be expanded at once, which made a pool of six looks a
+   * page of six full colour editors and turned "which one is Ember?" into a
+   * scrolling problem. A named look is identified by its name and its light,
+   * so those are the line - the editing is a click away, and only one is open
+   * at a time because two open editors is the state this replaced.
+   */
   _renderLooks() {
-    // The system states' look pickers list this pool, so adding, renaming or
-    // deleting an entry has to reach them - they are rendered in a different
-    // section and would otherwise keep offering a list that is one edit old.
-    for (const refresh of this.stateLookRefreshers || []) refresh();
     clear(this.looksWrap);
     const names = Object.keys(this.model.looks).sort();
     if (!names.length) {
       this.looksWrap.append(el('p', { className: 'menu-hint', textContent: 'No named looks yet.' }));
       return;
     }
-    for (const name of names) {
-      this.looksWrap.append(this._renderEffectRow({
-        get: () => this.model.looks[name],
-        label: name,
-        meaning: '',
-        // Pool looks may be stop lists; palette entries may not (they ship
-        // to the device), which is why the flag is here and not in the
-        // palette section's spec above.
-        allowSequence: true,
-        // Renaming rewrites every mode pointing here, so the pool and the
-        // references can never drift into a dangling name from the UI.
-        rename: (next) => {
-          if (!next || next === name || this.model.looks[next]) return false;
-          this.model.looks[next] = this.model.looks[name];
-          delete this.model.looks[name];
-          for (const mode of this.model.modes || []) {
-            for (const [state, look] of Object.entries(mode.looks || {})) {
-              if (look === name) mode.looks[state] = next;
-            }
-          }
-          // The button's own states name looks too (TODO 36a), and they are
-          // the half that is easy to forget: they live on the config root
-          // rather than on a mode, so a rename that only walked the modes
-          // would leave the Lights tab pointing at a name nothing answers to.
-          for (const [state, look] of Object.entries(this.model.state_looks || {})) {
-            if (look === name) this.model.state_looks[state] = next;
-          }
-          return true;
-        },
-        // Deliberately leaves the references dangling - CLAUDE.md's rule for
-        // a deleted pool entry: "(missing)" here and a parser warning beat
-        // quietly changing what several modes look like.
-        remove: () => {
-          delete this.model.looks[name];
-          this._renderLooks();
-          this._markDirty();
-        },
-      }));
-    }
+    for (const name of names) this.looksWrap.append(this._renderLookEntry(name));
   }
 
-  /**
-   * "or wear a named look instead", under one system state's colour row.
-   *
-   * **The palette entry above it does not go away, and that is the design**
-   * (TODO 36a) - CLAUDE.md's "a stop list is the rich form; a palette entry is
-   * the fallback form". Tinker-tier: naming a look for SUCCESS is the second
-   * thing anybody does to SUCCESS, and the row above is the first.
-   */
-  _renderStateLookRow(state) {
-    const pick = el('select', {
-      className: 'inp',
-      onchange: () => {
-        if (!this.model.state_looks) this.model.state_looks = {};
-        if (pick.value) this.model.state_looks[state.key] = pick.value;
-        else delete this.model.state_looks[state.key];
-        this._markDirty();
+  /** One pool entry: the line, plus its editor when it is the open one. */
+  _renderLookEntry(name) {
+    const look = this.model.looks[name];
+    const open = this._expandedLook === name;
+
+    const swatch = el('span', { className: 'palette-swatch' });
+    applySwatch(swatch, look);
+
+    const summary = el('span', { className: 'palette-summary', textContent: describeEffect(look) });
+    const usedBy = this._looksUsedBy(name);
+
+    const line = el('div', { className: 'look-line' }, [
+      swatch,
+      el('span', { className: 'palette-name', textContent: name }),
+      usedBy.length
+        ? el('span', {
+          className: 'palette-meaning',
+          textContent: `worn by ${usedBy.join(', ')}`,
+          title: 'Editing this look changes it everywhere it is worn.',
+        })
+        : el('span', { className: 'palette-meaning', textContent: 'not used yet' }),
+      summary,
+      el('button', {
+        type: 'button', className: 'mini',
+        textContent: open ? 'Done' : 'Edit',
+        onclick: () => {
+          this._expandedLook = open ? null : name;
+          this._renderLooks();
+        },
+      }),
+      el('button', {
+        type: 'button', className: 'mini', textContent: 'Duplicate',
+        title: 'A copy under a new name, pointing at nothing - so editing it '
+          + 'cannot change what anything already wears.',
+        onclick: () => {
+          this._expandedLook = this._addLook(name, structuredClone(look));
+          this._renderLooks();
+        },
+      }),
+      el('button', {
+        type: 'button', className: 'mini danger', textContent: 'Delete',
+        // Deliberately leaves the references dangling - CLAUDE.md's rule for
+        // a deleted pool entry: "(missing)" wherever it was worn and a parser
+        // warning beat quietly changing what several modes look like.
+        onclick: () => {
+          delete this.model.looks[name];
+          if (this._expandedLook === name) this._expandedLook = null;
+          this._renderLooks();
+          this._renderModes();
+          this._markDirty();
+        },
+      }),
+    ]);
+
+    if (!open) return el('div', { className: 'look-entry' }, [line]);
+
+    const editor = this._renderEffectRow({
+      get: () => this.model.looks[name],
+      // No label in the head: the line above already carries the name, and the
+      // engine's own rename box is where a rename happens.
+      label: name,
+      meaning: '',
+      // Pool looks may be stop lists; palette entries may not (they ship
+      // to the device), which is why the flag is here and not in the
+      // palette section's spec above.
+      allowSequence: true,
+      openPresets: true,
+      // Renaming rewrites every mode pointing here, so the pool and the
+      // references can never drift into a dangling name from the UI.
+      rename: (next) => {
+        if (!next || next === name || this.model.looks[next]) return false;
+        this.model.looks[next] = this.model.looks[name];
+        delete this.model.looks[name];
+        for (const mode of this.model.modes || []) {
+          for (const [state, worn] of Object.entries(mode.looks || {})) {
+            if (worn === name) mode.looks[state] = next;
+          }
+        }
+        // The button's own states name looks too (TODO 36a), and they are
+        // the half that is easy to forget: they live on the config root
+        // rather than on a mode, so a rename that only walked the modes
+        // would leave the Lights tab pointing at a name nothing answers to.
+        for (const [state, worn] of Object.entries(this.model.state_looks || {})) {
+          if (worn === name) this.model.state_looks[state] = next;
+        }
+        this._expandedLook = next;
+        return true;
       },
     });
-    const hint = el('span', { className: 'menu-hint', 'data-help': true });
+    return el('div', { className: 'look-entry open' }, [line, editor]);
+  }
 
-    const refresh = () => {
-      const names = Object.keys(this.model.looks || {}).sort();
-      const current = (this.model.state_looks || {})[state.key] || '';
-      clear(pick);
-      pick.append(el('option', { value: '', textContent: '- use the colour above -' }));
-      // A look deleted from the pool stays selected and marked, for the reason
-      // a dangling action name does: silently falling back would change what
-      // the button does without saying so.
-      if (current && !names.includes(current)) {
-        pick.append(el('option', { value: current, textContent: `${current} (missing)` }));
-      }
-      for (const n of names) pick.append(el('option', { value: n, textContent: n }));
-      pick.value = current;
-      hint.textContent = names.length
-        ? 'Overrides the colour above while the service is running. A look may be a '
-          + 'whole pattern, which is how a confirmation becomes "blink, blink, hold" '
-          + 'rather than one style. The colour above stays as what the button shows '
-          + 'with nothing connected.'
-        : 'No named looks yet - make one under Named looks below, then pick it here.';
-    };
-
-    if (!this.stateLookRefreshers) this.stateLookRefreshers = [];
-    this.stateLookRefreshers.push(refresh);
-    refresh();
-
-    return el('div', { className: 'scope-row', 'data-tier': 'tinker' }, [
-      el('span', { className: 'scope-lbl', textContent: `${state.label}: named look` }),
-      pick,
-      hint,
-    ]);
+  /** Where `name` is worn, in the words the user chose - a mode's name, or a
+   *  system state's label. What makes "editing this changes it everywhere"
+   *  visible before the edit rather than after it. */
+  _looksUsedBy(name) {
+    const worn = [];
+    for (const [state, look] of Object.entries(this.model.state_looks || {})) {
+      if (look === name) worn.push(LED_STATE_BY_KEY[state]?.label || state);
+    }
+    for (const mode of this.model.modes || []) {
+      if (Object.values(mode.looks || {}).includes(name)) worn.push(mode.name || '(unnamed)');
+    }
+    return worn;
   }
 
   /**
@@ -661,6 +760,8 @@ export class ConfigMenu {
       meaning: spec.meaning,
       previewState: spec.previewState,
       allowSequence: spec.allowSequence,
+      openPresets: spec.openPresets,
+      namedLook: spec.namedLook,
       rename: spec.rename && ((next) => {
         if (!spec.rename(next)) return false;
         this._renderLooks();

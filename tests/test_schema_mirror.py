@@ -29,6 +29,7 @@ from aibutton.device import (
     STYLE_USES_COLOR,
     STYLE_USES_COLOR2,
     STYLE_USES_LEVEL,
+    STYLE_USES_SATURATION,
 )
 
 STATIC = Path(__file__).resolve().parents[1] / "aibutton/web/static"
@@ -123,6 +124,7 @@ def test_which_styles_strobe_matches():
     ("color", STYLE_USES_COLOR),
     ("color2", STYLE_USES_COLOR2),
     ("level", STYLE_USES_LEVEL),
+    ("saturation", STYLE_USES_SATURATION),
 ])
 def test_which_styles_use_each_field_matches(reading, expected):
     """Drift here hides a field that does something, or offers one that does

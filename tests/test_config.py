@@ -1111,26 +1111,38 @@ def test_a_sequences_drive_and_stop_shape_survive_the_editor(name):
     assert as_dict(again)["looks"][name] == dumped["looks"][name]
 
 
-def test_the_four_new_keys_are_carried_rather_than_defaulted_away():
+def test_drive_and_curve_are_carried_rather_than_defaulted_away():
     """The failure a round-trip alone cannot see: a serialiser that dropped
-    `drive`, `curve`, `style` or `period_s` would still round-trip *something*
-    - just not the look that was asked for."""
+    `drive` or `curve` would still round-trip *something* - just not the look
+    that was asked for."""
     cfg = parse_config({"looks": {"arc": {
         "drive": "progress", "repeat": False,
         "stops": [{"color": "#ff0000", "hold_s": 0.25, "fade_s": 0.75,
-                   "curve": "ease_in", "style": "flash", "period_s": 0.45}],
+                   "curve": "ease_in"}],
     }}})
     assert cfg.looks["arc"] == Sequence(
-        stops=(Stop("#ff0000", hold_s=0.25, fade_s=0.75,
-                    curve="ease_in", style="flash", period_s=0.45),),
+        stops=(Stop("#ff0000", hold_s=0.25, fade_s=0.75, curve="ease_in"),),
         repeat=False, drive="progress",
     )
     assert as_dict(cfg)["looks"]["arc"] == {
         "stops": [{"color": "#ff0000", "hold_s": 0.25, "fade_s": 0.75,
-                   "curve": "ease_in", "style": "flash", "period_s": 0.45}],
+                   "curve": "ease_in"}],
         "repeat": False,
         "drive": "progress",
     }
+
+
+def test_a_stop_that_still_carries_a_style_loses_it_without_complaint():
+    """`style`/`period_s` on a stop were ours to write and ours to drop
+    (TODO 36e), so a config that still has them parses to the flat colour it
+    now means - silently. Warning about a key we put there ourselves would be
+    scolding somebody for our own change of mind."""
+    cfg, warnings = parse_with_warnings({"looks": {"old": {
+        "stops": [{"color": "#ff0000", "hold_s": 1.0,
+                   "style": "flash", "period_s": 0.45}],
+    }}})
+    assert cfg.looks["old"] == Sequence(stops=(Stop("#ff0000", hold_s=1.0),))
+    assert warnings == []
 
 
 def test_a_stop_that_took_every_default_is_still_written_out_in_full():
@@ -1141,8 +1153,7 @@ def test_a_stop_that_took_every_default_is_still_written_out_in_full():
     cfg = parse_config({"looks": {"pulse": {"stops": ["#ff0000"]}}})
     assert as_dict(cfg)["looks"]["pulse"] == {
         "stops": [{
-            "color": "#ff0000", "hold_s": 0.5, "fade_s": 0.0,
-            "curve": "linear", "style": "solid", "period_s": 1.0,
+            "color": "#ff0000", "hold_s": 0.5, "fade_s": 0.0, "curve": "linear",
         }],
         "repeat": True,
         "drive": "clock",
