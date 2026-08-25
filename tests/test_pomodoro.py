@@ -420,3 +420,135 @@ def test_pomodoro_round_trips():
     ]}
     cfg = parse_config(raw)
     assert parse_config(as_dict(cfg)) == cfg
+
+
+# --- the repainting tick (TODO 19c) ----------------------------------------
+#
+# The item's own finding was that the field was the easy half: `run_pomodoro`
+# had nowhere to walk a ramp, because `show()` only ran on phase changes and
+# gestures. A block that sleeps for its whole length cannot have a colour that
+# moves. These tests are about the tick, not the ramp maths - ramp.py is
+# table-tested on its own.
+
+
+async def test_a_ramp_walks_the_colour_while_a_block_runs(tmp_path):
+    """The point of the tick: no press, no phase change, and the colour has
+    moved because time passed."""
+    seen = []
+
+    async def script(device):
+        for _ in range(6):
+            seen.append(device.led_effect.color)
+            await asyncio.sleep(0.35)
+
+    await _run(tmp_path, config(work_s=4, ramp=["#ff0000", "#00ff00"]), script)
+    assert seen[0] == "#ff0000"
+    assert len(set(seen)) > 1, seen
+
+
+async def test_no_ramp_means_the_light_is_left_exactly_as_it_was(tmp_path):
+    """The default, and the reason it is the default: this template already
+    tells work from rest by colour, so an opt-in ramp costs nothing until
+    somebody opts in."""
+    seen = []
+
+    async def script(device):
+        for _ in range(5):
+            seen.append(device.led_effect)
+            await asyncio.sleep(0.3)
+
+    await _run(tmp_path, config(work_s=4), script)
+    assert len(set(seen)) == 1, seen
+
+
+async def test_each_block_starts_its_ramp_again(tmp_path):
+    """Progress is through the *block*, not the session - a classic Pomodoro
+    has no end to be a fraction of. So a new phase is a new walk from the
+    start, which is also what makes the colour legible."""
+    seen = []
+
+    async def script(device):
+        for _ in range(14):
+            seen.append((device.led_state, device.led_effect.color))
+            await asyncio.sleep(0.2)
+
+    await _run(
+        tmp_path,
+        config(work_s=1.2, break_s=1.2, ramp=["#ff0000", "#00ff00"]),
+        script,
+    )
+    # Both phases were seen, and each of them was seen at the ramp's start.
+    working = [c for state, c in seen if state is LEDState.WORKING]
+    resting = [c for state, c in seen if state is LEDState.RESTING]
+    assert working and resting, seen
+    assert working[0] == "#ff0000"
+    assert resting[0] == "#ff0000", resting
+
+
+async def test_a_paused_block_stops_walking(tmp_path):
+    """`waiting_style` freezes the light to say "not counting". A tick that
+    repainted over it would un-freeze it once a second, which is the bug this
+    guards - the colour must sit still while the clock does."""
+    seen = []
+
+    async def script(device):
+        await asyncio.sleep(0.4)
+        device.press(TriggerType.SHORT_PRESS)  # toggle -> paused
+        await asyncio.sleep(0.3)
+        for _ in range(5):
+            seen.append(device.led_effect)
+            await asyncio.sleep(0.3)
+
+    await _run(tmp_path, config(work_s=8, ramp=["#ff0000", "#00ff00"]), script)
+    assert len(set(seen)) == 1, seen
+    assert seen[0].style == "solid"  # the default waiting_style
+
+
+async def test_extending_a_block_does_not_rewind_the_colour(tmp_path):
+    """`extend` moves the deadline, so what progress is a fraction *of* has to
+    move with it. Without that the colour snaps back to the start of the ramp
+    the instant you add time - visibly wrong, and the reason `phase_span` is a
+    variable rather than a lookup of `work_s`."""
+    seen = []
+
+    async def script(device):
+        await asyncio.sleep(1.0)
+        before = device.led_effect.color
+        device.press(TriggerType.DOUBLE_TAP)  # extend
+        await asyncio.sleep(0.3)
+        seen.append((before, device.led_effect.color))
+
+    await _run(
+        tmp_path,
+        config(work_s=3, extend_s=3, ramp=["#ff0000", "#00ff00"]),
+        script,
+    )
+    before, after = seen[0]
+    assert before != "#ff0000", "the ramp should have moved off its first stop"
+    # It may creep on, but it must not jump back to the start.
+    assert after != "#ff0000", (before, after)
+
+
+async def test_a_progress_driven_stop_list_is_sampled_per_state(tmp_path):
+    """What the tick unlocks that the ramp cannot: a look is named *per state*,
+    so WORKING can be driven by a stop list while RESTING keeps a plain colour.
+    That is the better answer for this template, because it does not have to
+    give up telling work from rest to get a progress read."""
+    cfg = config(work_s=3, break_s=1)
+    cfg["looks"] = {
+        "arc": {"drive": "progress", "repeat": False,
+                "stops": ["#ff0000", "#0000ff"]},
+    }
+    cfg["modes"][1]["looks"] = {"WORKING": "arc"}
+    seen = []
+
+    async def script(device):
+        for _ in range(8):
+            seen.append((device.led_state, device.led_effect.color))
+            await asyncio.sleep(0.3)
+
+    await _run(tmp_path, cfg, script)
+    working = [c for state, c in seen if state is LEDState.WORKING]
+    assert len(set(working)) > 1, working
+    # Sampled, so every frame is a solid step along the list - never the list.
+    assert all(c.startswith("#") for c in working)

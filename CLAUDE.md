@@ -345,11 +345,29 @@ in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
   end to be a fraction of. A drive bound where nothing supplies it is warned
   about and played on the clock, never dropped.
 - **When more than one thing can colour a state, the more explicit one wins.**
-  Named stop list > ladder > ramp, in `run_countdown` and `run_metronome`
-  alike: a ramp is the template's own default, a ladder is a checkbox you tick,
-  and a look you had to build, name and point a mode at is the most deliberate
-  of the three. *A fourth colour source obeys the same ordering or explains
-  why not.*
+  Named stop list > ladder > ramp, in `run_countdown`, `run_metronome` and
+  `run_pomodoro` alike: a ramp is the template's own default, a ladder is a
+  checkbox you tick, and a look you had to build, name and point a mode at is
+  the most deliberate of the three. A template that has no ladder simply skips
+  that rung. *A fourth colour source obeys the same ordering or explains why
+  not.*
+- **A ramp is opt-in where the template already speaks in colour.** A
+  countdown's ramp is on by default because TIMING is its only state and it
+  has nothing else to say; a Pomodoro's is **empty** by default because
+  WORKING and RESTING are two colours precisely so you can tell focus from
+  break, and a ramp overrides both. The better answer there is a named stop
+  list, which is chosen *per state* - so a progress-driven look on WORKING
+  leaves RESTING alone. *A new template with more than one state defaults its
+  ramp empty, or says why its states are interchangeable.*
+- **A drive needs an app that both knows the number and repaints.** Knowing is
+  not enough: `run_pomodoro` always knew how far through a block it was and
+  still could not carry `progress`, because `show()` ran only on phase changes
+  and gestures, so nothing sampled the look. The tick is what put it in
+  `DRIVE_TEMPLATES` (TODO 19c). Its progress is through the **current block** -
+  a classic Pomodoro has no end to be a fraction of - so it resets every phase,
+  and `extend` grows the denominator with the deadline or the colour snaps back
+  to the start of the ramp. *Adding a template to `DRIVE_TEMPLATES` means
+  checking it repaints, not just that it could answer.*
 - **A stop is one flat colour, and the movement is the walk between stops.**
   A stop briefly carried its own `style`/`period_s`, so one node could be
   "flashing yellow" (TODO 36c, removed in 36e). It went because a list that

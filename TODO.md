@@ -78,7 +78,7 @@ what to do next. This is the other view.
 | Body of work | Items | State |
 |---|---|---|
 | **The colour engine** — named looks, ramps, the safety floor | 3 ✔, 4 ✔, 0b·3 ✔ | Done |
-| **The light as a language** — ladder, stop list, one primitive | 19 ✔, **36** ✔, 41 ✔ | Done; **19c** (a repainting tick for Pomodoro) is the one thread left |
+| **The light as a language** — ladder, stop list, one primitive | 19 ✔, **36** ✔, 41 ✔ | **Done.** 19c closed the last thread; nothing else has a fraction to ramp over until `GESTURE_HOLD` (**29**) |
 | **The gesture engine** — N taps, hold levels | 0b·2 ✔, 28 ✔ | Taps done. Hold levels need firmware — the cheap half of **29** |
 | **Composition** — hooks, session summaries | 23 ✔, **31** ✔, **32** ✔ | Done |
 | **Actions as a first-class idea** | 30a ✔, **33**, **34** | The pool shipped; the sequence and app documents are open |
@@ -646,7 +646,8 @@ second backlog.
 
 ### 19. The light as a language — sequencer, one-offs, and where colour is edited
 
-Part (a), the subdivision ladder, shipped — see **Done**. Four parts remain.
+Part (a), the subdivision ladder, shipped — see **Done**. **b and c are done
+too**; this item is closed, and what is below is the record of what it decided.
 
 #### b) The sequencer — a stop list, and one-offs — **core shipped 2026-08-19**
 
@@ -687,35 +688,28 @@ driver attached the endpoint still degrades to the first stop and says so.
 
 **15 and 17 are now unblocked; Simon-says (16's parked half) too.**
 
-#### c) Reuse the ramp widget wherever a gradient makes sense
+#### c) Reuse the ramp widget wherever a gradient makes sense — **shipped 2026-08-23**
 
-**Checked 2026-08-20: "a descriptor change per template, not new code" is
-wrong, and the item as written is already half-done.** Two corrections.
+Pomodoro was the only real candidate and it cost what this item predicted: a
+template field, plus the repainting tick `run_pomodoro` did not have. Hot/cold
+and reaction already offered a ramp and already walked it; the countdown's is
+where the pattern came from. Nothing else has a fraction to ramp over — hold
+levels still need `GESTURE_HOLD` (item **29**).
 
-The widget is *not* only offered on the countdown - hot/cold and reaction both
-offer it already (`HOTCOLD_RAMP`, `REACTION_RAMP` in schema.js), and both walk
-it in their run loops. Those are the templates whose ramp is driven by *how
-well you did*; the countdown's is driven by time. Between them they are every
-template that currently has a `ramp` field at all.
+**The ramp is empty by default here**, unlike the countdown's, and that is the
+decision worth keeping: this template says work-versus-rest *with colour*, and
+a ramp overrides both states. The rule is in [CLAUDE.md](CLAUDE.md).
 
-That leaves Pomodoro as the only real candidate, and it costs four files, not
-one:
+**The tick turned out to be worth more than the field.** A drive needs an app
+that knows the number *and* repaints often enough for it to move, so the tick
+is what let `pomodoro` join `DRIVE_TEMPLATES["progress"]` — and a named stop
+list is chosen per state, so WORKING can be driven while RESTING keeps a plain
+colour. That is the better answer for this template, and the ramp is the
+one-field version of it.
 
-- `PomodoroBehavior` has no `ramp` field, so config.py needs the field, a
-  `_default_pomodoro_ramp()`, a `_parse_ramp` call in `_parse_pomodoro` and a
-  line in `as_dict` - the same four-place change any new template field costs.
-- **`run_pomodoro` has nowhere to walk it.** Its `show()` is called on phase
-  transitions and gestures only; it never repaints while a block runs. The
-  countdown's ramp works because `run_countdown` has a 1 s tick
-  (`_COUNTDOWN_TICK_S`) and a `paint(progress)` that pushes only when the
-  colour visibly moved (`_COUNTDOWN_COLOR_STEP`). Giving Pomodoro a ramp means
-  giving it that tick - new run-loop code, which is the one place CLAUDE.md
-  says logic should *not* go, and which Stage 3 will rewrite.
-
-So the honest cost is "a template field plus a repainting tick", and the
-tick is the part worth thinking about before it is written. **Not built.**
-Hold levels are not a candidate either way: `GESTURE_HOLD` is claimed and
-unimplemented, so there is no progress value to ramp over yet (item **29**).
+Progress is through the **current block**, not the session (a classic Pomodoro
+has no end), so it resets at every phase change and `extend` grows the
+denominator along with the deadline.
 
 ---
 
@@ -894,8 +888,9 @@ it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
   real distinction, not the unit**: `plan_at` walks and returns a wait,
   `sample_at` samples and returns none. Precedence is named stop list > ladder
   > ramp. The rules are in [CLAUDE.md](CLAUDE.md).
-  **Left open:** `run_pomodoro` has no repainting tick, so nothing can sample
-  from it - that is **19c**, and it should be done once for both.
+  **That last thread closed in 19c** (2026-08-23): `run_pomodoro` has a
+  repainting tick now, so it supplies `progress` too - per state, which is
+  what lets WORKING be driven while RESTING keeps a plain colour.
 
 - ~~**35. A freshly seeded scene fails its own Check**~~ - 2026-08-22. The
   `duration` widget hard-coded `seconds <= 0` and now honours `spec.min`.

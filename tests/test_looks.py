@@ -659,10 +659,13 @@ def _bound(template, state, look, extra):
     return cfg, next(m for m in cfg.modes if m.name == "App"), warnings
 
 
+# The stopwatch is the case worth keeping in front: it shares TIMING with the
+# countdown, which *can* supply progress, so a rule written over states rather
+# than templates would let this one through (TODO 36d). A Pomodoro can supply
+# progress since TODO 19c, which is why it appears below under `beats` only.
 _STRANDED = [
-    ("stopwatch", "TIMING", _PROGRESS_LOOK, {"log_as": "focus"}, "countdown"),
-    ("pomodoro", "WORKING", _PROGRESS_LOOK, {}, "countdown"),
-    ("metronome", "METRONOME", _PROGRESS_LOOK, {}, "countdown"),
+    ("stopwatch", "TIMING", _PROGRESS_LOOK, {"log_as": "focus"}, "countdown/pomodoro"),
+    ("metronome", "METRONOME", _PROGRESS_LOOK, {}, "countdown/pomodoro"),
     ("countdown", "TIMING", _BEATS_LOOK, {"minutes": 5}, "metronome"),
     ("pomodoro", "RESTING", _BEATS_LOOK, {}, "metronome"),
     ("control", "LISTENING", _BEATS_LOOK,
@@ -702,12 +705,19 @@ def test_a_drive_nothing_here_supplies_is_named_and_kept(
         # including on the two states above, where a driven look would not be.
         ("stopwatch", "TIMING", _CLOCK_LOOK, {"log_as": "focus"}),
         ("pomodoro", "WORKING", _CLOCK_LOOK, {}),
+        # Since TODO 19c: `run_pomodoro` repaints as a block runs, so it can
+        # supply a fraction. Per state, which is the point - WORKING may be
+        # driven while RESTING keeps a plain colour.
+        ("pomodoro", "WORKING", _PROGRESS_LOOK, {}),
+        ("pomodoro", "RESTING", _PROGRESS_LOOK, {}),
     ],
     ids=[
         "a countdown supplies progress",
         "a metronome supplies beats",
         "a clock list needs nothing supplied",
         "...anywhere at all",
+        "a pomodoro supplies progress on its work blocks",
+        "...and on its rests",
     ],
 )
 def test_a_binding_something_can_drive_passes_without_complaint(

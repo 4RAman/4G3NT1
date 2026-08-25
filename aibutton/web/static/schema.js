@@ -955,9 +955,9 @@ export const TEMPLATES = [
 TEMPLATES.push({
   type: 'countdown',
   ledStates: ['TIMING'],
-  // The only app here that knows how far through it is - a stopwatch shares
-  // TIMING but has no end to be a fraction of, which is why this list is keyed
-  // by template and not by state. See DRIVES.
+  // One of the two apps that know how far through they are - a stopwatch
+  // shares TIMING but has no end to be a fraction of, which is why this list
+  // is keyed by template and not by state. See DRIVES.
   drives: ['progress'],
   label: 'Countdown',
   nature: 'takeover',
@@ -1014,6 +1014,11 @@ TEMPLATES.push({
 TEMPLATES.push({
   type: 'pomodoro',
   ledStates: ['WORKING', 'RESTING'],
+  // Its progress is through the **current block**, not the session - a classic
+  // Pomodoro has no end to be a fraction of. It resets every phase change, and
+  // since a look is named per state, WORKING and RESTING can be driven apart.
+  // Mirrors `config.DRIVE_TEMPLATES`; test_schema_mirror.py fails on drift.
+  drives: ['progress'],
   // "Intervals", because a Pomodoro is one preset of this and Tabata and HIIT
   // are two others. The `type` string stays `pomodoro` on purpose - it is what
   // MODE_LED_STATES, config.py and every saved config key off, and renaming it
@@ -1023,6 +1028,14 @@ TEMPLATES.push({
   allowedActivations: ['manual'], // started by an enter_mode gesture only
   body: 'fields',
   fields: [
+    // Empty by default, unlike the countdown's, and the field says so: this
+    // template already uses colour to tell work from rest, and a ramp
+    // overrides both. Tinker-tier for the same reason - it is a trade, not a
+    // starting point.
+    { key: 'ramp', label: 'Colour as each block runs', kind: 'ramp', tier: 'tinker',
+      hint: 'Left = the block just started, right = it is about to end. Empty '
+        + 'leaves work and rest on their own colours, which is how you tell '
+        + 'them apart - so this trades that for a progress read.' },
     { key: 'work_s', label: 'Work block', kind: 'duration', min: 1,
       hint: "One work interval's length. 25 min for Pomodoro, 20 sec for "
         + 'Tabata.' },

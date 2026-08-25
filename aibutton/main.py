@@ -123,6 +123,16 @@ _COUNTDOWN_TICK_S = 1.0
 # Per-channel difference before a new ramp colour is worth a palette write.
 # ~1.5% of the range: below this it is not a colour change, it is traffic.
 _COUNTDOWN_COLOR_STEP = 4
+# The same wake-up rate for a running Pomodoro block (TODO 19c). Shared value,
+# separate name: they are the same *decision* - "about once a second is enough
+# for a colour that walks over minutes" - reached for two different loops, and
+# a Pomodoro that wanted a different cadence should be able to have one without
+# editing the countdown's.
+_POMODORO_TICK_S = 1.0
+# The floor on a block's span when it is used as a denominator. A zero-length
+# block is not configurable (`duration` refuses <= 0) but `restart` and demo
+# mode can both land here, and a fraction is not worth a ZeroDivisionError.
+_POMODORO_MIN_SPAN_S = 0.05
 
 # How slowly a reminder breathes when it has no look of its own. Slow enough
 # to be obviously not the alarm's flash, which is the whole distinction.
@@ -1047,6 +1057,18 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         leading = behavior.lead_in_s > 0
         remaining = behavior.lead_in_s if leading else behavior.work_s
         deadline = loop.time() + remaining
+        # How long the current block was given, and the last ramp colour sent.
+        # Both exist only for the repainting tick below (TODO 19c).
+        phase_span = remaining
+        painted: str | None = None
+        # A progress-driven stop list, per state: a look is named per state, so
+        # WORKING and RESTING are asked separately and either may decline. None
+        # when neither names one, which is what keeps the default free.
+        sampling = {}
+        for phase_state in (LEDState.WORKING, LEDState.RESTING):
+            seq = driven_look(phase_state, "progress")
+            if seq is not None:
+                sampling[phase_state] = sampled_paint(phase_state, seq)
 
         def phase_label() -> str:
             if leading:
@@ -1090,8 +1112,76 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 + (f" ({completed} done)" if completed else "")
             )
 
+        def phase_total() -> float:
+            """How long the block currently running was given - the
+            denominator of `progress`.
+
+            Kept in step with `extend`, which is the case that makes this a
+            variable rather than a lookup of `behavior.work_s`: adding ten
+            minutes to a running block makes the block ten minutes longer, so
+            the fraction has to be over the longer span. Without that, the
+            colour would jump backwards to the start of the ramp the instant
+            you extended.
+            """
+            return max(_POMODORO_MIN_SPAN_S, phase_span)
+
+        def progress() -> float:
+            """How far through this block, 0..1.
+
+            **Through the block, not through the session.** A Pomodoro has no
+            end to be a fraction of - `rounds` is 0 for the classic one - so
+            the block is the only span here that a fraction can mean anything
+            over. It resets at every phase change, which is also what makes it
+            legible: the colour says how much of *this* block is left.
+            """
+            done = phase_total() - max(0.0, deadline - loop.time())
+            return min(1.0, max(0.0, done / phase_total()))
+
+        def paint_progress() -> None:
+            """Repaint the running block's colour for where it has got to.
+
+            Three things can decide it and only one may run: **named stop list
+            > ramp**, the ordering CLAUDE.md sets out, one rung shorter than
+            `run_countdown`'s because this template has no ladder. A ladder is
+            a clock, and a Pomodoro block is not read as a clock.
+
+            Silent when neither is configured, which is the default: a
+            Pomodoro that names no look and sets no ramp paints exactly what it
+            painted before this existed, on the same two `show()` calls.
+            """
+            nonlocal painted
+            if paused or pending or leading:
+                # Not counting, so nothing has moved. `show()` owns the frozen
+                # look, and repainting over it would un-freeze it once a second.
+                return
+            state = LEDState.WORKING if working else LEDState.RESTING
+            # Per state, so a Pomodoro may drive its work blocks from a stop
+            # list and leave the breaks on a plain colour, or the other way up.
+            if state in sampling:
+                sampling[state](progress())
+                return
+            if not behavior.ramp:
+                return
+            base = base_look(state)
+            if base is None:
+                return
+            # A ramp can only be seen through a style that renders `color` -
+            # the same check `run_countdown` makes, and for the same two
+            # reasons: under a rainbow it is invisible, and it costs a radio
+            # write every time it moves.
+            if base.style not in STYLE_USES_COLOR:
+                return
+            colour = ramp.color_at(behavior.ramp, progress())
+            if painted is not None and not ramp.differs(
+                painted, colour, _COUNTDOWN_COLOR_STEP
+            ):
+                return
+            painted = colour
+            set_led(state, replace(base, color=colour))
+
         def start_phase(work: bool) -> None:
             nonlocal working, remaining, deadline, paused, pending, leading
+            nonlocal phase_span, painted
             working = work
             if work:
                 seconds = behavior.work_s
@@ -1102,6 +1192,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             remaining = seconds
             deadline = loop.time() + remaining
             paused = pending = leading = False
+            # A new block is a new fraction: the span it is measured against
+            # and the colour already on the light both belong to the old one.
+            phase_span = seconds
+            painted = None
 
         def summary(suffix: str = "") -> ActionResult:
             text = f"{completed} block(s), {_fmt_elapsed(focused_s)} focused"
@@ -1127,13 +1221,30 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             if paused or pending:
                 timeout = None  # nothing is counting down; wait for a gesture
             else:
-                timeout = max(0.05, deadline - loop.time())
+                # Capped at the tick so a running block repaints as it goes -
+                # without it a 25-minute block sleeps for 25 minutes and its
+                # ramp has nowhere to be walked. Waking is cheap; the colour is
+                # only *pushed* when it has visibly moved.
+                timeout = max(0.05, min(deadline - loop.time(), _POMODORO_TICK_S))
+            paint_progress()
             trigger = await _wait_for_trigger(device.events, stop, timeout=timeout)
 
             if stop.is_set():
                 return summary(" (shutdown)")
 
             if trigger is None:
+                if not (paused or pending) and deadline - loop.time() > 0:
+                    # A repaint tick, not the end of anything: the block still
+                    # has time on it. Refresh the "x left" line and go round.
+                    # `show()` is deliberately not called - it would re-push the
+                    # phase's whole effect once a second and undo the colour
+                    # `paint_progress` just walked.
+                    status.last_message = (
+                        f"{mode_name}: {phase_label()}"
+                        f" - {_fmt_elapsed(max(0.0, deadline - loop.time()))} left"
+                        + (f" ({completed} done)" if completed else "")
+                    )
+                    continue
                 if leading:
                     # The lead-in ran out: nothing is credited, the first block
                     # just begins.
@@ -1189,6 +1300,9 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 play_sound(Sound.ACK)
             elif command == "extend":
                 added = behavior.extend_s
+                # The block itself got longer, so what `progress` is a fraction
+                # *of* got longer with it - see `phase_total`.
+                phase_span += added
                 if paused or pending:
                     remaining += added
                     if pending:  # extending a finished block resumes it

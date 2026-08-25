@@ -450,6 +450,18 @@ class PomodoroBehavior:
     is waiting for a press. It still wears WORKING's or RESTING's *colour*;
     only the movement changes, exactly like a countdown's ramp borrows TIMING's
     appearance rather than switching state.
+
+    `ramp` walks the colour of whichever block is running, and is **empty by
+    default** where a countdown's is not (TODO 19c). The reason is that a
+    countdown has one state and nothing else to say with colour, while this
+    template has two - WORKING and RESTING are different colours precisely so
+    you can tell focus from break at a glance, and a ramp overrides both. So it
+    is opt-in: unset, each phase keeps its own look, which is what every
+    existing config already does.
+
+    A **named stop list wins over it**, and that is the better answer here for
+    the same reason: a look is named per state, so a progress-driven list on
+    WORKING leaves RESTING alone. The ramp is the one-field version.
     """
 
     work_s: float = 25 * 60
@@ -465,6 +477,8 @@ class PomodoroBehavior:
     advance: str = "auto"
     log_as: str = "pomodoro"  # a completed work block is logged under this
     waiting_style: str = "solid"  # frozen, not animated - "not counting"
+    # Empty means "each phase keeps its own colour" - see the class docstring.
+    ramp: tuple[ramp.Stop, ...] = ()
     gestures: dict[str, str] = field(
         default_factory=lambda: {
             "short_press": "toggle",
@@ -1269,7 +1283,13 @@ def _parse_ramp(raw, where: str, default: tuple[ramp.Stop, ...]) -> tuple[ramp.S
 #
 # Mirrored as `drives` on each template descriptor in schema.js.
 DRIVE_TEMPLATES: dict[str, tuple[str, ...]] = {
-    "progress": ("countdown",),
+    # A Pomodoro joined the countdown once `run_pomodoro` grew a repainting
+    # tick (TODO 19c): the drive needs an app that knows how far through it is
+    # *and* repaints often enough for the answer to move. Its progress is
+    # through the **current block**, so it resets at every phase change - and
+    # since a look is named per state, WORKING and RESTING can be driven
+    # separately or one of them left alone.
+    "progress": ("countdown", "pomodoro"),
     "beats": ("metronome",),
 }
 
@@ -2143,6 +2163,10 @@ def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior:
         advance=advance,
         log_as=_nonempty(raw, "log_as", where, defaults.log_as),
         waiting_style=_style(raw, "waiting_style", where, defaults.waiting_style),
+        # Only parsed when it is there. `_parse_ramp` refuses an empty list, so
+        # letting it see an absent key would complain about every Pomodoro ever
+        # written - and "no ramp" is this template's default, not an error.
+        ramp=_parse_ramp(raw["ramp"], f"{where}.ramp", ()) if "ramp" in raw else (),
         gestures=gestures,
     )
 
@@ -2996,6 +3020,13 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["advance"] = mode.behavior.advance
         entry["log_as"] = mode.behavior.log_as
         entry["waiting_style"] = mode.behavior.waiting_style
+        # Omitted when empty rather than written as `[]`: an empty list is what
+        # `_parse_ramp` rejects, so writing one would make every Pomodoro warn
+        # on the next load. Absent is how "no ramp" round-trips.
+        if mode.behavior.ramp:
+            entry["ramp"] = [
+                {"color": stop.color, "at": stop.at} for stop in mode.behavior.ramp
+            ]
         for trigger, command in mode.behavior.gestures.items():
             entry[trigger] = command
     elif isinstance(mode.behavior, CountdownBehavior):
