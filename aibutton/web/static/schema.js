@@ -76,7 +76,7 @@ export const DAYS = [
 // for an `enter_mode` action. Mirrors each template's `nature: 'takeover'`.
 const TAKEOVER_TEMPLATES = new Set([
   'alarm', 'reminders', 'stopwatch', 'counter', 'pomodoro', 'metronome', 'countdown',
-  'hotcold', 'reaction', 'signal', 'control',
+  'hotcold', 'reaction', 'signal', 'control', 'lightshow',
   // A launcher is a takeover, so a gesture can reach it - but it is never a
   // valid `enter_mode` *target* offered by another launcher (see
   // launcher_targets in main.py). That exclusion lives host-side because it
@@ -464,6 +464,10 @@ export const ACTIONS = [
     fields: [
       { key: 'daw_command', label: 'Start from a DAW command', kind: 'preset',
         presets: () => DAW_COMMANDS,
+        // Recognise the command again from the message it wrote, so the
+        // dropdown still says "Play" after a save has dropped the transient
+        // key. Same reverse lookup `describe()` uses - see widgets.js.
+        derive: dawCommandFor,
         hint: 'Fills in the message below - Mackie Control numbers most '
           + 'DAWs already know. Add a "Mackie Control" device pointed at '
           + 'this port and it works unlearned. Teaching by hand instead? '
@@ -541,7 +545,7 @@ export const ACTIONS = [
   },
   {
     type: 'enter_mode',
-    label: 'Enter a mode',
+    label: 'Launch an app',
     fields: [
       // Dynamic <select>: the options are the takeover modes a gesture can
       // actually start - every template whose descriptor says
@@ -551,7 +555,7 @@ export const ACTIONS = [
       // sibling modes (injected by menu.js -> modeEditor -> createField), so
       // the picker stays in sync as modes are added/renamed without this
       // module knowing where the list lives (Dependency Inversion).
-      { key: 'target', label: 'Mode to enter', kind: 'select', required: true,
+      { key: 'target', label: 'App to launch', kind: 'modeSelect', required: true,
         hint: 'Which app this opens. Alarm/reminder are not listed - a '
           + 'clock starts those, not a gesture.',
         options: (ctx) => {
@@ -564,7 +568,7 @@ export const ACTIONS = [
         } },
     ],
     defaults: () => ({ action: 'enter_mode', target: '' }),
-    describe: (a) => `Enter “${a.target || '…'}”`,
+    describe: (a) => `Launch “${a.target || '…'}”`,
   },
   {
     type: 'standby',
@@ -574,7 +578,7 @@ export const ACTIONS = [
     // here to configure. Bind it to the five-tap and you have an off switch.
     fields: [],
     defaults: () => ({ action: 'standby' }),
-    describe: () => 'Sleep or wake the everyday gestures',
+    describe: () => 'Sleep or wake the reflexes',
   },
 ];
 
@@ -601,11 +605,20 @@ export function describeAction(action) {
 // card. `defaults()` returns a fresh activation object.
 
 /**
- * A duration in seconds, written the way a person would say it. Mirrors the
- * `duration` widget's unit inference so a summary and the field you edit it in
- * never disagree about whether something is "25 min" or "1500 sec".
+ * A configured *length* in seconds, written the way a person would say it -
+ * "25m", "90s". Mirrors the `duration` widget's unit inference so a summary
+ * and the field you edit it in never disagree about whether something is
+ * "25 min" or "1500 sec".
+ *
+ * **Not the same job as format.js's `fmtDuration`**, which writes elapsed time
+ * on a clock face ("8:41") for the event log and an app's readout. Both are
+ * "a duration"; one is a setting you typed and the other is a measurement, and
+ * they round and abbreviate differently on purpose. They shared a name until
+ * the editor bundle refused to hold two - which is the bundler earning its
+ * keep, since in the served page they would simply have been two modules
+ * quietly disagreeing.
  */
-export function fmtDuration(seconds) {
+export function fmtLength(seconds) {
   const value = Number(seconds);
   if (!Number.isFinite(value) || value <= 0) return '0s';
   if (value >= 60 && value % 60 === 0) return `${value / 60}m`;
@@ -686,7 +699,7 @@ export function describeActivation(activation) {
 //
 // Takeover templates also carry the two things a user needs in order not to
 // feel trapped, as data rather than as branches in the editor:
-//   startedBy  'gesture' (an everyday mode's Enter a mode) | 'schedule'
+//   startedBy  'gesture' (a reflex's Launch an app) | 'schedule'
 //   exits(mode) one plain sentence: which press gets you back out
 // These mirror the takeover loops in main.py - run_alarm, run_stopwatch,
 // run_counter, run_pomodoro. Change a loop, change the sentence.
@@ -734,11 +747,50 @@ const LADDER_BEATS_FIELD = {
     + 'tapped tempo supplies timing - no tick to set.',
 };
 
+/**
+ * How an app reads its own history back, on its own page (TODO 51).
+ *
+ * **Declared, not branched on.** A template says which rows in the event log
+ * are its own and what the number on them means; appReadout.js renders anything
+ * that answers. So an app gets a history by adding four keys rather than by
+ * growing a case in the view - the same rule `fields` and `ledStates` follow.
+ *
+ * `nameField` is the *config key* holding the event name, never the name
+ * itself: two counters log under different names and share this descriptor.
+ * An empty one means this copy is configured to log nothing, which the readout
+ * says out loud rather than rendering as an empty history.
+ *
+ * `measure` says what the rows mean, and there are only four of them because
+ * pooling unlike numbers onto one axis is how you get a chart that is
+ * confidently meaningless - the same trap TODO 53 names about `value`:
+ *
+ *   duration  `duration_s` on the row. A stopwatch's runs.
+ *   value     the `value` column, where it is a magnitude worth comparing -
+ *             BPM, milliseconds, minutes, a percentage.
+ *   tally     the rows are occurrences and the number is *how many per day*.
+ *             A counter's presses, an intervals app's finished blocks.
+ *   outcome   the value is one of two states rather than a magnitude. An
+ *             alarm's answered/unanswered, and the reason those 0s and 1s
+ *             must never be averaged into "0.86 alarms".
+ *
+ * **A Signal light is the case that proves the split.** It writes a `value`
+ * too, and that value is an *index into its position list* - neither a
+ * magnitude nor a duration. It is `tally` here, because how often the light
+ * changed is a real question and "average position 1.4" is not one.
+ *
+ * `better` is which end of the range is the good end, and it is null far more
+ * often than not: a tempo has no good end and neither does a countdown's
+ * length. Set it only where "best" is a fact about the app rather than a guess
+ * about the person using it.
+ */
+export const READOUT_MEASURES = ['duration', 'value', 'tally', 'outcome'];
+
 export const TEMPLATES = [
   {
     type: 'actions',
     ledStates: [],
     label: 'Actions',
+    about: 'One action per gesture, answered without taking the button over.',
     nature: 'ambient',
     allowedActivations: ['always', 'window'],
     body: 'actions', // gesture×ACTIONS sub-editor + unless_logged_today
@@ -765,6 +817,7 @@ export const TEMPLATES = [
     type: 'alarm',
     ledStates: ['ALERT'],
     label: 'Alarm',
+    about: 'Rings at a set time until you deal with it.',
     nature: 'takeover',
     allowedActivations: ['schedule'],
     body: 'fields',
@@ -773,12 +826,37 @@ export const TEMPLATES = [
         hint: "Shown while it's ringing." },
       { key: 'label', label: 'Short label', kind: 'text', tier: 'tinker',
         hint: 'Optional - name for status line / Bluetooth.' },
+      // The dead man's switch (TODO 44). Basic tier, not tinker: someone who
+      // wants this is looking for it, and burying the thing a preset is named
+      // after would be a joke at their expense.
+      { key: 'grace_minutes', label: 'Give up after', kind: 'number', min: 0, step: 1,
+        hint: 'Minutes to wait for an answer before giving up. 0 = ring until '
+          + 'answered, which is an ordinary alarm.' },
       { key: 'snooze_minutes', label: 'Snooze minutes', kind: 'number', min: 0, step: 1,
         hint: 'Long press snoozes this long. 0 = long press just dismisses.' },
       { key: 'dismiss_event', label: 'Log on dismiss', kind: 'text',
         hint: 'Optional - logged when dismissed.' },
     ],
-    defaults: () => ({ message: '', label: '', snooze_minutes: 0, dismiss_event: '' }),
+    bindings: [
+      { key: 'on_timeout', label: 'If nobody answers', actions: HOOK_ACTIONS,
+        hint: 'Runs only when the alarm went unanswered for that long. It '
+          + 'needs this PC awake and connected - if the service stops or '
+          + 'Bluetooth drops it cannot fire, so treat it as a nudge rather '
+          + 'than a safety device.' },
+    ],
+    // `outcome`, not `value`, and that is the whole reason the measure exists:
+    // since 44 a dismissal logs 1 and a timeout logs 0 under the same name, so
+    // the honest readout is "answered 6 of the last 7" and the dishonest one
+    // is an average. Optional - an alarm with no dismiss_event logs nothing,
+    // and the readout says so rather than showing an empty list.
+    readout: {
+      kind: 'log', nameField: 'dismiss_event', measure: 'outcome',
+      noun: 'ring', better: null,
+      states: { 1: 'answered', 0: 'no answer' },
+    },
+    defaults: () => ({
+      message: '', label: '', snooze_minutes: 0, dismiss_event: '', grace_minutes: 0,
+    }),
     startedBy: 'schedule',
     exits: (mode) => (Number(mode.snooze_minutes) > 0
       ? `any press; long press snoozes ${mode.snooze_minutes}m`
@@ -792,6 +870,7 @@ export const TEMPLATES = [
     type: 'reminders',
     ledStates: ['ALERT'],
     label: 'Reminder',
+    about: 'A gentler alarm - shows at a set time, chimes once, gives up on its own.',
     nature: 'takeover',
     allowedActivations: ['schedule'],
     body: 'fields',
@@ -808,6 +887,13 @@ export const TEMPLATES = [
       { key: 'cleared_event', label: 'Log on clear', kind: 'text',
         hint: 'Optional - logged when cleared. A timeout logs nothing.' },
     ],
+    // A tally of the times it was actually cleared. A timeout logs nothing
+    // here (unlike an alarm since 44), so this counts answers and cannot count
+    // misses - which is why it is a tally rather than an outcome.
+    readout: {
+      kind: 'log', nameField: 'cleared_event', measure: 'tally',
+      noun: 'clear', better: null,
+    },
     defaults: () => ({
       message: '', label: '', chime: true, timeout_minutes: 5, cleared_event: '',
     }),
@@ -824,6 +910,7 @@ export const TEMPLATES = [
     type: 'stopwatch',
     ledStates: ['TIMING'],
     label: 'Stopwatch',
+    about: 'Times something, with laps.',
     nature: 'takeover',
     allowedActivations: ['manual'], // started by an enter_mode gesture only
     body: 'fields',
@@ -833,6 +920,15 @@ export const TEMPLATES = [
         placeholder: 'focus',
         hint: 'Logs elapsed time under this name. Short press laps, long press stops.' },
     ],
+    // The app item 51 was actually asked for: a stopwatch's page should be the
+    // stopwatch, and its runs are already in the log as timer_stop rows with a
+    // duration on them. `timer_stop` rather than `log` matters here - laps are
+    // logged as `<log_as>_lap`, and the kind filter is what keeps them out of
+    // the run list without a second name to match on.
+    readout: {
+      kind: 'timer_stop', nameField: 'log_as', measure: 'duration',
+      noun: 'run', better: null,
+    },
     // Named, like the countdown's and the metronome's: this field is
     // `required` and StopwatchBehavior now defaults to the same word, so a
     // stopwatch added here and one a scene file leaves out agree on what the
@@ -846,6 +942,7 @@ export const TEMPLATES = [
     type: 'counter',
     ledStates: ['COUNTING'],
     label: 'Counter',
+    about: 'A tally you press up.',
     nature: 'takeover',
     allowedActivations: ['manual'], // started by an enter_mode gesture only
     body: 'fields',
@@ -854,6 +951,13 @@ export const TEMPLATES = [
         placeholder: 'water',
         hint: 'Logged per increment (short press / double tap). Long press exits.' },
     ],
+    // A tally, not a value: each press is one row and the number worth seeing
+    // is how many of them a day held - which is exactly what `count_today`
+    // already answers on the button, arrived at the same way.
+    readout: {
+      kind: 'log', nameField: 'event', measure: 'tally',
+      noun: 'press', better: null,
+    },
     // Named for the same reason the stopwatch's is: `event` is `required` and
     // run_counter uses it unguarded, so an empty default writes rows called ""
     // and sums every unnamed counter into one bucket.
@@ -870,6 +974,7 @@ export const TEMPLATES = [
     type: 'launcher',
     ledStates: [],
     label: 'App launcher',
+    about: 'Steps through your apps, so you need one gesture rather than one each.',
     nature: 'takeover',
     allowedActivations: ['manual'], // started by an enter_mode gesture only
     body: 'fields',
@@ -878,7 +983,7 @@ export const TEMPLATES = [
       // this list is a narrowing/reordering job for later, not a first-use one.
       { key: 'targets', label: 'Apps to offer', kind: 'textarea', tier: 'tinker',
         placeholder: 'One mode name per line - blank = every app',
-        hint: 'Blank = every takeover mode, new apps appear automatically. '
+        hint: 'Blank = every app you have, and new ones appear automatically. '
           + 'List names to shorten/reorder the menu.' },
       { key: 'return_after', label: 'Return here when an app exits',
         kind: 'checkbox', tier: 'tinker',
@@ -889,6 +994,12 @@ export const TEMPLATES = [
         hint: 'Optional - one event per launch, so you can see what you '
           + 'actually use.' },
     ],
+    // What the `log_as` field above already promises - "so you can see what
+    // you actually use" - finally shown somewhere. Optional, like that field.
+    readout: {
+      kind: 'log', nameField: 'log_as', measure: 'tally',
+      noun: 'launch', better: null,
+    },
     defaults: () => ({ targets: '', return_after: true, log_as: '' }),
     startedBy: 'gesture',
     exits: () => 'long press (short = next app, double tap = launch)',
@@ -906,6 +1017,7 @@ export const TEMPLATES = [
     // is never listed. See DRIVES.
     drives: ['beats'],
     label: 'Metronome',
+    about: 'Tap a tempo and the light keeps it, or follow a MIDI clock.',
     nature: 'takeover',
     allowedActivations: ['manual'], // started by an enter_mode gesture only
     body: 'fields',
@@ -936,6 +1048,13 @@ export const TEMPLATES = [
           + 'point it here - tempo follows the project. Tapping then marks '
           + 'a beat, no longer sets it. DAW goes quiet -> last tempo holds.' },
     ],
+    // BPM, and `better: null` is the point of that key being nullable: a
+    // tempo has no good end, so a readout that crowned a "best" one would be
+    // inventing an opinion the app does not have.
+    readout: {
+      kind: 'log', nameField: 'log_as', measure: 'value',
+      noun: 'session', unit: 'BPM', better: null,
+    },
     defaults: () => ({
       start_bpm: 120, max_bpm: 300, tap_history: 8, reset_gap_s: 2,
       sound_on_tap: true, log_as: 'metronome', clock_port: '',
@@ -960,6 +1079,7 @@ TEMPLATES.push({
   // is keyed by template and not by state. See DRIVES.
   drives: ['progress'],
   label: 'Countdown',
+  about: 'Counts minutes down, the colour walking as it goes, then rings.',
   nature: 'takeover',
   allowedActivations: ['manual'], // a countdown that starts itself is an alarm
   body: 'fields',
@@ -996,6 +1116,13 @@ TEMPLATES.push({
       placeholder: 'countdown',
       hint: 'Logs the length run. A cancelled run logs nothing.' },
   ],
+  // The length that was run, in minutes - and only *finished* runs are here,
+  // because a cancelled one logs nothing (the field above says so). So this
+  // reads as "runs you saw through", which is the more useful of the two.
+  readout: {
+    kind: 'log', nameField: 'log_as', measure: 'value',
+    noun: 'run', unit: 'min', better: null,
+  },
   defaults: () => ({
     minutes: 10, label: '', style: 'flash', period_s: 1,
     ramp: COUNTDOWN_RAMP.map((color, index) => ({
@@ -1024,6 +1151,7 @@ TEMPLATES.push({
   // MODE_LED_STATES, config.py and every saved config key off, and renaming it
   // would be a migration in exchange for a tidier word. See TODO item 20.
   label: 'Intervals',
+  about: 'Work and rest blocks - Pomodoro, Tabata or HIIT from the one template.',
   nature: 'takeover',
   allowedActivations: ['manual'], // started by an enter_mode gesture only
   body: 'fields',
@@ -1083,6 +1211,12 @@ TEMPLATES.push({
     { key: 'double_tap', label: 'Double tap does', kind: 'select', options: POMODORO_COMMANDS, tier: 'tinker',
       hint: 'What this does while running.' },
   ],
+  // One row per *completed work block*, so the number worth seeing is how many
+  // a day held - the question anyone running Pomodoros is actually asking.
+  readout: {
+    kind: 'log', nameField: 'log_as', measure: 'tally',
+    noun: 'block', better: null,
+  },
   defaults: () => ({
     work_s: 25 * 60, break_s: 5 * 60, long_break_s: 15 * 60,
     blocks_before_long_break: 4, extend_s: 10 * 60, advance: 'auto',
@@ -1099,7 +1233,7 @@ TEMPLATES.push({
   describe: (mode) => {
     const advance = { auto: 'auto', manual: 'press to advance', break_only: 'auto breaks' };
     const rounds = Number(mode.rounds) > 0 ? `, ${mode.rounds} rounds` : '';
-    return `${fmtDuration(mode.work_s)}/${fmtDuration(mode.break_s)}${rounds}`
+    return `${fmtLength(mode.work_s)}/${fmtLength(mode.break_s)}${rounds}`
       + ` (${advance[mode.advance] || mode.advance})`;
   },
 });
@@ -1113,6 +1247,7 @@ TEMPLATES.push({
   type: 'hotcold',
   ledStates: [],
   label: 'Hot / Cold',
+  about: 'A guessing game: stop the spinning wheel on the hidden target.',
   nature: 'takeover',
   allowedActivations: ['manual'], // a game that started itself would interrupt you
   body: 'fields',
@@ -1140,6 +1275,12 @@ TEMPLATES.push({
       hint: 'Logs how close you got (0-100), so a run of games plots in '
         + 'the events table.' },
   ],
+  // Closeness, 0-100, and one of the two places `better` is a fact rather than
+  // a preference: a game has a score and nearer the target is better.
+  readout: {
+    kind: 'log', nameField: 'log_as', measure: 'value',
+    noun: 'guess', unit: '%', better: 'high',
+  },
   defaults: () => ({
     sweep_s: 4, rounds: 5, segments: 12, tolerance: 0.08, reveal_s: 1.5,
     log_as: 'hotcold',
@@ -1161,6 +1302,7 @@ TEMPLATES.push({
   type: 'reaction',
   ledStates: [],
   label: 'Reaction timer',
+  about: 'The light goes out at a random moment - press as fast as you can.',
   nature: 'takeover',
   allowedActivations: ['manual'],
   body: 'fields',
@@ -1188,6 +1330,14 @@ TEMPLATES.push({
       hint: 'Logs the milliseconds. A false start logs nothing - no time '
         + 'to record.' },
   ],
+  // Milliseconds, and the other place `better` is a fact: faster is the whole
+  // game. It is also why `better` exists at all rather than "lower is best"
+  // being assumed - a countdown's minutes sit in the same column and mean the
+  // opposite of nothing.
+  readout: {
+    kind: 'log', nameField: 'log_as', measure: 'value',
+    noun: 'attempt', unit: 'ms', better: 'low',
+  },
   defaults: () => ({
     min_delay_s: 2, max_delay_s: 6, rounds: 5, slowest_ms: 600, reveal_s: 1.2,
     log_as: 'reaction',
@@ -1210,6 +1360,7 @@ TEMPLATES.push({
   type: 'signal',
   ledStates: [],
   label: 'Signal light',
+  about: 'Wears one of your positions - Free, Busy, On air - and can send on each change.',
   nature: 'takeover',
   allowedActivations: ['manual'],
   body: 'fields',
@@ -1229,6 +1380,14 @@ TEMPLATES.push({
       placeholder: 'status',
       hint: 'Optional - one row per change, position number as its value.' },
   ],
+  // A tally, though this app does write a `value` - see the note on
+  // READOUT_MEASURES. That value is an index into the position list, so "how
+  // often did the light change today" is a real question and any average over
+  // it is not.
+  readout: {
+    kind: 'log', nameField: 'log_as', measure: 'tally',
+    noun: 'change', better: null,
+  },
   defaults: () => ({
     states: [
       { name: 'Free', color: '#00ff00', style: 'solid' },
@@ -1259,6 +1418,7 @@ TEMPLATES.push({
   type: 'control',
   ledStates: ['LISTENING'],
   label: 'Control surface',
+  about: 'A remote: one command per gesture, held open so you can send several.',
   nature: 'takeover',
   allowedActivations: ['manual'],
   body: 'actions',
@@ -1278,10 +1438,15 @@ TEMPLATES.push({
         + 'nothing, so counts stay honest.' },
     { key: 'return_after', label: 'Come back here after a branch',
       kind: 'checkbox', tier: 'tinker',
-      hint: 'Bind a gesture to "Enter a mode" and this becomes a menu page. '
+      hint: 'Bind a gesture to "Launch an app" and this becomes a menu page. '
         + 'On: leaving what it opened returns here, so long press always '
-        + 'travels one level. Off: drops straight to the everyday layer.' },
+        + 'travels one level. Off: drops straight back to your reflexes.' },
   ],
+  // Optional, like the field: a control surface logs only if you ask it to.
+  readout: {
+    kind: 'log', nameField: 'log_as', measure: 'tally',
+    noun: 'press', better: null,
+  },
   defaults: () => ({
     short_press: { action: 'log', event: 'control_press' },
     log_as: '', return_after: true,
@@ -1301,12 +1466,77 @@ TEMPLATES.push({
   },
 });
 
+// A light show: a playlist of looks, walked on a clock. It owns no LED state -
+// each cue is pushed as an ephemeral effect, exactly as a Signal position is,
+// so the whole app costs no wire code (TODO 52a).
+TEMPLATES.push({
+  type: 'lightshow',
+  ledStates: [],
+  label: 'Light show',
+  about: 'Plays a playlist of your looks, one after another.',
+  nature: 'takeover',
+  allowedActivations: ['manual'],
+  body: 'fields',
+  fields: [
+    { key: 'cues', label: 'Looks to play', kind: 'textarea', required: true,
+      placeholder: 'One look name per line',
+      hint: 'Named looks from the pool, in order. A stop list is what makes '
+        + 'this a show rather than a colour rotation - it can fade, hold and '
+        + 'loop inside a single cue.' },
+    { key: 'dwell_s', label: 'Seconds per look', kind: 'number', min: 1, step: 0.5,
+      hint: 'How long each cue holds before the next one. Floored at 1s: the '
+        + 'flash guard watches a look\'s own rate, not how fast they swap.' },
+    { key: 'auto', label: 'Advance on its own', kind: 'checkbox',
+      hint: 'Off: it only ever moves when you press. Double tap holds and '
+        + 'releases it either way.' },
+    { key: 'log_as', label: 'Log each cue as', kind: 'text', tier: 'tinker',
+      placeholder: 'show',
+      hint: 'Optional - one row per cue change.' },
+  ],
+  // Optional, like the field. One row per cue change, so a tally says how much
+  // the show actually ran rather than how it looked.
+  readout: {
+    kind: 'log', nameField: 'log_as', measure: 'tally',
+    noun: 'cue', better: null,
+  },
+  defaults: () => ({ cues: '', dwell_s: 8, auto: true, log_as: '' }),
+  startedBy: 'gesture',
+  exits: () => 'long press',
+  describe: (mode) => {
+    const cues = Array.isArray(mode.cues)
+      ? mode.cues
+      : String(mode.cues || '').split('\n').filter((line) => line.trim());
+    const count = cues.length;
+    if (!count) return 'Light show - no looks chosen yet';
+    return `Light show - ${count} look${count === 1 ? '' : 's'}`
+      + `${mode.auto === false ? ', manual' : `, ${mode.dwell_s || 8}s each`}`;
+  },
+});
+
 export const TEMPLATE_BY_TYPE = Object.fromEntries(TEMPLATES.map((t) => [t.type, t]));
 
 // Ready-made modes, offered next to "+ Add mode". Each is a complete mode
 // object the parser accepts as-is - a starting point to edit, not a special
 // kind of mode. Names are checked for collisions when one is added.
 export const BUILTIN_MODES = [
+  // A preset rather than a template, which is the whole point of TODO 44: the
+  // alarm already rings and already waits, so the switch is two fields on it.
+  // What a preset buys is *findability* - nobody looking for a dead man's
+  // switch would think to open an alarm and read its fields.
+  {
+    id: 'deadman',
+    label: "Dead man's switch",
+    blurb: 'Rings to check in; runs an action if you do not answer.',
+    mode: () => ({
+      name: 'Check in', template: 'alarm',
+      activation: { type: 'schedule', at: '09:00' },
+      ...TEMPLATE_BY_TYPE.alarm.defaults(),
+      message: 'Still there?',
+      grace_minutes: 15,
+      dismiss_event: 'checkin',
+      on_timeout: { action: 'webhook', url: '', method: 'POST' },
+    }),
+  },
   // Three presets over the one interval template, which is the whole point of
   // TODO 20: none of these costs a line of Python, and a fourth (60/10 study
   // blocks, 90-minute deep work, stand up every hour) costs nothing either.
@@ -1379,7 +1609,8 @@ export const BUILTIN_MODES = [
     mode: () => ({
       name: 'Wake up', template: 'alarm',
       activation: { type: 'schedule', at: '05:00' },
-      message: 'Wake up', label: '', snooze_minutes: 9, dismiss_event: 'woke_up',
+      ...TEMPLATE_BY_TYPE.alarm.defaults(),
+      message: 'Wake up', snooze_minutes: 9, dismiss_event: 'woke_up',
     }),
   },
   {
@@ -1515,19 +1746,21 @@ export function describeTemplate(mode) {
 export const MODE_GROUPS = [
   {
     nature: 'ambient',
-    title: 'Everyday',
-    blurb: 'What a press does normally. Read top to bottom: the first mode '
-      + "that's on now and sets this press, wins. Order is priority - move "
-      + 'a mode up to win. Unset gesture -> passes to the next mode.',
+    title: 'Reflexes',
+    blurb: 'Always live, and they fire without thinking. Read top to bottom: '
+      + "the first reflex that's awake now and sets this press, wins. Order "
+      + 'is priority - move one up to win. Unset gesture -> falls through to '
+      + 'the next. Below them sit the ones a clock sets off instead, where '
+      + 'position means nothing.',
     emptyText: 'None yet.',
   },
   {
     nature: 'takeover',
-    title: 'Takeover',
-    blurb: 'While running, one of these owns every press - everyday modes '
-      + 'are ignored until you leave. An alarm starts itself at its set '
-      + 'time; others start via an everyday mode with an “Enter a mode” '
-      + 'gesture.',
+    title: 'Apps',
+    blurb: 'One at a time, and while it runs it owns the button - every '
+      + 'reflex is muted until you leave. An alarm launches itself at its '
+      + 'set time; the rest are launched by a reflex bound to “Launch an '
+      + 'app”.',
     emptyText: 'None yet.',
   },
 ];
@@ -1555,6 +1788,130 @@ export function findEntryPoints(mode, allModes) {
     }
   }
   return entries;
+}
+
+
+/**
+ * The colour a mode runs in, or null if it has none of its own.
+ *
+ * **Mirrors `main.app_look`** - the template's first LED state, the mode's
+ * named look for it, falling back to that state's palette entry. Same answer
+ * as the button gives, which is the whole point of showing it.
+ *
+ * Null for a template that owns no LED state (a reflex, a launcher, hot/cold,
+ * a signal): those wear the button's own vocabulary or compute every frame, so
+ * there is no one colour and inventing one would be worse than the gap.
+ */
+export function modeLook(mode, looks = {}, palette = {}) {
+  const states = TEMPLATE_BY_TYPE[mode?.template]?.ledStates || [];
+  if (!states.length) return null;
+  const named = mode.looks && mode.looks[states[0]];
+  return (named && looks[named]) || palette[states[0]] || null;
+}
+
+// --- can anything actually get to this? ------------------------------------
+// The one question a config cannot answer by looking at any single mode, which
+// is why the App page exists (TODO 49). Pure over data - no DOM, no fetch - so
+// it is the same kind of function as rules.py host-side.
+
+/** Resolve a gesture binding: an inline action, or a bare string naming one in
+ *  the pool. Mirrors `config.resolve_action`; a name with no entry stays
+ *  dangling on purpose, and reads here as "goes nowhere". */
+function resolveBinding(binding, actions) {
+  if (typeof binding === 'string') return (actions && actions[binding]) || null;
+  return binding || null;
+}
+
+/** Every mode `mode` can hand the button to. */
+function exitsOf(mode, byName, actions, allModes) {
+  const out = [];
+  const descriptor = TEMPLATE_BY_TYPE[mode?.template];
+  for (const gesture of GESTURES) {
+    const action = resolveBinding(mode[gesture.key], actions);
+    if (action && action.action === 'enter_mode' && action.target) {
+      const target = byName.get(action.target);
+      if (target) out.push(target);
+    }
+  }
+  if (descriptor?.type === 'launcher' || mode?.template === 'launcher') {
+    // A launcher with no list offers everything a gesture can start, and new
+    // apps join it without anyone editing it - which is exactly what makes it
+    // the cheap way to keep an app reachable. Mirrors launcher_targets in
+    // main.py, including its exclusion of other launchers.
+    const named = Array.isArray(mode.targets)
+      ? mode.targets
+      : String(mode.targets || '').split('\n');
+    const listed = named.map((n) => n.trim()).filter(Boolean);
+    if (listed.length) {
+      for (const name of listed) {
+        const target = byName.get(name);
+        if (target) out.push(target);
+      }
+    } else {
+      for (const other of allModes) {
+        if (other === mode || other?.template === 'launcher') continue;
+        if (TEMPLATE_BY_TYPE[other?.template]?.nature === 'takeover') out.push(other);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The set of modes something can reach, given the whole config.
+ *
+ * **Roots are the things nobody has to start.** A gesture map is live by
+ * definition, and a clock starts its own apps. Everything else is reachable
+ * only by being pointed at - by a gesture bound to "Launch an app", or by
+ * sitting in a launcher's list - and reachability is transitive, because a
+ * launcher you cannot open cannot open anything either. That transitivity is
+ * the reason this is a walk rather than a filter, and the reason a per-mode
+ * card could never answer the question on its own.
+ */
+export function reachableModes(modes, actions = {}) {
+  const all = (modes || []).filter(Boolean);
+  const byName = new Map(all.filter((m) => m.name).map((m) => [m.name, m]));
+  const reached = new Set();
+  const queue = [];
+  const push = (mode) => {
+    if (!mode || reached.has(mode)) return;
+    reached.add(mode);
+    queue.push(mode);
+  };
+
+  for (const mode of all) {
+    const descriptor = TEMPLATE_BY_TYPE[mode.template];
+    // An unknown template reads as a gesture map, the same harmless default
+    // the nav takes - better to call something reachable and be wrong than to
+    // report a working button as broken.
+    if (!descriptor || descriptor.nature === 'ambient' || descriptor.startedBy === 'schedule') {
+      push(mode);
+    }
+  }
+  while (queue.length) {
+    for (const target of exitsOf(queue.pop(), byName, actions, all)) push(target);
+  }
+  return reached;
+}
+
+/** Names an `enter_mode` points at that no mode answers to. Dangling on
+ *  purpose (the parser warns, the editor says "(missing)"), so the page says
+ *  it out loud rather than quietly repointing anything. */
+export function danglingTargets(modes, actions = {}) {
+  const all = (modes || []).filter(Boolean);
+  const names = new Set(all.map((m) => m.name).filter(Boolean));
+  const missing = new Map(); // target name -> [mode name that points at it]
+  for (const mode of all) {
+    for (const gesture of GESTURES) {
+      const action = resolveBinding(mode[gesture.key], actions);
+      if (!action || action.action !== 'enter_mode' || !action.target) continue;
+      if (names.has(action.target)) continue;
+      const from = missing.get(action.target) || [];
+      from.push(`${gesture.label} on ${mode.name || '(unnamed)'}`);
+      missing.set(action.target, from);
+    }
+  }
+  return missing;
 }
 
 // --- LED palette -----------------------------------------------------------
@@ -2224,13 +2581,20 @@ export const SETTINGS_GROUPS = [
       // costs, because nothing else in the UI will.
       { key: 'min_flash_period_s', label: 'Fastest the light may flash', tier: 'tinker',
         kind: 'range', min: 0.05, max: 2, step: 0.01,
-        describe: (v) => `${v.toFixed(2)}s (${(1 / v).toFixed(1)} flashes/sec)`,
+        describe: (v) => `Floor: ${v.toFixed(2)}s (${(1 / v).toFixed(1)} flashes/sec)`,
         hint: 'Floor for flash + alternate. 0.33s = 3/sec, the photosensitivity '
           + 'limit. Faster is allowed - and a seizure risk.' },
     ],
   },
   {
     title: 'Web server',
+    // Zero links to /api/ anywhere in the UI meant the REST API a script or a
+    // Shortcut needs was undiscoverable except by reading webui.py (TODO 64).
+    // Always shown, not tinker-gated - a developer looking for this is not
+    // the audience "hidden until asked" protects.
+    note: 'Everything this page can do is also a REST API at /api/ - webhooks, '
+      + 'MIDI, scripts and Shortcuts all drive the button through it. The '
+      + 'endpoint list is the docstring at the top of webui.py.',
     // Also tinker-tier throughout: this is how you reach the page at all, so
     // an unsupervised toggle or a mistyped port is a lockout, not a tweak.
     fields: [

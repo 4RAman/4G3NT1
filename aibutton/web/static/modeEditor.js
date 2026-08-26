@@ -15,12 +15,13 @@ import {
   GESTURES, MODE_HOOKS, DAYS, ACTIONS, ACTION_BY_TYPE,
   TEMPLATES, TEMPLATE_BY_TYPE,
   ACTIVATIONS, ACTIVATION_BY_TYPE, describeActivation,
-  describeExit, findEntryPoints,
-  LED_STATE_BY_KEY, describeEffect, LOOK_PRESETS, LOOK_PRESET_GROUPS,
+  describeExit, findEntryPoints, modeLook,
+  LED_STATE_BY_KEY, describeEffect, LOOK_PRESETS, LOOK_PRESET_GROUPS, presetLook,
 } from './schema.js';
-import { paint as applySwatch } from './ledPreview.js';
+import { paint as applySwatch, unpaint } from './ledPreview.js';
 import { createField } from './widgets.js';
 import { createLookEditor } from './colorEngine.js';
+import { createReadout } from './appReadout.js';
 
 export class ModeEditor {
   /**
@@ -46,7 +47,15 @@ export class ModeEditor {
   // `api` rides along for widgets whose suggestions come from the service
   // (the MIDI port datalist) - optional by construction, absent offline.
   _fieldCtx() {
-    return { getModes: this.handlers.getModes || (() => []), api: this.handlers.api };
+    return {
+      getModes: this.handlers.getModes || (() => []),
+      // The picker that chooses a mode shows the light it runs in, which needs
+      // both halves of the resolution the nav does - the named-look pool and
+      // the palette underneath it (TODO 50).
+      getLooks: this.handlers.getLooks || (() => ({})),
+      getPalette: this.handlers.getPalette || (() => ({})),
+      api: this.handlers.api,
+    };
   }
 
   /** The named-action pool, as `{name: action}`. Read through the handler for
@@ -85,12 +94,85 @@ export class ModeEditor {
     // you recognise it going off from across the room, not an afterthought
     // setting. Only takeover modes have one - an everyday mode never owns the
     // light long enough to have an appearance of its own.
+    // Above the settings, deliberately (TODO 51): if a stopwatch is an app,
+    // its page should *be* the stopwatch, and what it has done is the thing
+    // you came to look at. The knobs are what you came to change, which is a
+    // rarer visit.
     this.bodyEl.append(
-      this._header(), this.howtoEl, this._looksPicker(),
+      this._header(), this._siblings(), this.howtoEl, this._readoutSection(),
+      this._looksPicker(),
       this._templatePicker(), this._activationPicker(), this._hooks(),
     );
     this.refreshExplainers();
     return this.bodyEl;
+  }
+
+  /**
+   * The other items of this app, so you can move between them from inside it
+   * (TODO 51) - 48's item list wearing the app's own interface.
+   *
+   * **Two or more, like the nav's grouping (48a).** A row of chips holding
+   * only the item you are already looking at doubles the page to say nothing,
+   * and one stopwatch really is one stopwatch.
+   *
+   * Switching is just a re-selection, so unsaved edits survive it: menu.js
+   * holds one working copy of the whole config and every item on this page is
+   * a live object inside it. Same as clicking a name in the nav, which is what
+   * this is a shortcut for.
+   */
+  _siblings() {
+    const descriptor = TEMPLATE_BY_TYPE[this.mode.template];
+    const wrap = el('div', { className: 'siblings' });
+    if (!descriptor || descriptor.nature !== 'takeover' || !this.handlers.onSelect) {
+      wrap.hidden = true;
+      return wrap;
+    }
+    const copies = (this.handlers.getModes?.() || []).filter(
+      (m) => m && m.template === this.mode.template,
+    );
+    if (copies.length < 2) {
+      wrap.hidden = true;
+      return wrap;
+    }
+
+    // No plural of the app's label anywhere here: "Intervals" and "Hot / Cold"
+    // do not take an -s, and a label built by adding one breaks on a template
+    // nobody thought about. The chips say what they are.
+    wrap.append(el('span', { className: 'fld-label', textContent: 'In this app' }));
+    const row = el('div', { className: 'sibling-row' });
+    for (const item of copies) {
+      const swatch = el('span', { className: 'pick-swatch' });
+      const look = modeLook(
+        item, this.handlers.getLooks?.() || {}, this.handlers.getPalette?.() || {},
+      );
+      swatch.classList.toggle('empty', !look);
+      if (look) applySwatch(swatch, look); else unpaint(swatch);
+      row.append(el('button', {
+        type: 'button',
+        className: `sibling${item === this.mode ? ' current' : ''}`,
+        // The one you are on is a label, not a link: clicking it would rebuild
+        // the page you are already looking at and lose your cursor.
+        disabled: item === this.mode,
+        onclick: () => this.handlers.onSelect(item),
+      }, [swatch, el('span', { textContent: item.name || '(unnamed)' })]));
+    }
+    if (this.handlers.onAddSibling) {
+      row.append(el('button', {
+        type: 'button', className: 'mini sibling-add', textContent: '+ Add another',
+        onclick: () => this.handlers.onAddSibling(),
+      }));
+    }
+    wrap.append(row);
+    return wrap;
+  }
+
+  /** What this app has actually done, read out of the event log. Null for a
+   *  template that logs nothing and wherever there is no service to ask (the
+   *  offline editor) - see appReadout.js. */
+  _readoutSection() {
+    const descriptor = TEMPLATE_BY_TYPE[this.mode.template];
+    const readout = createReadout(this.mode, descriptor, this.handlers.api);
+    return readout ? readout.el : el('div', { hidden: true });
   }
 
   /**
@@ -218,7 +300,20 @@ export class ModeEditor {
         onchange: () => {
           const preset = LOOK_PRESETS.find((p) => p.id === fromPreset.value);
           fromPreset.value = '';
-          if (preset) adopt(this.handlers.addLook?.(preset.label, preset.effect));
+          // `presetLook`, not `preset.effect` - **most presets have no
+          // `effect`.** 105 of the 142 are sequence-only and carry `stops`
+          // instead, so reading `.effect` gave `undefined`, `_addLook` spread
+          // it into `{}`, and the new look arrived empty: the editor showed
+          // "single colour" because an empty object has no stops, and the
+          // colours you picked were never copied anywhere to come back from.
+          // Reported 2026-08-26 as "it always defaults to single colour".
+          // `presetLook` is `sequence || effect` **deep-copied**, and the copy
+          // matters as much as the fallback: handing over `preset.effect`
+          // directly would share the stops array with the module-level preset
+          // table, so adding a row to your look would edit the preset for
+          // every later use in that session. Every other preset consumer in
+          // the app already goes through it; this was the one that did not.
+          if (preset) adopt(this.handlers.addLook?.(preset.label, presetLook(preset)));
         },
       }, [
         el('option', { value: '', textContent: 'New look from a preset…' }),
@@ -293,7 +388,7 @@ export class ModeEditor {
           '⚠ Not reachable',
           el('span', {
             'data-help': true,
-            textContent: ' - give a gesture the "Enter a mode" action, pointing here.',
+            textContent: ' - give a gesture the "Launch an app" action, pointing here.',
           }),
         ]));
     }
@@ -315,10 +410,26 @@ export class ModeEditor {
     return modes.filter(isAmbientAlways).length <= 1;
   }
 
+  /** What this page is editing, in the app paradigm's own words: an app's
+   *  page is one *item* of that app - one of your alarms, one of your
+   *  countdowns - and a reflex's page is a reflex. The nav groups by app and
+   *  the App page lists the copies; this was the one screen still calling
+   *  everything a mode (TODO 48c). */
+  _noun() {
+    const descriptor = TEMPLATE_BY_TYPE[this.mode.template];
+    if (!descriptor) return { kind: 'mode', label: '' };
+    if (descriptor.nature !== 'takeover') return { kind: 'reflex', label: '' };
+    return { kind: 'item', label: descriptor.label };
+  }
+
   _header() {
+    const noun = this._noun();
     const name = el('input', {
       type: 'text', className: 'inp mode-name',
-      value: this.mode.name || '', placeholder: 'Mode name',
+      value: this.mode.name || '',
+      // Named for what it is: two alarms are two alarms, and "Mode name" was
+      // the last place that called one of them a mode.
+      placeholder: noun.kind === 'item' ? `${noun.label} name` : 'Reflex name',
       oninput: () => { this.mode.name = name.value; this._changed(); },
     });
 
@@ -342,15 +453,20 @@ export class ModeEditor {
     // exists, either one may be deleted.
     const lastFloor = this._isOnlyAmbientAlways();
     return el('div', { className: 'mode-edit-head' }, [
-      el('span', { className: 'fld-label', textContent: 'Name' }),
+      // The app this belongs to, stated rather than implied - the page is
+      // reached from a list that groups by app, and arriving at a bare name
+      // field lost that context.
+      noun.kind === 'item'
+        ? el('span', { className: 'mode-edit-app', textContent: noun.label })
+        : el('span', { className: 'fld-label', textContent: 'Reflex' }),
       name,
       this.activeEl,
       ...reorder,
       btn(
         '✕',
         lastFloor
-          ? "Can't delete - this is the only mode that's always on, and the button needs one to fall back to."
-          : 'Delete mode',
+          ? "Can't delete - this is the only reflex that's always on, and the button needs one to fall back to."
+          : `Delete “${this.mode.name || 'this one'}”`,
         'danger',
         () => this.handlers.onRemove?.(),
         lastFloor,
@@ -423,6 +539,12 @@ export class ModeEditor {
       this.templateBody.append(this._gestures(descriptor));
       if (descriptor.unlessLogged !== false) this.templateBody.append(this._unlessLogged());
     }
+    // An action bound to something that is not a press - an alarm going
+    // unanswered, so far. Rendered by the same sub-editor a gesture and a hook
+    // use, because all three *are* bindings and only the trigger differs.
+    for (const binding of descriptor.bindings || []) {
+      this.templateBody.append(this._gesture(binding));
+    }
     if (descriptor.fields) {
       const grid = el('div', { className: 'tpl-fields' });
       for (const spec of descriptor.fields) {
@@ -455,8 +577,8 @@ export class ModeEditor {
     // as deleting it would be, when nothing else is holding the floor up.
     if (this._isOnlyAmbientAlways()) {
       select.disabled = true;
-      select.title = "Can't change - this is the only mode that's always on. "
-        + 'Give another ambient mode an Always activation first.';
+      select.title = "Can't change - this is the only reflex that's always on. "
+        + 'Give another reflex an Always activation first.';
     }
 
     this.activationBody = el('div', { className: 'act-body' });
@@ -698,11 +820,26 @@ export class ModeEditor {
 
     const hint = names.length
       ? 'Edited once in the Actions pool - every gesture naming it changes together.'
-      : 'No named actions yet. The Actions pool, under Tinker on the Modes tab, is where they are made.';
+      : 'No named actions yet - make one below, or find the pool under Tinker at the foot of the page.';
+    // TODO 61: this used to be prose describing where the pool was, on a page
+    // that already scrolled. One button that makes an entry and picks it,
+    // reusing the exact path the pool's own "+ Add" button takes.
+    const make = this.handlers.addAction ? el('button', {
+      type: 'button', className: 'mini', textContent: 'Make one',
+      onclick: () => {
+        const name = this.handlers.addAction();
+        pick.append(el('option', { value: name, textContent: name }));
+        pick.value = name;
+        this.mode[gesture.key] = name;
+        err.textContent = '';
+        this._changed();
+      },
+    }) : null;
     return {
       el: el('label', { className: 'fld' }, [
         el('span', { className: 'fld-label', textContent: 'Named action' }),
         pick,
+        make,
         el('span', { className: 'fld-hint', 'data-help': true, textContent: hint }),
         err,
       ]),

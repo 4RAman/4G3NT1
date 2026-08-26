@@ -35,7 +35,7 @@ That is the entire physical vocabulary. Everything the device does is one of
 these gestures, interpreted by whatever mode is active.
 
 **Long press means "up one level", everywhere.** Out of an app, then out of
-the menu that opened it, then back to the everyday layer. It is the one
+the menu that opened it, then back to your reflexes. It is the one
 gesture you never have to think about, which is why no app may spend it on
 something else — a control surface will not even let you bind it. The
 launcher is the single exception and it proves the rule: it launches on a
@@ -74,14 +74,14 @@ that owns:
 
 There are two kinds of mode:
 
-- **Ambient modes** sit quietly and *answer* your presses. **Home** — the
-  always-on mode a fresh button ships with — is ambient, and is the floor
-  that is always available. You can add other ambient modes scoped to a time
-  window (e.g. a different behaviour 5–7 am).
-- **Takeover modes** *take over* the button. When one starts — an alarm
-  ringing, a stopwatch running, a counter open — every press goes to that mode
-  until you exit it, then the button drops back to the ambient layer. While a
-  takeover mode is active, your normal rules are paused; that is the point.
+- **Reflexes** sit quietly and *answer* your presses — always live, fired
+  without thinking. **Home** — the always-on mode a fresh button ships with —
+  is a reflex, and is the floor that is always available. You can add other
+  reflexes scoped to a time window (e.g. a different behaviour 5–7 am).
+- **Apps** *take over* the button. When one launches — an alarm ringing, a
+  stopwatch running, a counter open — every press goes to that app until you
+  exit it, then the button drops back to your reflexes. While an app is
+  running, your reflexes are muted; that is the point.
 
 You build the device by defining modes and the **trigger** that activates each.
 
@@ -90,44 +90,73 @@ You build the device by defining modes and the **trigger** that activates each.
 ## 4. The web menu
 
 Open **http://&lt;device&gt;:8080** on any phone or laptop on the same network
-(during development, `http://localhost:8080`). The page has a live dashboard
-down one side and four tabs: **Modes**, **Lights**, **Events** and
-**Device**.
+(during development, `http://localhost:8080`). Down the left is the
+navigation — four destinations, **Events**, **Lights**, **Device** and
+**Apps**, and under them every mode you have, grouped into **Reflexes** and
+**Apps**.
+Clicking a mode opens it. The page lands on **Events**, because most visits
+are to see what the button has been doing rather than to change what it does.
 
-### 4.1 The Modes list
+The **◧ Test panel** button in the header opens the bench: what the light is
+showing right now, buttons that press the button for you, its tones, and a
+test clock. It is a popover — it appears when you ask for it and closes on
+Escape, on the button again, or on a click outside it.
 
-The Modes tab shows your modes as a list of one-line summaries. This is what a
-button with no config of its own starts out holding:
+While an alarm is **ringing**, a **Dismiss** button appears in the header
+beside the state badge. It sends an ordinary short press, which is what
+dismisses an alarm anyway — it is there because a ringing alarm is the one
+state the page could report and not act on, and because if the button is out
+of range there is nothing in the room to press either. It shows for a ringing
+alarm and nothing else: every other app is one you chose to open and can leave
+with a long press.
+
+### 4.1 The mode list
+
+The left-hand list is your modes, each with a one-line summary and a dot of
+the colour it runs in. This is what a button with no config of its own starts
+out holding:
 
 ```
-[Modes] [Lights] [Events] [Device]
-
-MODES
-  > Home        always · short->Log "button_press" · double->Launcher
-                                                  · long->Pomodoro     [edit]
-  > Launcher    entered from another mode · offers every app           [edit]
-  > Pomodoro    entered from another mode · 25/5, logs "pomodoro"      [edit]
-  > Stopwatch   entered from another mode · Stopwatch "stopwatch"      [edit]
-  + Add mode
-[Save & apply]  [Check]  [Revert]    Saved
+◦ Events                    |
+◦ Lights                    |   whichever section or mode
+◦ Device                    |   you picked on the left
+                            |
+REFLEXES                    |
+  Home                      |
+  short->Log "button_press" |
+                            |
+APPS                        |
+  Launcher                  |
+  offers every app          |
+  Pomodoro                  |
+  25/5, logs "pomodoro"     |
+  Stopwatch                 |
+  Stopwatch "stopwatch"     |
+  + Add reflex              |
+  Manage apps →             |
+                            |
+                            [Save & apply] [Check] [Revert]  Saved
 ```
 
-**Home** is the everyday layer and the only one that is always on. Its double
+**Home** is your baseline reflex and the only mode that is always on. Its double
 tap opens the **Launcher**, which reaches every app you add later without you
 wiring anything (§7), and its long press opens the Pomodoro. Those four modes
 are also the floor a broken config falls back to, so this list is what the
 button does when nothing else is true.
 
-Click a summary to expand and edit it; click again to collapse. Device
-plumbing lives on its own **Device** tab so it stays out of your way, and the
-colours on a **Lights** tab beside it (§8).
+Click a mode in the list and it opens on the right; the list stays where it
+is, so moving between modes is one click rather than two. Device plumbing
+lives under **Device** so it stays out of your way, and the colours under
+**Lights** (§8).
 
-Next to **+ Add mode** is a **ready-made mode** picker — fourteen complete
-modes, each dropped in ready to edit: Pomodoro, Tabata and HIIT intervals, a
-Gratitude counter, a Stopwatch, a 10-minute Countdown, a 5AM alarm, a
-Metronome, the Hot/Cold and Reaction games, a Status light, and three
-footswitch/transport remotes for a DAW (OSC and MIDI). Quicker than
-assembling one field by field, and a decent tour of what the button can do.
+Two buttons sit under the list, because there are two different things to
+add. **+ Add reflex** writes a new gesture map here and now. **Manage apps
+→** opens the App page (§4.6), which is where apps are installed — including
+the fourteen ready-made ones: Pomodoro, Tabata and HIIT intervals, a Gratitude
+counter, a Stopwatch, a 10-minute Countdown, a 5AM alarm, a Metronome, the
+Hot/Cold and Reaction games, a Status light, and three footswitch/transport
+remotes for a DAW (OSC and MIDI). Quicker than assembling one field by field,
+and a decent tour of what the button can do.
 
 ### 4.2 Anatomy of a mode
 
@@ -135,8 +164,8 @@ Every mode is edited with the same three-part card, no matter its kind:
 
 1. **Name** — your label; shown in summaries, the status line, and over
    Bluetooth.
-2. **What it does** — *what kind* of mode it is: **Actions** for the everyday
-   layer, or one of the eleven apps — Alarm, Reminder, Stopwatch, Counter,
+2. **What it does** — *what kind* of mode it is: **Actions** for a reflex,
+   or one of the eleven apps — Alarm, Reminder, Stopwatch, Counter,
    Intervals, Metronome, Countdown, Hot/Cold, Reaction timer, Signal light,
    Control surface — plus the **App launcher** that reaches them all (§5).
    Choosing it swaps the fields below to match.
@@ -149,10 +178,9 @@ as you add capability — new mode types just appear in the **What it does**
 dropdown.
 
 Modes are listed in two groups, because they turn on in completely different
-ways: **Everyday modes** answer presses in list order, and **modes that take
-over the button** own every press until you leave them. Each takeover mode's
-card says in plain words how to start it and how to get back out, and warns
-you if nothing can start it at all.
+ways: **Reflexes** answer presses in list order, and **Apps** own every press
+until you leave them. Each app's card says in plain words how to launch it and
+how to get back out, and warns you if nothing can launch it at all.
 
 ### 4.3 Buttons
 
@@ -206,16 +234,123 @@ Two things worth knowing:
   changes one of those and the page will say so and name it; restart the
   service to make it take. Everything else is instant.
 
+### 4.5 On a phone
+
+The page is built to work at phone width. Narrower than 900px the two
+columns stop being two columns: the navigation sits above whatever you are
+editing, capped so it never fills the screen, and the page scrolls normally
+from there. The Events log scrolls sideways inside its own box rather than
+dragging the page with it, and **Save & apply** sticks to the bottom of the
+screen so it is never a scroll away.
+
+The test panel costs nothing while it is closed, which is why it is a popover
+rather than a column — on a phone the column it replaced took a third of the
+screen for controls you only want when the real button is *not* connected.
+
+**On the same wifi**, that is all there is to it: open
+`http://<the computer's address>:8080`.
+
+**Away from home** the honest answer is a mesh VPN rather than hosting
+anything. Install [Tailscale](https://tailscale.com) on the machine running
+the service and on the phone, sign both into the same account, and the UI is
+at `http://<machine-name>:8080` from anywhere. Nothing is exposed to the
+internet, no ports are forwarded, and no password is needed — which matters,
+because **the web UI has no authentication of its own** and must never be put
+on a public address.
+
+The one thing to know: the service must still be *near the button*. Bluetooth
+range is a room, not a country. Reaching the page from a cafe lets you edit
+the config; it does not let the button hear you.
+
+### 4.6 Apps — what you have, and what can reach it
+
+The **Apps** destination lists every app the button can run, each in one of
+three states:
+
+| State | Means |
+|---|---|
+| **Available** | the button can run it; you have not installed it |
+| **Installed** | installed, and something can open it |
+| **Unreachable** | installed, and *nothing* can open it |
+
+**That last one is the reason the page exists.** Whether an app can be reached
+is not a fact about the app: it depends on what *other* modes do — a gesture
+bound to **Launch an app**, a clock, or a launcher that offers it. So no
+single mode's page can answer it, and an app you configured carefully but
+never wired up looks perfectly healthy right up until you reach for it.
+
+Reachability is followed through, not guessed. A launcher makes everything it
+offers reachable — but only if the launcher itself can be opened. Install one
+that no gesture points at and the page says so, and says the apps under it are
+still stranded, which is exactly what the button would do.
+
+Each installed copy is listed with **how** it is reached (“Triple tap → Home”,
+“at 07:00 Mon-Fri”), or what to do about it if it is not. Click one to open its
+page. **+ Install** adds a blank one; the dropdown beside it adds a ready-made
+one. An app already installed offers **+ Add another** instead.
+
+The page also calls out a gesture pointing at a mode that does not exist — a
+name left behind by a rename or a deletion. Nothing is repointed for you: the
+button fails loudly there rather than quietly doing something nobody chose.
+
+### 4.7 An app's page is the app
+
+Open one of your apps and the first thing on the page is **what it has
+actually done**, above its settings. A stopwatch lists its runs — longest,
+shortest, average, and how each run compared with the one before it. A counter
+shows how many a day held. An alarm shows whether you answered it.
+
+None of this is new data. It is the event log, filtered to that app's own
+rows, which is why it costs nothing and why it is only as good as what the app
+logs: an app whose event-name field is blank keeps no history, and its page
+says so rather than showing an empty list.
+
+An app with **more than one of something** — two alarms, three countdowns —
+also lists the others at the top of the page, so you move between them without
+going back to the list. One of anything shows no such row; there would be
+nothing to move to.
+
+### 4.8 Events — the log, and four ways to read it
+
+**Events** opens on the log: every row, newest first, with the filter bar
+above it. Search a name, pick a kind, choose a range. What you filter is what
+you export.
+
+Beside **Log** are three pages of charts over the same filtered rows:
+
+| Page | Answers |
+|---|---|
+| **Overview & Activity** | when you use it — a weekday × hour heatmap, events per day, hour of the day, and what the log is made of |
+| **Mode & Time** | where the time goes — total time per app, how long a session lasts, and which apps you open most |
+| **Patterns & Metrics** | what gets logged most, and every number the button has recorded, over time |
+
+Two things worth knowing about what they mean.
+
+**Time inside an app is counted from the app's own rows**, not its timers. A
+stopwatch writes both, so adding them up would count a stopwatch session
+twice — which is why "where the time goes" and "most opened apps" are two
+charts: an app you open twenty times for ten seconds and one you open once for
+an hour are different facts, and neither chart shows the other.
+
+**Numbers are never pooled.** The log has one number column, and a metronome
+puts a tempo in it while a reaction timer puts milliseconds and an alarm puts
+a yes-or-no. They share a column and nothing else, so each event name gets its
+own panel with its own scale. A single chart of all of them would render
+perfectly and mean nothing.
+
+The offline editor has none of this — it has no service behind it, and so no
+events at all.
+
 ---
 
 ## 5. What a mode does
 
-One everyday mode kind, eleven apps, and a launcher that reaches them:
+One kind of reflex, twelve apps, and a launcher that reaches them:
 
 | Kind | What it is | Getting out |
 |---|---|---|
-| **Actions** | the everyday layer: one action per gesture, answered without taking the button over (§5.1) | — it never takes over |
-| **Alarm** | rings at a set time until you stop it (§5.2) | any press; long press snoozes if you set one |
+| **Actions** | the reflex kind: one action per gesture, answered without taking the button over (§5.1) | — it never takes over |
+| **Alarm** | rings at a set time until you stop it, and can act if you *don't* (§5.2) | any press; long press snoozes if you set one |
 | **Reminder** | a gentler alarm: shows at a set time, chimes once, gives up on its own after a while | any press |
 | **Stopwatch** | times something, with laps (§5.3) | long press stops and logs |
 | **Counter** | a tally you press up (§5.5) | long press |
@@ -225,16 +360,17 @@ One everyday mode kind, eleven apps, and a launcher that reaches them:
 | **Hot / Cold** | a guessing game: stop a spinning colour wheel on the hidden target | long press (short press stops the wheel) |
 | **Reaction timer** | the light goes out at a random moment; press as fast as you can | long press (short press is your answer) |
 | **Signal light** | wears one of your positions — Free / Busy / On air — and can send something on each change, which makes it an OSC or MIDI footswitch too | long press (short = next, double tap = send again) |
-| **Control surface** | a remote: one command per gesture, held open so you can send several. Bind a gesture to **Enter a mode** and it becomes a menu page | long press |
+| **Control surface** | a remote: one command per gesture, held open so you can send several. Bind a gesture to **Launch an app** and it becomes a menu page | long press |
+| **Light show** | plays a playlist of your named looks, one after another (§5.7) | long press (short = next, double tap = hold) |
 | **App launcher** | steps through your apps so you don't need a gesture wired to each one | long press (short = next app, **double tap launches**) |
 
-Everything except **Actions** is a *takeover*: it owns every press until you
-leave. Each app's card in the menu says in plain words how to start it and how
+Everything except **Actions** is an *app*: it owns every press until you
+leave. Each app's card in the menu says in plain words how to launch it and how
 to get back out.
 
-### 5.1 Actions — the everyday mode
+### 5.1 Actions — the reflex
 
-An **ambient** mode. Each gesture is mapped to one action; unmapped gestures
+A **reflex**. Each gesture is mapped to one action; unmapped gestures
 do nothing. Pick a different action per gesture from a dropdown.
 
 Available actions:
@@ -247,8 +383,8 @@ Available actions:
 | **Call a webhook** | POSTs to any URL — the IFTTT / Make / n8n / Home Assistant hook. Pick a service and it fills in a template for you |
 | **Send an OSC message** | fires one OSC message over the network at anything listening — Reaper, QLab, Resolume, TouchOSC, VCV Rack |
 | **Send a MIDI message** | sends one note or CC to a MIDI port, for a DAW that speaks MIDI and not OSC. Start from a DAW command (Play, Record, Loop…) and it works unlearned |
-| **Enter a mode** | opens one of your apps — how you start a stopwatch, a counter or the launcher by hand |
-| **Sleep / wake the button** | puts the everyday layer to sleep; the same gesture wakes it |
+| **Launch an app** | opens one of your apps — how you start a stopwatch, a counter or the launcher by hand. The picker shows each app's light beside its name, so you choose the one you recognise rather than the one you remembered naming |
+| **Sleep / wake the button** | puts your reflexes to sleep; the same gesture wakes them |
 
 **About the count readout.** Zero is a single dim blink rather than no blinks
 at all, so "counted nothing today" reads differently from a button that just
@@ -260,20 +396,20 @@ some other mode already logs to: you will not double-count anything.
 **About Sleep / wake.** While asleep the button answers nothing — no tone, no
 light, no logged event — except the gesture you bound to this, which is what
 wakes it again. The resting light dims to a dark glow rather than going out,
-because "off" and "unplugged" have to look different. What sleeps is the
-everyday layer *only*: an app already running keeps running, and an alarm you
+because "off" and "unplugged" have to look different. What sleeps is your
+reflexes *only*: an app already running keeps running, and an alarm you
 set still rings, since a stray five-tap should not be able to cancel your
 morning. It lasts as long as the service does — restart and the button is
 awake. A five-tap is its natural home.
 
 **Where each action works.** Actions appear in three places: on the gestures
-of an everyday mode, on the gestures of a control surface, and on a signal
-light's positions. Two of them are everyday-only. **Show a count on the
-light** takes the light over for as long as it counts, and **Sleep / wake**
-changes what the *next* press means — both are things only the everyday layer
-handles, so binding either inside an app gets you the error flash rather than
-the behaviour. **Enter a mode** works on an everyday mode and on a control
-surface (that is how one page opens another), but not on a signal position.
+of a reflex, on the gestures of a control surface, and on a signal light's
+positions. Two of them are reflex-only. **Show a count on the light** takes
+the light over for as long as it counts, and **Sleep / wake** changes what the
+*next* press means — both are things only the reflex layer handles, so binding
+either inside an app gets you the error flash rather than the behaviour.
+**Launch an app** works on a reflex and on a control surface (that is how one
+page opens another), but not on a signal position.
 
 Optional: **Skip if already logged today** — give an event name and the whole
 mode is skipped for the rest of the day once that event has been logged (e.g.
@@ -281,8 +417,8 @@ a meds reminder that goes quiet after you have taken them).
 
 **Named actions — one action, several gestures.** An action can live in a
 shared pool instead of on a single gesture. Name it once under **Named
-actions** on the Modes tab (with the other fringe controls, behind the
-header's **⚙ Tinker** toggle), then point as many gestures as you like at the
+actions** at the foot of any mode's page (with the other fringe controls,
+behind the header's **⚙ Tinker** toggle), then point as many gestures at the
 name: the three gestures that all send the same webhook become one thing to
 edit rather than three. Naming is optional and most actions never need it — an
 action used once is better written straight on the gesture. Rename one in the
@@ -293,7 +429,7 @@ honest than quietly re-aiming several gestures at something you never chose.
 
 ### 5.2 Alarm — rings until you stop it
 
-A **takeover** mode. When it activates, the device rings: urgent red/white LED
+An **app**. When it activates, the device rings: urgent red/white LED
 and a repeating alarm tone. It keeps ringing until you act.
 
 | While ringing | Result |
@@ -311,9 +447,27 @@ Fields:
 
 Activate an alarm with **At a time** (a real alarm clock) — see §6.
 
+**A dead man's switch.** Set **Give up after** to a number of minutes and give
+the alarm an **If nobody answers** action, and it stops being a thing that
+waits forever: it rings, and if nothing has answered by then it runs that
+action once and stops. A webhook that texts someone, a log row, an OSC
+message — anything a hook can run.
+
+Both halves are needed. Set one without the other and the editor's log says
+so, because a switch that was never armed looks exactly like one that was.
+
+Each outcome is recorded under the same event name, so **Events** answers "did
+I check in?" for both: `1` for answered, `0` for unanswered.
+
+> **It is a nudge, not a safety device.** It runs on this PC. If the service
+> stops, the machine sleeps, or Bluetooth drops, the alarm does not ring and
+> the switch cannot fire — and it has no way to know that it didn't. Do not
+> put it anywhere a missed alert is worse than no alert.
+
+
 ### 5.3 Stopwatch — time something
 
-A **takeover** mode. Starting it begins timing (LED shows a running state).
+An **app**. Starting it begins timing (LED shows a running state).
 
 | Gesture | Result |
 |---|---|
@@ -325,7 +479,7 @@ Daily totals accumulate, so you can see total focus time for the day.
 
 ### 5.4 Intervals — work in blocks (Pomodoro, Tabata, HIIT)
 
-A **takeover** mode, and one template behind three ready-made modes: a
+An **app**, and one template behind three ready-made modes: a
 classic 25/5 Pomodoro, a 20-second Tabata, and HIIT intervals are the same
 app with different numbers in it. Starting it begins a work block; when that
 ends, a rest begins, and so on. The LED shows which half you are in — a slow
@@ -365,7 +519,7 @@ press*. Same colour, no animation: it is the same block, not counting.
 
 ### 5.5 Counter — tally something
 
-A **takeover** mode. Opening it starts a tally (LED shows a counting state).
+An **app**. Opening it starts a tally (LED shows a counting state).
 
 | Gesture | Result |
 |---|---|
@@ -376,7 +530,7 @@ Field: **Event name** — what each increment is logged as (e.g. `water`).
 
 ### 5.6 Metronome — tap out a tempo
 
-A **takeover** mode, and the only one with nothing to configure — the tempo is
+An **app**, and the only one with nothing to configure — the tempo is
 whatever you tap, not something you save.
 
 | Gesture | Result |
@@ -392,14 +546,34 @@ tapping is capped at a safe flash rate — and goes back to your configured
 
 ---
 
+### 5.7 Light show — a playlist for the light
+
+Give it a list of your named looks and it walks them, one every few seconds.
+Short press jumps to the next, **double tap holds it** on the one you like,
+long press leaves.
+
+The looks do the work. A named look can be a whole stop list — fading, holding
+and looping inside a single cue — so a "show" of three cues can run for
+minutes without repeating. That is also why cues *name* looks rather than
+carrying colours: retune **Ember** once and every show using it changes.
+
+**Seconds per look** has a floor of one second. The flash guard that protects
+you elsewhere watches how fast a look flashes *inside itself*; nothing else
+watches how fast the show swaps between looks, so this axis has its own floor.
+
+A cue naming a look you have since deleted is left in place and reported, not
+skipped — a show quietly one shorter than the list on screen would be worse
+than one that shows a gap.
+
+
 ## 6. When it's on
 
 | Setting | For | You set | Behaviour |
 |---|---|---|---|
-| **Always on** | the everyday floor — **Home**, as shipped | — | active whenever nothing else has taken over. Exactly one mode is Always on. |
-| **Only during certain hours** | everyday modes | start + end time, optional days | active only inside the window (it may cross midnight, e.g. 22:00–06:00); overrides Home for the gestures it defines |
+| **Always on** | the reflex floor — **Home**, as shipped | — | active whenever nothing else has taken over. Exactly one mode is Always on. |
+| **Only during certain hours** | reflexes | start + end time, optional days | active only inside the window (it may cross midnight, e.g. 22:00–06:00); overrides Home for the gestures it defines |
 | **At a set time each day** | Alarm, Reminder | a clock time, optional days | fires at that time and takes over — this is how you set an alarm |
-| **Only when another mode starts it** | every other app | — | never starts on its own; you reach it with an **Enter a mode** action on a gesture in another mode, or from the App launcher |
+| **Only when another mode starts it** | every other app | — | never starts on its own; you reach it with a **Launch an app** action on a gesture in another mode, or from the App launcher |
 
 Only the two clock-started apps get **At a set time each day**; the other
 nine, and the launcher, are started by a gesture and offer only **Only when
@@ -413,12 +587,12 @@ opens it, long press comes home.
 
 How they interact when you press the button:
 
-1. If a **takeover** mode is active, the press goes to it.
+1. If an **app** is running, the press goes to it.
 2. Otherwise the device checks **ambient** modes top to bottom — time-window
    modes first, then the always-on one (**Home**) — and the first one that
    defines the pressed gesture wins. (Same first-match-wins logic throughout.)
 
-A scheduled alarm can fire at any time; if one is due while another takeover
+A scheduled alarm can fire at any time; if one is due while another app
 is running, the alarm takes priority.
 
 ---
@@ -426,7 +600,7 @@ is running, the alarm takes priority.
 ## 7. Recipes
 
 **Some of this already works.** A button with no config of its own starts with
-**Home** on the everyday layer — short press logs `button_press`, double tap
+**Home**, your baseline reflex — short press logs `button_press`, double tap
 opens the **Launcher**, long press opens a **Pomodoro** — and a **Stopwatch**
 waiting behind the launcher. So the first recipes here change what you already
 have; the later ones add what nothing ships.
@@ -454,14 +628,14 @@ habit you check every day; not worth it for one you don't.
 
 **Swap the app on the long press**
 Long press already opens the Pomodoro, so this is a substitution, not a build.
-Either open **Home** → **Long press** → **Enter a mode** and pick a different
+Either open **Home** → **Long press** → **Launch an app** and pick a different
 app — or leave the gesture alone and edit the **Pomodoro** mode itself, since
 Tabata and HIIT are that same app with different numbers in it (§5.4).
 Clearing the long press entirely is a fine third option: every app is still a
 double tap and a few short presses away through the launcher.
 
 **Add an app without spending a gesture**
-Add mode → "Water" → **Counter** (event `water`) → **Only when another mode
+Manage apps → Counter → Install → name it "Water" (event `water`) → **Only when another mode
 starts it**. That is the whole recipe; there is no second step. The launcher
 offers every app in list order unless you name a shorter list, so the new
 counter turns up on your double tap with nothing else wired. Open it, tap once
@@ -479,7 +653,7 @@ leaving an app out; it just needs a gesture or another mode to open it.
 **When an app has earned its own gesture**
 The launcher costs a double tap plus a press or two of cycling, which is the
 right trade for most apps and the wrong one for the app you open twenty times
-a day. Wire that one straight: **Home** → **Triple tap** → **Enter a mode** →
+a day. Wire that one straight: **Home** → **Triple tap** → **Launch an app** →
 **Stopwatch**. Weigh it first, though — there are six gestures and nine apps a
 gesture can start, and every longer burst you bind slows the shorter ones
 (§2). Note that this is the same triple tap the count readout above wanted:
@@ -487,14 +661,14 @@ you get one of the two. That squeeze, in miniature, is why the launcher
 exists.
 
 **Wake-up alarm, weekdays at 7 am**
-Add mode → name "Wake up" → **Alarm** (message "Wake up", snooze 9,
+Manage apps → Alarm → Install → name it "Wake up" (message "Wake up", snooze 9,
 log on dismiss `woke_up`) → **At a set time each day** 07:00, days Mon–Fri.
 At 7 am it rings; tap to dismiss, hold to snooze 9 minutes. This one spends no
 gesture at all: a clock starts it, which is why Alarm and Reminder are the
 only two kinds offered **At a set time each day** (§6).
 
 **Morning meds reminder that goes quiet once taken**
-Add mode → "Morning meds" → **Actions** (double tap → Log
++ Add reflex → "Morning meds" (double tap → Log
 `meds_taken`) → **Only during certain hours** 05:00–07:00 → set **Skip if
 already logged today** = `meds_taken`. Between 5 and 7, a double tap logs your
 meds and the reminder stands down for the day. It is also a clean look at
@@ -565,9 +739,10 @@ Feedback sounds can be turned off on the **Device** tab → **Feedback sounds**.
 
 ## 9. The dashboard
 
-The header carries the live state, and a side pane holds the things you press
-to test with — fold it away with the toggle beside it when you want the whole
-width for editing.
+The header carries the live state, and the **◧ Test panel** button beside
+Tips opens the things you press to test with. It is a popover: it appears
+when you ask for it, and closes on Escape, on the button again, or on a click
+outside it.
 
 - **State badge & last action** — current state, and the last gesture → mode →
   result.
@@ -633,7 +808,7 @@ Home Assistant, or your own script.
   "(missing)" against the name it is looking for — point it at an existing
   named action, or write one straight onto the gesture.
 - **You are stuck inside something** → long press. Out of an app, out of the
-  menu, back to the everyday layer, every time.
+  menu, back to your reflexes, every time.
 
 ---
 

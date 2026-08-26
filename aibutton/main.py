@@ -304,6 +304,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         HotColdBehavior,
         LauncherBehavior,
         LedEffect,
+        LightShowBehavior,
         MetronomeBehavior,
         PomodoroBehavior,
         ReactionBehavior,
@@ -730,13 +731,48 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             stop_loop()
             return ActionResult(True, f"{label} (demo: rings until dismissed)")
+        # The dead man's switch (TODO 44): with a grace period set, the ring is
+        # a question with a deadline rather than one that waits forever.
+        grace_s = behavior.grace_minutes * 60 if behavior.grace_minutes else None
         while True:
             set_led(LEDState.ALERT)
             start_loop(Sound.ALARM)
             status.last_message = label
             set_status("ALARMING")
-            trigger = await _wait_for_trigger(device.events, stop)
+            trigger = await _wait_for_trigger(device.events, stop, grace_s)
             stop_loop()
+            if trigger is None and grace_s is not None and not stop.is_set():
+                # Nobody answered. This is the *only* branch that fires
+                # on_timeout, and it fires once - the alarm is over either way,
+                # because an unanswered alarm that keeps ringing after raising
+                # the alert is just noise on top of the thing it already did.
+                set_led(LEDState.IDLE)
+                set_status("IDLE")
+                late = f"{behavior.grace_minutes:g} min"
+                if behavior.dismiss_event:
+                    # Logged on *every* outcome, not only on a dismissal: a
+                    # switch that fires while nobody is watching is only
+                    # trustworthy if the record says what happened.
+                    # value is numeric: 0 = nobody answered, 1 = someone did.
+                    # Same event name, both outcomes, one place to look.
+                    store.log_event(behavior.dismiss_event, mode=mode_name, value=0)
+                action = resolve_action(cm.config, behavior.on_timeout)
+                if action is None:
+                    log.warning(
+                        "alarm %r: went unanswered after %s and has no on_timeout "
+                        "action to run", mode_name, late,
+                    )
+                    return ActionResult(True, f"{label} - unanswered after {late}")
+                result = await execute(
+                    action, trigger="timeout", mode_name=mode_name, store=store,
+                )
+                log.warning(
+                    "alarm %r: unanswered after %s - ran %s (%s)",
+                    mode_name, late, type(action).__name__, result.message,
+                )
+                return ActionResult(
+                    result.ok, f"{label} - unanswered after {late}: {result.message}"
+                )
             if trigger is None:  # shutting down mid-ring
                 set_led(LEDState.IDLE)
                 return ActionResult(True, f"{label} (interrupted by shutdown)")
@@ -750,7 +786,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 except asyncio.TimeoutError:
                     continue  # snooze elapsed; ring again
             if behavior.dismiss_event:
-                store.log_event(behavior.dismiss_event, mode=mode_name)
+                # 1 = answered, matching the 0 the unanswered branch writes.
+                store.log_event(behavior.dismiss_event, mode=mode_name, value=1)
             return ActionResult(True, f"Dismissed: {label}")
 
     def reminder_look(behavior: ReminderBehavior):
@@ -1943,6 +1980,79 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             game, effects = reaction.step(game, reaction.NEXT, loop.time(), delay())
             render(effects, game)
 
+    async def run_lightshow(behavior: LightShowBehavior, mode_name: str) -> ActionResult:
+        """A light show: walk a playlist of looks, one cue at a time.
+
+        Short press is the next cue, double tap holds where it is, long press
+        leaves - the house rules, with the hold in the slot a Signal uses for
+        "say it again", because the one thing you want from a show is to stop
+        it on the one you liked.
+
+        **Holding stops the clock, not the light.** The cue underneath keeps
+        animating, because a look is a schedule `set_led` is already walking;
+        all this loop does is stop asking for the next one. That is also why
+        the wait is the *only* timing here - the show never drives a frame.
+
+        A cue naming a look that no longer exists is reported and shown dark
+        rather than skipped: the parser already warned about it, the App page
+        would call it missing, and silently jumping the cue would make a show
+        that is quietly one shorter than the list you are looking at.
+        """
+        cues = behavior.cues
+        if not cues:
+            status.last_ok = False
+            status.last_message = f"{mode_name}: no cues to show"
+            set_led(LEDState.ERROR)
+            await asyncio.sleep(_SUCCESS_DISPLAY_S)
+            set_led(LEDState.IDLE)
+            return ActionResult(False, f"{mode_name}: no cues to show")
+
+        index = 0
+        held = not behavior.auto
+        status.last_mode = mode_name
+        set_status("SHOWING")
+
+        def show() -> None:
+            cue = cues[index]
+            look = (cm.config.looks or {}).get(cue.look)
+            if look is None:
+                log.warning(
+                    "light show %r: cue %d names look %r, which does not exist",
+                    mode_name, index + 1, cue.look,
+                )
+            # None is what set_led already means by "no override", so a missing
+            # look falls back to the state's own colour rather than to nothing.
+            set_led(LEDState.LISTENING, look)
+            where = f"{index + 1}/{len(cues)}"
+            status.last_message = (
+                f"{cue.look} ({where}){' - held' if held else ''}"
+            )
+            if behavior.log_as:
+                store.log_event(behavior.log_as, mode=mode_name)
+
+        show()
+        while True:
+            cue = cues[index]
+            # Held means no clock: wait for a press with no deadline.
+            timeout = None if held else (cue.hold_s or behavior.dwell_s)
+            trigger = await _wait_for_trigger(device.events, stop, timeout)
+            if trigger is None:
+                if stop.is_set():  # shutting down mid-show
+                    set_led(LEDState.IDLE)
+                    return ActionResult(True, f"{mode_name} (interrupted by shutdown)")
+                index = (index + 1) % len(cues)  # the dwell elapsed
+                show()
+                continue
+            if trigger is TriggerType.LONG_PRESS:
+                set_led(LEDState.IDLE)
+                return ActionResult(True, f"{mode_name} finished")
+            if trigger is TriggerType.DOUBLE_TAP:
+                held = not held
+                show()  # same cue, new status line
+                continue
+            index = (index + 1) % len(cues)
+            show()
+
     async def run_signal(behavior: SignalBehavior, mode_name: str) -> ActionResult:
         """A signal light: short press moves to the next position and stays
         there, long press leaves, double tap re-sends where it already is.
@@ -2135,7 +2245,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     TAKEOVER_BEHAVIORS = (
         AlarmBehavior, StopwatchBehavior, CounterBehavior, PomodoroBehavior,
         MetronomeBehavior, CountdownBehavior, LauncherBehavior, HotColdBehavior,
-        ReactionBehavior, SignalBehavior, ControlBehavior,
+        ReactionBehavior, SignalBehavior, ControlBehavior, LightShowBehavior,
     )
 
     def app_look(target):
@@ -2290,6 +2400,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                     result, chosen = await run_control(mode.behavior, mode.name)
                 elif isinstance(mode.behavior, SignalBehavior):
                     result = await run_signal(mode.behavior, mode.name)
+                elif isinstance(mode.behavior, LightShowBehavior):
+                    result = await run_lightshow(mode.behavior, mode.name)
                 else:
                     result = ActionResult(
                         False, f"mode {mode.name!r} is not a takeover mode"

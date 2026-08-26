@@ -93,7 +93,8 @@
       "reset_gap_s": 2,
       "max_bpm": 600,
       "sound_on_tap": true,
-      "log_as": "metronome"
+      "log_as": "metronome",
+      "clock_port": ""
     },
     {
       "name": "Counter",
@@ -101,7 +102,10 @@
       "activation": {
         "type": "manual"
       },
-      "event": "Habit"
+      "event": "Habit",
+      "looks": {
+        "COUNTING": "Got It"
+      }
     },
     {
       "name": "Alarm",
@@ -261,76 +265,101 @@
       "dismiss_event": ""
     },
     {
-      "name": "Launcher",
-      "template": "launcher",
-      "activation": {
-        "type": "manual"
-      },
-      "targets": "Stopwatch\nPomodoro\nMetronome\nCounter\nAlarm\nCountdown 60s\nReaction",
-      "return_after": true,
-      "log_as": ""
-    },
-    {
-      "name": "Midi Actions",
-      "template": "actions",
-      "activation": {
-        "type": "always"
-      },
-      "short_press": {
-        "action": "midi",
-        "port": "4G3NT",
-        "channel": 1,
-        "kind": "note_on",
-        "number": 94,
-        "value": 127
-      },
-      "long_press": {
-        "action": "enter_mode",
-        "target": "Stopwatch"
-      },
-      "double_tap": {
-        "action": "midi",
-        "port": "4G3NT",
-        "channel": 1,
-        "kind": "note_on",
-        "number": 94,
-        "value": 127
-      },
-      "triple_tap": {
-        "action": "midi",
-        "port": "4G3NT",
-        "channel": 1,
-        "kind": "note_on",
-        "number": 89,
-        "value": 127
-      },
-      "tap_5": {
-        "action": "midi",
-        "port": "4G3NT",
-        "channel": 1,
-        "kind": "note_on",
-        "number": 86,
-        "value": 127
-      }
-    },
-    {
       "name": "Actions",
       "template": "actions",
       "activation": {
         "type": "always"
       },
       "short_press": {
-        "action": "log",
-        "event": "button_press"
+        "action": "midi",
+        "port": "",
+        "kind": "note_on",
+        "channel": 1,
+        "number": 94,
+        "value": 127,
+        "daw_command": "play"
+      },
+      "long_press": {
+        "action": "enter_mode",
+        "target": "Launcher"
+      },
+      "double_tap": {
+        "action": "enter_mode",
+        "target": "DAW Control"
+      },
+      "triple_tap": {
+        "action": "enter_mode",
+        "target": "Stopwatch"
+      },
+      "tap_4": {
+        "action": "enter_mode",
+        "target": "Countdown 60s"
       }
+    },
+    {
+      "name": "DAW Control",
+      "template": "control",
+      "activation": {
+        "type": "manual"
+      },
+      "looks": {
+        "LISTENING": "Ponder"
+      },
+      "short_press": {
+        "action": "midi",
+        "port": "",
+        "channel": 1,
+        "kind": "note_on",
+        "number": 95,
+        "value": 127,
+        "daw_command": "record"
+      },
+      "double_tap": {
+        "action": "midi",
+        "port": "",
+        "channel": 1,
+        "kind": "note_on",
+        "number": 93,
+        "value": 127,
+        "daw_command": "stop"
+      },
+      "triple_tap": {
+        "action": "midi",
+        "port": "",
+        "channel": 1,
+        "kind": "note_on",
+        "number": 94,
+        "value": 127,
+        "daw_command": "play"
+      },
+      "tap_4": {
+        "action": "midi",
+        "port": "",
+        "channel": 1,
+        "kind": "note_on",
+        "number": 89,
+        "value": 127,
+        "daw_command": "click"
+      },
+      "tap_5": {
+        "action": "midi",
+        "port": "",
+        "channel": 1,
+        "kind": "note_on",
+        "number": 86,
+        "value": 127,
+        "daw_command": "loop"
+      },
+      "log_as": "",
+      "return_after": true
     }
   ],
   "led_palette": {
     "IDLE": {
-      "style": "rainbow",
-      "color": "#616161",
+      "style": "solid",
+      "color": "#071f00",
       "color2": "#001e1f",
-      "period_s": 3.5
+      "period_s": 5.86
     },
     "LISTENING": {
       "style": "breathe",
@@ -395,10 +424,22 @@
   },
   "looks": {
     "Ponder": {
-      "style": "fade",
-      "color": "#9b86d5",
-      "color2": "#8be5d6",
-      "period_s": 4.05
+      "stops": [
+        {
+          "color": "#ff9e9e",
+          "hold_s": 0.5,
+          "fade_s": 0,
+          "curve": "linear"
+        },
+        {
+          "color": "#000000",
+          "hold_s": 1,
+          "fade_s": 0.5,
+          "curve": "linear"
+        }
+      ],
+      "repeat": true,
+      "drive": "clock"
     },
     "Cops": {
       "style": "alternate",
@@ -411,6 +452,76 @@
       "color": "#00a8ff",
       "color2": "#000000",
       "period_s": 10
+    },
+    "blip": {
+      "stops": [
+        {
+          "color": "#04ff00",
+          "hold_s": 0.05,
+          "fade_s": 0,
+          "curve": "ease_out"
+        },
+        {
+          "color": "#000000",
+          "hold_s": 2.95,
+          "fade_s": 0,
+          "curve": "ease_out"
+        }
+      ],
+      "repeat": true,
+      "drive": "clock"
+    },
+    "look": {
+      "stops": [
+        {
+          "color": "#02030a",
+          "hold_s": 1,
+          "fade_s": 1,
+          "curve": "exponential"
+        },
+        {
+          "color": "#1a2a5a",
+          "hold_s": 1,
+          "fade_s": 2,
+          "curve": "ease_in"
+        },
+        {
+          "color": "#c8d8ff",
+          "hold_s": 1,
+          "fade_s": 2,
+          "curve": "ease_out"
+        },
+        {
+          "color": "#1a2a5a",
+          "hold_s": 1,
+          "fade_s": 2,
+          "curve": "linear"
+        }
+      ],
+      "repeat": true,
+      "drive": "clock"
+    },
+    "Got It": {
+      "stops": [
+        {
+          "color": "#ffffff",
+          "hold_s": 0.07,
+          "fade_s": 0,
+          "curve": "linear"
+        },
+        {
+          "color": "#00ff2a",
+          "hold_s": 0.7,
+          "fade_s": 0.18,
+          "curve": "ease_out"
+        }
+      ],
+      "repeat": false,
+      "drive": "clock"
     }
+  },
+  "actions": {},
+  "state_looks": {
+    "IDLE": "blip"
   }
 }

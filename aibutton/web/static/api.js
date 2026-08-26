@@ -54,6 +54,22 @@ export class ConfigApi {
     return this._send('/api/dev/led', 'POST', body);
   }
 
+  /** Rows from the event log, newest first. Takes the same filters the Events
+   *  table uses (`kind`, `name`, `mode`, `since`, `until`, `limit`).
+   *
+   *  What an app's own page reads to show what that app has actually done
+   *  (TODO 51). Optional by construction like showLook and midiPorts: the
+   *  offline editor's FileApi has no such method and no events behind it, so
+   *  the readout section simply does not appear there.
+   *
+   *  **`limit` is not optional in practice.** The endpoint defaults to 50,
+   *  which for a chart or a history is the quiet wrong answer - it renders,
+   *  it looks right, and it is describing the last fifty rows. Every caller
+   *  here passes one deliberately. */
+  events(params = {}) {
+    return this._json(`/api/events?${new URLSearchParams(params)}`);
+  }
+
   /** MIDI ports this machine can reach: { available, out, in, note }. `out`
    *  is what the midi action sends to, `in` is what the metronome's clock
    *  listens on. `available` is false (with empty lists and a `note`) when

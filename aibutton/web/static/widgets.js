@@ -11,7 +11,10 @@ import { clear, el } from './dom.js';
 // needs it too (a rainbow's summary quotes the percentage), and two copies of
 // that conversion is exactly the drift this file's descriptors exist to avoid.
 // The import is one-way - schema.js is DOM-free data and never reaches back.
-import { levelHex, levelPercent } from './schema.js';
+import { describeEffect, describeTemplate, levelHex, levelPercent, modeLook } from './schema.js';
+// The same painter the nav and the App page use, so a look previews once and
+// identically wherever it is shown.
+import { paint as applySwatch, unpaint } from './ledPreview.js';
 
 function errLine() {
   return el('span', { className: 'fld-err' });
@@ -246,7 +249,17 @@ const WIDGETS = {
     // key is *deliberately* transient: the parser does not know it, so it is
     // dropped the first time the config is saved and reloaded - which is the
     // right lifetime for "this is how the URL got filled in".
-    const remembered = presets.find((p) => p.id === obj[spec.key]);
+    //
+    // **Unless the preset can be recognised again from what it wrote**, which
+    // is what `derive` is for. A DAW command is reverse-lookupable - note 94
+    // *is* Play - and without this the transient key's correct lifetime had a
+    // visible cost: every raw MIDI field is Tinker-tier and hidden, so after a
+    // save this dropdown was the only control on screen for that gesture, and
+    // it reverted to "- start from… -" while the button went on sending the
+    // right note. It read as the settings having been wiped. Reported
+    // 2026-08-26; `describe()` had been deriving the same label all along.
+    const remembered = presets.find((p) => p.id === obj[spec.key])
+      || (typeof spec.derive === 'function' ? spec.derive(obj) : null);
     if (remembered) {
       select.value = remembered.id;
       note.textContent = remembered.hint || '';
@@ -392,6 +405,109 @@ const WIDGETS = {
     input.value = obj[spec.key] ?? '';
     const err = errLine();
     return { el: wrap(spec, input, err), validate: requiredValidator(spec, obj, err) };
+  },
+
+  /**
+   * Pick a mode by name, showing the light it runs in.
+   *
+   * A native `<select>` cannot do this: an `<option>` holds text, and the half
+   * of a look that identifies it is the *movement* - "the slow blue one" is
+   * how anyone actually refers to a mode (TODO 50). So this is a button and a
+   * list of buttons, each carrying the same live swatch the nav and the App
+   * page paint, from the same `modeLook`.
+   *
+   * A widget kind rather than a special case inside the `enter_mode` picker,
+   * because capability is declared as data here - anything else that comes to
+   * pick a mode asks for this kind and gets the swatch for free.
+   *
+   * Keyboard: the options are real buttons, so Tab and Enter work without a
+   * listbox implementation; Escape closes and hands focus back.
+   */
+  modeSelect(spec, obj, onInput, ctx) {
+    const options = typeof spec.options === 'function' ? (spec.options(ctx) || []) : (spec.options || []);
+    const modes = (ctx && typeof ctx.getModes === 'function') ? (ctx.getModes() || []) : [];
+    const looks = (ctx && typeof ctx.getLooks === 'function') ? (ctx.getLooks() || {}) : {};
+    const palette = (ctx && typeof ctx.getPalette === 'function') ? (ctx.getPalette() || {}) : {};
+    const byName = new Map(modes.filter((m) => m && m.name).map((m) => [m.name, m]));
+
+    const paint = (node, name) => {
+      const look = modeLook(byName.get(name), looks, palette);
+      node.classList.toggle('empty', !look);
+      if (look) applySwatch(node, look);
+      else unpaint(node);
+      node.title = look
+        ? `While it runs: ${describeEffect(look)}`
+        : "No colour of its own - it runs the button's own lights.";
+    };
+
+    const headSwatch = el('span', { className: 'pick-swatch' });
+    const headName = el('span', { className: 'pick-name' });
+    const head = el('button', {
+      type: 'button', className: 'inp mode-pick',
+      onclick: (e) => { e.stopPropagation(); setOpen(list.hidden); },
+    }, [headSwatch, headName, el('span', { className: 'pick-caret', textContent: '▾' })]);
+
+    const list = el('div', { className: 'mode-pick-list', hidden: true });
+    const show = () => {
+      const current = obj[spec.key] ?? '';
+      const chosen = options.find((o) => o.value === current);
+      headName.textContent = chosen ? chosen.label : (current || 'Choose an app…');
+      headName.classList.toggle('unset', !current);
+      // A target that no longer exists keeps its name and says so, rather than
+      // silently reading as unset - the parser warns about exactly this and the
+      // editor must not disagree with it.
+      headName.classList.toggle('missing', Boolean(current) && !chosen);
+      if (current && !chosen) headName.textContent = `${current} (missing)`;
+      paint(headSwatch, current);
+    };
+
+    function setOpen(open) {
+      list.hidden = !open;
+      head.setAttribute('aria-expanded', String(open));
+    }
+    const away = (e) => {
+      if (list.hidden) return;
+      if (!wrapEl.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('click', away);
+    head.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { setOpen(true); }
+    });
+
+    for (const option of options) {
+      const swatch = el('span', { className: 'pick-swatch' });
+      paint(swatch, option.value);
+      const mode = byName.get(option.value);
+      list.append(el('button', {
+        type: 'button', className: 'mode-pick-option',
+        onclick: (e) => {
+          e.stopPropagation();
+          obj[spec.key] = option.value;
+          show();
+          setOpen(false);
+          head.focus();
+          onInput();
+        },
+      }, [
+        swatch,
+        el('span', { className: 'pick-name', textContent: option.label }),
+        el('span', { className: 'pick-note', textContent: mode ? describeTemplate(mode) : '' }),
+      ]));
+    }
+    if (!options.length) {
+      list.append(el('p', { className: 'empty pick-empty', textContent:
+        'No apps installed yet - install one from Apps.' }));
+    }
+    list.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      head.focus();
+    });
+
+    show();
+    const err = errLine();
+    const wrapEl = el('div', { className: 'mode-pick-wrap' }, [head, list]);
+    return { el: wrap(spec, wrapEl, err), validate: requiredValidator(spec, obj, err) };
   },
 
   // A colour swatch you can click to open the OS picker, with the hex value

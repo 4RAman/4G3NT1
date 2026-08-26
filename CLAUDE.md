@@ -21,6 +21,36 @@ expensive ones after hardware ships.
 .venv/Scripts/python tools/build_editor.py             # dist/button-editor.html (offline)
 ```
 
+## Do not run the tests without being asked
+
+**Standing instruction from the owner of this project, 2026-08-26. It
+overrides any habit, any checklist, and anything below that reads like "run
+the suite before and after".**
+
+Write tests. Do not run them. When you would have, **print the command and
+move on** — the decision to spend three and a half minutes and a slice of a
+paid context window belongs to the person paying for it, not to the agent that
+feels tidier afterwards.
+
+**The reasoning, in the owner's words: tokens are expensive.** A full run costs
+~3.5 minutes and a meaningful share of a session's budget, and the failure mode
+is not one run — it is running at the start, again in the middle and again at
+the end, tripling that for information that has usually not changed. *This
+project has run for three sessions with one known failing test and lost
+nothing by it.* A lingering red test is cheap; a habit of re-running the suite
+for reassurance is not.
+
+So:
+
+- **Never run `pytest` unprompted**, whole suite or single file. Hand over the
+  command instead.
+- **One explicit "run the tests" authorises one run**, not a run per phase of
+  the work.
+- Prefer things that cost nothing: `node --check` on a JavaScript file,
+  `python -c` on one function, reading the code.
+- If you genuinely cannot tell whether something works without executing it,
+  **say so and ask** — do not decide on the owner's behalf.
+
 Only **one** instance may run: BLE allows a single central, so two copies
 steal the connection from each other. A second one now *refuses* at startup
 (`single_instance.py`) rather than fighting — stop the first, or pass
@@ -418,6 +448,52 @@ in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
   [test_webui.py](tests/test_webui.py) fails on drift. A mode that names
   nothing resolves to `None`, which is what `set_led` already means by "no
   override", so the palette stays the fallback and costs no wire traffic.
+- **An app's page reads the store and never writes it.** A takeover's own page
+  shows what that app has done ([appReadout.js](aibutton/web/static/appReadout.js),
+  TODO 51), and everything on it is a *read*: rows through `/api/events`, plus
+  the mode's config. Nothing it computes is written back and nothing the button
+  does depends on it — the moment something here needs storing, that is item 34
+  (app documents), not another view. Which rows an app owns is declared as
+  `readout` on its template descriptor, so a new app that logs gets a history
+  by adding four keys; one that adds a `log_as` field and no `readout` is
+  caught by [test_app_readout.py](tests/test_app_readout.py), which also checks
+  the `nameField` against the **real parser's** dataclass rather than a
+  hand-written map.
+- **`value` is one untyped column, so anything reading it groups by `name`.**
+  A metronome's BPM, a reaction timer's milliseconds, a countdown's minutes and
+  an alarm's 0/1 share that slot and nothing else. Every reader gives each name
+  its **own scale** — `seriesByName` draws a panel per name rather than a chart
+  with several series, and `READOUT_MEASURES` splits `outcome` from `value`
+  precisely so 0s and 1s are counted rather than averaged. *Pooling them
+  produces a chart that renders, looks fine, and is meaningless.*
+- **Two rows can describe one session, and only one of them is the session.**
+  A stopwatch writes both a `timer_stop` and the `mode_exit` that contained it.
+  Anything summing durations takes `mode_exit` alone (`durationTotals`), or it
+  double-counts exactly the app most likely to top the chart — plausibly, which
+  is why it is pinned by a test rather than a comment.
+- **The Events page's aggregations are pure and exported; the drawing is not.**
+  Same split as [rules.py](aibutton/rules.py), for the same reason: every
+  question worth getting wrong (which rows count, which double-count, what
+  "today" means off UTC) is a function over data, checked against a table in
+  [tests/js/](tests/js/). *New chart logic goes in the pure half or it cannot
+  be tested at all.*
+- **A chart is CSS unless geometry forbids it.** Text inside an SVG `viewBox`
+  scales with the box, so an 11px label is 6px on a phone — unreadable rather
+  than overflowing, which no overflow measurement catches. Bars, columns and
+  the heatmap are flex and grid; SVG is kept for the donut arc and the
+  sparklines, and **both keep every label in HTML around the plot**. Anything
+  that cannot shrink past a point scrolls in its own `.scroll-x`, never
+  dragging the panel sideways.
+- **A group of fields is as hidden as its fields.** A settings group whose every
+  field is `tier: 'tinker'` is itself tinker-tier, derived from the specs rather
+  than declared — otherwise a basic user gets a heading with nothing under it,
+  which is what the Device page's "Web server" did (TODO 47). *Derived, so a
+  group that gains one basic field starts showing again on its own.*
+- **A field edited as a textarea parses a string as well as a list.** The
+  widget writes a newline-separated string; a parser accepting only a list
+  turns a curated value into the default **on save**, with an error in the log
+  and nothing in the UI. `targets` and `cues` both take either shape now, and
+  that is the rule for the next list-shaped field.
 
 ### When you change the protocol
 
@@ -474,6 +550,24 @@ is the one surface that will exist in someone else's pocket.
   nested function is the trap: `del` makes the name *local to that function*,
   so the closure never captures it at all. It reads like tidy cleanup and it
   is the bug.
+- **The JavaScript has tests now, and node is optional.** `node --test` is
+  built in, so [tests/js/](tests/js/) costs no dependency;
+  [test_js_modules.py](tests/test_js_modules.py) runs it and **skips with a
+  reason** where node is absent, so a Python-only machine still goes green.
+  The no-new-dependencies rule below is about what the *service* runs on.
+  Only pure functions are tested there — anything touching the DOM is verified
+  in a browser, which is the honest split rather than a gap. Pass node the
+  **file**, not the directory: `node --test <dir>` resolves the path as a
+  module on Windows and dies with `MODULE_NOT_FOUND`.
+- **One home for a shared formatter.**
+  [format.js](aibutton/web/static/format.js) holds how this page writes a
+  duration, a number and a day, because each is shown in two places now (the
+  Events table and an app's readout). Two copies of "how long is 3661 seconds"
+  is a mirrored table with nothing testing it. *`schema.js`'s `fmtLength` is
+  the deliberate exception and says why in its docstring* — a configured
+  length ("25m") and an elapsed measurement ("8:41") round and abbreviate
+  differently, and they shared a name until the editor bundle refused to hold
+  two.
 - Tests assert behaviour and name the scenario, not the method. Prefer one
   event-script table over many near-identical cases (see
   [test_trigger_port.py](tests/test_trigger_port.py)).
@@ -493,6 +587,62 @@ is the one surface that will exist in someone else's pocket.
   there is deliberately no AI on the device. A rename is coming
   (ROADMAP **D7**), so don't spread the string further than it already is:
   new user-facing text says "the button", and new identifiers don't embed it.
+- **"Can anything reach this?" is a walk, and it lives in one pure function.**
+  `reachableModes` ([schema.js](aibutton/web/static/schema.js)) starts from the
+  things nobody has to start — a gesture map is live by definition, a clock
+  starts its own apps — and follows `enter_mode` bindings and launcher lists
+  from there. **It is transitive on purpose**: a launcher you cannot open
+  cannot open anything either, so installing one nobody points at fixes
+  nothing, and the App page says so. It resolves **named actions** on the way,
+  which `findEntryPoints` never did. *A new way to open an app is an edge in
+  that walk, or the App page will call working configs broken.*
+- **A mount `menu.js` renders into may be absent, and that is the seam between
+  the two shells.** `mounts.nav` and `mounts.apps` are both optional; a missing
+  one means one section fewer, never a broken menu. **But absent is not the
+  same as unnecessary** — removing the ready-made picker left the offline
+  editor with no way to add an app at all, because its mount resolved to
+  nothing and nobody noticed. *When a capability moves onto a new mount, give
+  the offline editor that mount too rather than a second code path.*
+- **The mode list is the page's navigation, and it lives in the shell.**
+  `menu.js` renders it into `mounts.nav` (the side panel) and the mode editor
+  into `mounts.modes`, and **`mounts.nav` is optional**: absent, the nav falls
+  back inside the panel, which is the only reason the offline editor still
+  works — it is the menu with no shell around it. Selecting a mode has to
+  bring its editor up, and `menu.js` **asks** for that with a
+  `button:show-panel` event rather than reaching for the shell's tab state.
+  *A new destination in the nav is a listener on that event, not a second
+  place that hides panels.*
+- **Below 900px the shell stops being a fixed-height frame.** Two panes in a
+  viewport is a desktop idea; stacked, a wrapped header plus a capped nav plus
+  a wrapped scene bar left the work surface **zero pixels tall**, which looks
+  exactly like the page failing to load and overflows nothing, so no
+  measurement catches it. The narrow layout is an ordinary scrolling document
+  instead: nav capped with its own scroller, panel flowing, save bar sticky.
+  *Check panel height, not just overflow, when you touch the shell.*
+- **An override at equal specificity must come after what it overrides.** This
+  stylesheet has now lost that argument twice — `.inp` under its own variants
+  (TODO 42) and `.tab-panel { position: static }` above `position: absolute`
+  (TODO 45). Both failed **silently**, because a rule that loses still parses.
+  *Put a media query below every rule it reaches into, and verify the computed
+  value rather than assuming the cascade agreed with you.*
+- **An action bound to something that is not a press is still a binding.**
+  `on_timeout` (TODO 44) is offered by the same sub-editor as a gesture and a
+  hook, through a **`bindings`** key on the template descriptor — not a
+  `kind: 'action'` field widget, which would be a second way to edit the same
+  thing. It offers `HOOK_ACTIONS` only, for the reason hooks do: `enter_mode`,
+  `readout` and `standby` change what the mode *loop* does next, and there is
+  no loop left to change once an app has finished. *A new non-gesture trigger
+  declares a binding; it does not grow its own editor.*
+- **The two kinds of mode are a *reflex* and an *app*, in copy only** (TODO
+  46). A reflex answers a press and hands the button straight back; an app
+  takes the button over until you leave. The gesture that starts one reads
+  "Launch an app". **The tokens did not move and must not**: `nature:
+  'takeover'` in schema.js mirrors `TAKEOVER_BEHAVIORS` in Python, and the
+  config key is still `modes` — renaming a mirrored value to improve a
+  sentence is a drift risk taken for nothing, since no user ever reads it.
+  "Mode" stays the umbrella noun in generic chrome, because a reflex and an
+  app are two kinds of one config object. *New copy uses the new words;
+  comments and docstrings may keep the old ones where they describe code.*
 - Firmware changes need a **reflash** before they mean anything. Firmware
   modules import each other by bare name and sit flat on the device.
 - **Keep [TODO.md](TODO.md) current in the same commit as the work.** When an

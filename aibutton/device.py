@@ -156,6 +156,18 @@ class DeviceInfo:
             name for bit, name in CAPABILITY_NAMES.items() if self.capabilities & bit
         ]
 
+    @property
+    def names_absent(self) -> list[str]:
+        """The mirror of `names` - what this device does *not* claim (TODO 68).
+
+        Protocol v1's negotiate-don't-assume rule only works if the half that
+        decides whether a feature will work is visible: `names` alone showed
+        what came up, and a developer targeting a capability had no way to
+        see it was the missing half."""
+        return [
+            name for bit, name in CAPABILITY_NAMES.items() if not self.capabilities & bit
+        ]
+
 
 # What to believe about a device with no DEVICE_INFO characteristic. The only
 # firmware that predates it is this project's own, which has an LED, a buzzer

@@ -19,9 +19,23 @@
    *variant* of .app-body and carries that class too - on its own it would be a
    plain block, the grid and the `flex: 1` would never apply, and .tab-panels
    would collapse to zero height with the panels clipped to their own padding.
-   Both track axes are overridden because the shared sheet's <=900px rule sets
-   `grid-template-rows: auto 1fr` for a side pane that does not exist here. */
+   Both track axes are overridden because the shared sheet once put a side pane
+   in a second track; below 900px that sheet drops the grid entirely and the
+   editor becomes a scrolling document too, which is the right answer here as
+   well. */
 .body-split { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+
+/* The tab bar is the editor's own now. The served page navigates from a side
+   panel instead (TODO 45) and took these rules out of the shared sheet with
+   it; the editor still has three fixed sections and no modes list to hang
+   them off, so it keeps the tabs and now keeps their styling. */
+.tab-bar { flex-shrink: 0; display: flex; gap: 2px; padding: 0 20px;
+           border-bottom: 1px solid var(--line); background: var(--bg); }
+.tab-btn { background: none; border: none; color: var(--dim); padding: 12px 14px;
+           font: inherit; font-size: 13px; cursor: pointer;
+           border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tab-btn:hover { color: var(--text); }
+.tab-btn[aria-selected="true"] { color: var(--text); border-bottom-color: var(--blue); }
 </style>
 
 <div class="app">
@@ -55,11 +69,16 @@
         <button type="button" class="tab-btn" data-tab="modes" role="tab" aria-selected="true">Modes</button>
         <button type="button" class="tab-btn" data-tab="lights" role="tab" aria-selected="false">Lights</button>
         <button type="button" class="tab-btn" data-tab="device" role="tab" aria-selected="false">Device</button>
+        <button type="button" class="tab-btn" data-tab="apps" role="tab" aria-selected="false">Apps</button>
       </nav>
       <div class="tab-panels">
         <section class="tab-panel scroll-fade" data-panel="modes" id="editor-modes">Open a scene to start.</section>
         <section class="tab-panel scroll-fade" data-panel="lights" id="editor-lights" hidden></section>
         <section class="tab-panel scroll-fade" data-panel="device" id="editor-device" hidden></section>
+        <!-- The editor needs this as much as the served page does: installing
+             an app is the only way to add one now that the ready-made picker
+             has moved onto it. -->
+        <section class="tab-panel scroll-fade" data-panel="apps" id="editor-apps" hidden></section>
       </div>
       <div class="menu-bar" id="editor-menu-bar"></div>
     </main>
@@ -67,14 +86,18 @@
 </div>
 
 <script>
-  // Same page-level tab switch as the served UI.
+  // Same page-level tab switch as the served UI, and the same listener for
+  // menu.js asking to be shown a panel - without it "Manage apps" is a button
+  // that does nothing here.
   (function () {
     const tabs = document.querySelectorAll('.tab-btn');
     const panels = document.querySelectorAll('.tab-panel');
-    tabs.forEach((t) => t.addEventListener('click', () => {
-      tabs.forEach((x) => x.setAttribute('aria-selected', String(x === t)));
-      panels.forEach((p) => { p.hidden = p.dataset.panel !== t.dataset.tab; });
-    }));
+    function activate(name) {
+      tabs.forEach((x) => x.setAttribute('aria-selected', String(x.dataset.tab === name)));
+      panels.forEach((p) => { p.hidden = p.dataset.panel !== name; });
+    }
+    tabs.forEach((t) => t.addEventListener('click', () => activate(t.dataset.tab)));
+    document.addEventListener('button:show-panel', (e) => activate(e.detail));
   })();
 </script>
 
@@ -223,6 +246,7 @@ const menu = new ConfigMenu({
   modes: document.getElementById('editor-modes'),
   lights: document.getElementById('editor-lights'),
   device: document.getElementById('editor-device'),
+  apps: document.getElementById('editor-apps'),
   bar: document.getElementById('editor-menu-bar'),
   // No scene bar: switching the active scene is a thing a running service
   // does, and there isn't one here.

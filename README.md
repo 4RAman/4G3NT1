@@ -5,14 +5,15 @@ triple tap / four taps / five taps), routed through a **mode machine** — the
 button is always in exactly one mode, and the mode decides what each gesture
 means. An RGB LED and feedback sounds show device state.
 
-Modes come in two kinds. **Ambient** modes answer each gesture and hand the
-button straight back (the everyday one, plus time-windowed overrides).
-**Takeover** modes own the button until you leave — eleven apps: alarm,
+Modes come in two kinds. **Reflexes** answer a gesture and hand the button
+straight back — always live, fired without thinking (the everyday set, plus
+time-windowed overrides). **Apps** own the button until you leave — twelve of
+them: alarm,
 reminder, stopwatch, counter, intervals (Pomodoro, Tabata or HIIT — one
 template, three presets), metronome, countdown, two games (Hot/Cold and a
 reaction timer), a signal light that doubles as an OSC or MIDI footswitch,
-and a control surface that fires a different command per gesture (the DAW
-remote). Nine of those are started by a gesture and there are only six
+a control surface that fires a different command per gesture (the DAW
+remote), and a light show that walks a playlist of your looks. Nine of those are started by a gesture and there are only six
 gestures, so an **app launcher** reaches every one of them from a single
 binding. **Long press always means "up one level"** — out of an app,
 then out of the menu — so there is one escape gesture to learn and it works
@@ -38,8 +39,8 @@ Ambient modes resolve first-match-wins against eight action primitives:
 | `webhook` | POST to any URL — the IFTTT / Make / n8n / Home Assistant hook |
 | `osc` | fire an OSC message over UDP — Reaper, QLab, Resolume, TouchOSC |
 | `midi` | send a MIDI note or CC to a port — for a DAW that has no OSC |
-| `enter_mode` | open a takeover mode — an app, or the launcher that lists them |
-| `standby` | put the everyday layer to sleep; the same gesture wakes it |
+| `enter_mode` | launch an app — one of the eleven, or the launcher that lists them |
+| `standby` | put the reflexes to sleep; the same gesture wakes them |
 
 Example: between 05:00 and 07:00, a double tap logs `meds_taken`;
 any other time it falls through to **Home**, the always-on floor. See the
@@ -53,7 +54,8 @@ on (always / time window / at a clock time / entered from another mode).
 A built-in **web UI** (http://localhost:8080) shows live device state and the
 event log, and includes a **point-and-click configuration menu**: add,
 reorder, and delete modes; pick each gesture's action from a form (the
-right fields appear per action type); drop in ready-made modes; set the
+right fields appear per action type); install apps, ready-made or blank, and
+see which of them anything can actually reach; set the
 time/day scope; recolour every light the button shows; and edit device
 settings — no hand-written JSON. **Check** previews what the
 server would accept (and which keys fall back) before you **Save**, which
@@ -190,7 +192,8 @@ nothing else; the service starts and every other action works.
 
 ### The quick way: add the DAW transport app
 
-In the web UI, **+ Add mode → DAW transport (MIDI)**. It drops in a **control
+In the web UI, **Manage apps → Control surface → DAW transport (MIDI)**. It
+drops in a **control
 surface** — an app you open from the launcher, with one command per gesture:
 
 | Gesture | Command |

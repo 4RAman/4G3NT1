@@ -6,11 +6,13 @@
 // ModeEditor and per-field editing to the widget factory.
 
 import { el, clear } from './dom.js';
+import { readFlag, writeFlag } from './prefs.js';
 import { ConfigApi } from './api.js';
 import {
   ACTIONS, ACTION_BY_TYPE, BUILTIN_MODES, GESTURES, LED_STATE_BY_KEY,
-  SYSTEM_LED_STATES, MODE_GROUPS, SETTINGS_GROUPS, TEMPLATE_BY_TYPE,
-  describeAction, describeEffect, describeTemplate,
+  SYSTEM_LED_STATES, MODE_GROUPS, SETTINGS_GROUPS, TEMPLATES, TEMPLATE_BY_TYPE,
+  danglingTargets, describeAction, describeActivation, describeEffect,
+  describeTemplate, findEntryPoints, modeLook, reachableModes,
 } from './schema.js';
 import { ModeEditor } from './modeEditor.js';
 import { SceneBar } from './scenes.js';
@@ -30,6 +32,8 @@ export class ConfigMenu {
     // is a list you scan, and every entry expanded at once is the state this
     // replaced.
     this._expandedLook = null;
+    // Same idea, one state at a time - see _renderStateRow (TODO 54).
+    this._expandedState = null;
     // The scene bar lives outside the tabs and outlives a re-render: a scene
     // spans modes, lights and settings, so rebuilding it per tab render would
     // be both wasteful and a flicker on every keystroke-driven redraw.
@@ -69,6 +73,12 @@ export class ConfigMenu {
     // edit anywhere can change the open card's "to start it" line - including
     // whether it is reachable at all.
     this.detailEditor?.refreshExplainers();
+    // The App page is the same fact at system scale, so it goes stale for the
+    // same reasons and on the same edits - renaming a mode, repointing a
+    // gesture, emptying a launcher's list. Rebuilt here rather than on a
+    // narrower hook because *every* model change reaches it, and a page
+    // reporting yesterday's reachability is worse than no page.
+    this._refreshApps();
     this._applyActive(this._lastActive || {});
   }
 
@@ -76,7 +86,11 @@ export class ConfigMenu {
    *  clear. The scene bar renders into a mount of its own on its own
    *  schedule - wiping it here would erase whatever it had just drawn. */
   _ownMounts() {
-    return [this.mounts.modes, this.mounts.lights, this.mounts.device, this.mounts.bar];
+    const owned = [this.mounts.modes, this.mounts.lights, this.mounts.device, this.mounts.bar];
+    if (this.mounts.apps) owned.push(this.mounts.apps);
+    // Optional, and absent in the offline editor - see _renderModesLayout.
+    if (this.mounts.nav) owned.push(this.mounts.nav);
+    return owned;
   }
 
   _render(warnings = []) {
@@ -86,6 +100,7 @@ export class ConfigMenu {
     this.mounts.modes.append(
       this._renderPrimer(), this._renderModesLayout(), this._renderActionPoolSection(),
     );
+    if (this.mounts.apps) this.mounts.apps.append(this._renderAppsSection());
     this.mounts.lights.append(this._renderPaletteSection());
     this.mounts.device.append(this._renderSettingsSection());
 
@@ -105,48 +120,28 @@ export class ConfigMenu {
     this._startActivePolling();
   }
 
-  // The three sentences that answer "how do I switch modes?" - tutorial
-  // content, so it rides on the page's Tips toggle (help.js) rather than
-  // sitting on screen permanently.
+  // The three sentences that answer "how does it know what I meant?" -
+  // tutorial content, so it rides on the page's Tips toggle (help.js) rather
+  // than sitting on screen permanently.
   _renderPrimer() {
     const line = (text) => el('li', { className: 'primer-line', textContent: text });
     return el('div', { className: 'primer', 'data-help': true }, [
       el('p', { className: 'primer-lead', textContent: 'How this button decides what a press does' }),
       el('ol', { className: 'primer-list' }, [
-        line('A mode: instructions for what each press (short, long, double) does.'),
-        line("No manual picking - the button scans your everyday modes top-down and uses the first one that's on now and has this press set."),
-        line('Some modes take over instead: once started, they own every press until you leave. Listed separately below, with how to start and exit each.'),
+        line('A reflex: what one press (short, long, double) does while the button is just sitting there.'),
+        line("Nothing to pick from a list - the button scans your reflexes top-down and fires the first one that's awake and has that press set."),
+        line('An app is the other half: launch one and it owns every press until you leave. Listed separately below, with how to start and exit each.'),
       ]),
     ]);
-  }
-
-  // Ready-made modes. Each drops in a complete, valid mode you then edit -
-  // faster than assembling a Pomodoro field by field, and it doubles as the
-  // answer to "what can this thing do?".
-  _renderBuiltins() {
-    const blurb = el('span', { className: 'menu-hint builtin-blurb' });
-    const picker = el('select', {
-      className: 'inp builtin-pick',
-      onchange: () => {
-        const chosen = BUILTIN_MODES.find((b) => b.id === picker.value);
-        if (chosen) {
-          this._addMode(this._uniquelyNamed(chosen.mode()));
-          picker.value = '';  // back to the prompt entry: nothing stays selected
-        }
-        // Re-read after that reset - the blurb describes what is selected now.
-        blurb.textContent = BUILTIN_MODES.find((b) => b.id === picker.value)?.blurb || '';
-      },
-    }, [
-      el('option', { value: '', textContent: 'Add a ready-made mode…' }),
-      ...BUILTIN_MODES.map((b) => el('option', { value: b.id, textContent: b.label })),
-    ]);
-    return el('span', { className: 'builtin-wrap' }, [picker, blurb]);
   }
 
   /** Append `mode`, select it for editing, and flag unsaved changes. */
   _addMode(mode) {
     this.model.modes.push(mode);
     this._renderModes(mode);
+    // Adding one from the side panel has to land you in its editor, or the
+    // only feedback is a new line appearing in a list you are not looking at.
+    this._showModesPanel();
     this._markDirty();
   }
 
@@ -164,7 +159,7 @@ export class ConfigMenu {
   // A sensible default new mode: an actions/always mode with one gesture.
   _defaultMode() {
     return {
-      name: 'New mode',
+      name: 'New reflex',
       template: 'actions',
       activation: { type: 'always' },
       ...TEMPLATE_BY_TYPE.actions.defaults(),
@@ -187,20 +182,46 @@ export class ConfigMenu {
   _renderModesLayout() {
     this.modeNavEl = el('div', { className: 'mode-nav scroll-fade' });
     this.modeDetailEl = el('div', { className: 'mode-detail' });
-    const addBtn = el('button', {
-      type: 'button', className: 'add-mode', textContent: '+ Add mode',
+    // Two verbs, because there are two things to add and they are not the
+    // same act. A reflex is a gesture map you write here and now; installing
+    // an app is a choice between twelve of them, with ready-made versions of
+    // several, and that belongs on a page rather than under a dropdown at the
+    // bottom of a list (TODO 49).
+    const addReflex = el('button', {
+      type: 'button', className: 'add-mode', textContent: '+ Add reflex',
       onclick: () => this._addMode(this._defaultMode()),
     });
+    const manage = el('button', {
+      type: 'button', className: 'add-mode',
+      textContent: 'Manage apps →',
+      onclick: () => document.dispatchEvent(new CustomEvent('button:show-panel', { detail: 'apps' })),
+    });
+    const navCol = el('div', { className: 'mode-nav-col' }, [
+      this.modeNavEl,
+      el('div', { className: 'add-row' }, [addReflex, manage]),
+    ]);
 
     this._renderModes();
 
-    return el('div', { className: 'mode-layout' }, [
-      el('div', { className: 'mode-nav-col' }, [
-        this.modeNavEl,
-        el('div', { className: 'add-row' }, [addBtn, this._renderBuiltins()]),
-      ]),
-      this.modeDetailEl,
-    ]);
+    // `mounts.nav` is the page's own side panel: the mode list is the primary
+    // navigation there, so it sits outside the panel it drives and survives a
+    // switch to Events or Lights. Optional on purpose - the offline editor is
+    // the menu with no shell around it, and with nowhere to put the nav it
+    // keeps the master/detail split inside the tab, exactly as before.
+    if (this.mounts.nav) {
+      this.mounts.nav.append(navCol);
+      return el('div', { className: 'mode-layout detail-only' }, [this.modeDetailEl]);
+    }
+    return el('div', { className: 'mode-layout' }, [navCol, this.modeDetailEl]);
+  }
+
+  /** Ask the page to show the modes panel. A mode in the side panel is only
+   *  navigation if selecting one brings its editor into view; the shell owns
+   *  which panel is up, so this asks rather than reaching for it. Ignored
+   *  where nothing is listening (the offline editor, where the nav is already
+   *  inside the panel). */
+  _showModesPanel() {
+    document.dispatchEvent(new CustomEvent('button:show-panel', { detail: 'modes' }));
   }
 
   /** Rebuild the nav list and detail pane. Pass a mode to select it (e.g. one
@@ -215,47 +236,330 @@ export class ConfigMenu {
     this._applyActive(this._lastActive || {});
   }
 
+  /** Rebuild the App page in place. No-op where there is no mount (the
+   *  offline editor) and before the first render. */
+  _refreshApps() {
+    if (!this.mounts.apps || !this.model) return;
+    clear(this.mounts.apps);
+    this.mounts.apps.append(this._renderAppsSection());
+  }
+
+  // --- the App page ------------------------------------------------------
+  // Every app the button has, in one of three states, and the only place that
+  // answers "can anything actually get to this?" - a question no single mode's
+  // card can answer, because reachability runs through other modes (TODO 49).
+
+  _renderAppsSection() {
+    const wrap = el('div', { className: 'apps-page' });
+    const reached = reachableModes(this.model.modes, this.model.actions);
+    const dangling = danglingTargets(this.model.modes, this.model.actions);
+
+    const installed = [];
+    const available = [];
+    for (const descriptor of TEMPLATES) {
+      if (descriptor.nature !== 'takeover') continue;  // a reflex is not an app
+      const copies = this.model.modes.filter((m) => m && m.template === descriptor.type);
+      (copies.length ? installed : available).push({ descriptor, copies });
+    }
+
+    wrap.append(el('p', { className: 'apps-lead', 'data-help': true, textContent:
+      'Every app the button can run. Installed ones live in the list on the '
+      + 'left; installing one here adds it there, ready to edit.' }));
+
+    // No page-wide stranded-app count here (TODO 56) - it read as a wall of
+    // alarm above every app, for someone who installed one thing and does not
+    // know or care that three others exist. The same diagnosis already sits
+    // on the app it is about: the "Unreachable" pill (_appStatus) and, per
+    // copy, exactly why (_howReached).
+    for (const [target, from] of dangling) {
+      wrap.append(el('p', { className: 'apps-warn', textContent:
+        `${from.join(', ')} opens “${target}”, and no mode has that name. `
+        + 'Install it below, or point that gesture somewhere else.' }));
+    }
+
+    wrap.append(this._appsGroup('Installed', installed, reached, true));
+    wrap.append(this._appsGroup('Available', available, reached, false));
+    return wrap;
+  }
+
+  _appsGroup(title, entries, reached, isInstalled) {
+    const group = el('div', { className: 'apps-group' }, [
+      el('div', { className: 'apps-group-title', textContent: `${title} (${entries.length})` }),
+    ]);
+    if (!entries.length) {
+      group.append(el('p', { className: 'empty', textContent:
+        isInstalled ? 'Nothing installed yet.' : 'Everything is installed.' }));
+      return group;
+    }
+    for (const entry of entries) group.append(this._appCard(entry, reached, isInstalled));
+    return group;
+  }
+
+  _appCard({ descriptor, copies }, reached, isInstalled) {
+    const swatch = el('span', { className: 'apps-swatch' });
+    // An app with no LED state of its own gets an empty ring rather than an
+    // invented colour - the same rule the mode list follows.
+    const look = copies.length
+      ? this._modeLook(copies[0])
+      : (this.model.led_palette || {})[(descriptor.ledStates || [])[0]] || null;
+    swatch.classList.toggle('empty', !look);
+    if (look) applySwatch(swatch, look); else unpaint(swatch);
+
+    const head = el('div', { className: 'apps-head' }, [
+      swatch,
+      el('span', { className: 'apps-name', textContent: descriptor.label }),
+      this._appStatus(copies, reached, isInstalled),
+    ]);
+    const card = el('div', { className: 'apps-card' }, [
+      head,
+      el('p', { className: 'apps-about', textContent: descriptor.about || '' }),
+    ]);
+
+    for (const mode of copies) {
+      const ok = reached.has(mode);
+      card.append(el('div', { className: `apps-copy${ok ? '' : ' unreachable'}` }, [
+        el('button', {
+          type: 'button', className: 'apps-copy-name', textContent: mode.name || '(unnamed)',
+          onclick: () => { this._renderModes(mode); this._showModesPanel(); },
+        }),
+        el('span', { className: 'apps-copy-how', textContent: this._howReached(mode, ok) }),
+      ]));
+    }
+    card.append(this._installRow(descriptor, copies.length));
+    return card;
+  }
+
+  _appStatus(copies, reached, isInstalled) {
+    if (!isInstalled) return el('span', { className: 'apps-pill available', textContent: 'Available' });
+    const live = copies.filter((m) => reached.has(m)).length;
+    if (!live) return el('span', { className: 'apps-pill stranded', textContent: 'Unreachable' });
+    if (live < copies.length) {
+      return el('span', { className: 'apps-pill partial', textContent: `${live} of ${copies.length} reachable` });
+    }
+    return el('span', {
+      className: 'apps-pill installed',
+      textContent: copies.length > 1 ? `Installed (${copies.length})` : 'Installed',
+    });
+  }
+
+  /** Why this one is reachable, or the two ways to fix it if it is not. Said
+   *  per copy rather than per app, because one alarm can be wired and another
+   *  stranded and the app-level pill can only average them. */
+  _howReached(mode, ok) {
+    if (!ok) return 'nothing opens it - bind a gesture to "Launch an app", or add a launcher';
+    if (this._isScheduled(mode)) return describeActivation(mode.activation);
+    const entries = findEntryPoints(mode, this.model.modes);
+    if (entries.length) return entries.join(', or ');
+    const launcher = this.model.modes.find((m) => m && m.template === 'launcher');
+    return launcher ? `offered by ${launcher.name || 'the launcher'}` : 'reachable';
+  }
+
+  /** Install, or add another. The ready-made presets live here now rather than
+   *  under the mode list: installing an app and choosing which *kind* of it you
+   *  want are one decision, and they used to be two controls in two places. */
+  _installRow(descriptor, installedCount) {
+    const presets = BUILTIN_MODES.filter((b) => b.mode().template === descriptor.type);
+    const row = el('div', { className: 'apps-install' });
+    const add = (mode) => this._addMode(this._uniquelyNamed(mode));
+
+    row.append(el('button', {
+      type: 'button', className: 'mini',
+      textContent: installedCount ? '+ Add another' : '+ Install',
+      onclick: () => add({
+        name: descriptor.label,
+        template: descriptor.type,
+        activation: { type: (descriptor.allowedActivations || ['manual'])[0] },
+        ...descriptor.defaults(),
+      }),
+    }));
+
+    if (!presets.length) return row;
+    const picker = el('select', {
+      className: 'inp apps-preset',
+      onchange: () => {
+        const chosen = presets.find((b) => b.id === picker.value);
+        picker.value = '';
+        if (chosen) add(chosen.mode());
+      },
+    }, [
+      el('option', { value: '', textContent: presets.length > 1 ? 'or a ready-made one…' : 'or ready-made…' }),
+      ...presets.map((b) => el('option', { value: b.id, textContent: `${b.label} - ${b.blurb}` })),
+    ]);
+    row.append(picker);
+    return row;
+  }
+
+  /** Which modes a nav group lists.
+   *
+   * **A mode may be listed twice, and that is the point** (TODO 48a). The two
+   * groups stopped being two boxes a mode falls into and became two
+   * questions: *what wakes the button up* and *what can it run*. An alarm
+   * answers both - a clock starts it without anyone asking, and it is an app
+   * while it runs - so it appears under both, the way LISTENING is a state
+   * two layers own.
+   *
+   * `startedBy: 'schedule'` is the test rather than a list of templates,
+   * because it is already the descriptor's answer to "does a person start
+   * this?" - and a new template that a clock starts joins the Reflexes list
+   * with no edit here.
+   */
+  _membersOf(group) {
+    if (group.nature === 'ambient') {
+      return this.model.modes.filter(
+        (m) => this._natureOf(m) === 'ambient' || this._isScheduled(m),
+      );
+    }
+    return this.model.modes.filter((m) => this._natureOf(m) === group.nature);
+  }
+
+  _isScheduled(mode) {
+    return TEMPLATE_BY_TYPE[mode?.template]?.startedBy === 'schedule';
+  }
+
+  /** Each group folds independently, remembered per browser
+   *  ([prefs.js](aibutton/web/static/prefs.js)) rather than in config - it is
+   *  a view preference, and a panel setting in config.json does not survive a
+   *  Save. Asked for at eleven modes, where the side panel ran longer than
+   *  the screen and the group you were not working in was pure scrolling
+   *  (TODO 69). */
   _renderModeNav() {
     clear(this.modeNavEl);
-    this.navButtons = new Map(); // mode -> { dot, nameEl, summaryEl }
+    // mode -> [entry, ...]. A list rather than one entry because a scheduled
+    // app is listed under both groups; with a bare entry the second row
+    // silently replaced the first and only one of them ever lit up.
+    this.navButtons = new Map();
 
     for (const group of MODE_GROUPS) {
-      const members = this.model.modes.filter((m) => this._natureOf(m) === group.nature);
-      const groupEl = el('div', { className: 'mode-nav-group' }, [
-        el('div', { className: 'mode-nav-group-title', textContent: group.title }),
+      const members = this._membersOf(group);
+      const foldKey = `nav-fold:${group.nature}`;
+      let folded = readFlag(foldKey, false);
+
+      const body = el('div', { className: 'mode-nav-group-body' }, [
         el('p', { className: 'mode-nav-group-hint', 'data-help': true, textContent: group.blurb }),
       ]);
-
       if (!members.length) {
-        groupEl.append(el('p', { className: 'empty mode-nav-empty', textContent: group.emptyText }));
+        body.append(el('p', { className: 'empty mode-nav-empty', textContent: group.emptyText }));
+      } else if (group.nature === 'takeover') {
+        this._appendApps(body, members);
+      } else {
+        this._appendReflexes(body, members);
       }
-      for (const mode of members) {
-        const dot = el('span', { className: 'mode-active-dot', hidden: true });
-        const nameEl = el('span', { className: 'mode-nav-name', textContent: mode.name || '(unnamed)' });
-        const summaryEl = el('span', { className: 'mode-nav-summary', textContent: describeTemplate(mode) });
-        const swatch = el('span', { className: 'mode-nav-swatch' });
-        const repaint = () => {
-          const look = this._modeLook(mode);
-          swatch.classList.toggle('empty', !look);
-          swatch.title = look
-            ? `While it is running: ${describeEffect(look)}`
-            : "No colour of its own - it runs the button's own lights.";
-          // Unregistered explicitly, not just restyled: the ticker only
-          // forgets a node that has left the document, so a mode that just
-          // lost its look would keep being repainted in it.
-          if (look) applySwatch(swatch, look);
-          else unpaint(swatch);
-        };
-        repaint();
-        this.navButtons.set(mode, { dot, nameEl, summaryEl, repaint });
-        groupEl.append(el('button', {
-          type: 'button',
-          className: 'mode-nav-item' + (mode === this.selectedMode ? ' selected' : ''),
-          onclick: () => this._renderModes(mode),
-        }, [dot, swatch, nameEl, summaryEl]));
-      }
-      this.modeNavEl.append(groupEl);
+      body.hidden = folded;
+
+      const chevron = el('span', { className: 'mode-nav-group-chevron', textContent: folded ? '▸' : '▾' });
+      const title = el('button', {
+        type: 'button', className: 'mode-nav-group-title', 'aria-expanded': String(!folded),
+        onclick: () => {
+          folded = !folded;
+          body.hidden = folded;
+          chevron.textContent = folded ? '▸' : '▾';
+          title.setAttribute('aria-expanded', String(!folded));
+          writeFlag(foldKey, folded);
+        },
+      }, [chevron, `${group.title} (${members.length})`]);
+
+      this.modeNavEl.append(el('div', { className: 'mode-nav-group' }, [title, body]));
     }
+  }
+
+  /** The Reflexes list, in two parts, because only one of them is a queue.
+   *
+   * A gesture map is read **top to bottom and the first match wins**, so its
+   * order is a setting and the group blurb says so. A scheduled app is in this
+   * list for a different reason - a clock starts it - and its position means
+   * **nothing**. Run together they would read as one priority list, and
+   * someone would reasonably drag an alarm up the page expecting it to matter.
+   * So the gesture maps keep the top of the list unlabelled (they are what the
+   * blurb describes) and anything a clock owns sits below its own label.
+   */
+  _appendReflexes(groupEl, members) {
+    const pressed = members.filter((m) => !this._isScheduled(m));
+    const scheduled = members.filter((m) => this._isScheduled(m));
+    for (const mode of pressed) groupEl.append(this._navRow(mode, describeTemplate));
+    if (!scheduled.length) return;
+    groupEl.append(el('div', { className: 'mode-nav-app' }, [
+      el('span', { className: 'mode-nav-app-name', textContent: 'On a schedule' }),
+      el('span', { className: 'mode-nav-app-count', textContent: String(scheduled.length) }),
+    ]));
+    const nest = el('div', { className: 'mode-nav-nest' });
+    for (const mode of scheduled) nest.append(this._navRow(mode, (m) => this._reflexLine(m)));
+    groupEl.append(nest);
+  }
+
+  /** What a mode says on its *Reflex* line: the thing that sets it off.
+   *
+   * A scheduled app is here to answer "what wakes the button up", so it shows
+   * its trigger; showing the same template summary as its Apps row would make
+   * two listings that read identically and look like a duplicate rather than
+   * two answers. */
+  _reflexLine(mode) {
+    return this._isScheduled(mode) ? describeActivation(mode.activation) : describeTemplate(mode);
+  }
+
+  /** The Apps list, grouped by template.
+   *
+   * Several alarms are **one app with several alarms in it**, not several
+   * apps, and a flat list said the opposite (TODO 48a). Grouping starts at
+   * two: a header over a single child would double the list to say nothing,
+   * and one stopwatch really is one stopwatch. Insertion order is kept, so
+   * the list does not reshuffle itself as you add.
+   *
+   * The count is how many copies of the template exist, because that is what
+   * the data holds. Nesting apps over items would make it an item count
+   * instead - considered and parked (48b, parking lot): every runtime reader
+   * of `modes` is flat, so the nesting would be undone at each of them. */
+  _appendApps(groupEl, members) {
+    const byTemplate = new Map();
+    for (const mode of members) {
+      const list = byTemplate.get(mode.template);
+      if (list) list.push(mode);
+      else byTemplate.set(mode.template, [mode]);
+    }
+    for (const [template, list] of byTemplate) {
+      if (list.length < 2) {
+        groupEl.append(this._navRow(list[0], describeTemplate));
+        continue;
+      }
+      const label = TEMPLATE_BY_TYPE[template]?.label || template;
+      groupEl.append(el('div', { className: 'mode-nav-app' }, [
+        el('span', { className: 'mode-nav-app-name', textContent: label }),
+        el('span', { className: 'mode-nav-app-count', textContent: String(list.length) }),
+      ]));
+      const nest = el('div', { className: 'mode-nav-nest' });
+      for (const mode of list) nest.append(this._navRow(mode, describeTemplate));
+      groupEl.append(nest);
+    }
+  }
+
+  /** One row in the nav, registered so the live dot and the swatch can find
+   *  every row a mode has. */
+  _navRow(mode, summaryFor) {
+    const dot = el('span', { className: 'mode-active-dot', hidden: true });
+    const nameEl = el('span', { className: 'mode-nav-name', textContent: mode.name || '(unnamed)' });
+    const summaryEl = el('span', { className: 'mode-nav-summary', textContent: summaryFor(mode) });
+    const swatch = el('span', { className: 'mode-nav-swatch' });
+    const repaint = () => {
+      const look = this._modeLook(mode);
+      swatch.classList.toggle('empty', !look);
+      swatch.title = look
+        ? `While it is running: ${describeEffect(look)}`
+        : "No colour of its own - it runs the button's own lights.";
+      // Unregistered explicitly, not just restyled: the ticker only
+      // forgets a node that has left the document, so a mode that just
+      // lost its look would keep being repainted in it.
+      if (look) applySwatch(swatch, look);
+      else unpaint(swatch);
+    };
+    repaint();
+    const rows = this.navButtons.get(mode);
+    const entry = { dot, nameEl, summaryEl, repaint, summary: summaryFor };
+    if (rows) rows.push(entry);
+    else this.navButtons.set(mode, [entry]);
+    return el('button', {
+      type: 'button',
+      className: 'mode-nav-item' + (mode === this.selectedMode ? ' selected' : ''),
+      onclick: () => { this._renderModes(mode); this._showModesPanel(); },
+    }, [dot, swatch, nameEl, summaryEl]);
   }
 
   /**
@@ -272,18 +576,13 @@ export class ConfigMenu {
    * inventing one would be worse than the gap.
    */
   _modeLook(mode) {
-    const states = TEMPLATE_BY_TYPE[mode.template]?.ledStates || [];
-    if (!states.length) return null;
-    const named = mode.looks?.[states[0]];
-    return (named && this.model.looks?.[named])
-      || this.model.led_palette?.[states[0]]
-      || null;
+    return modeLook(mode, this.model.looks || {}, this.model.led_palette || {});
   }
 
   /** Repaint every nav swatch. Called when a *pool* look changes, since that
    *  is an edit on another tab that several modes may be wearing. */
   _repaintNavSwatches() {
-    for (const [, entry] of this.navButtons || []) entry.repaint?.();
+    for (const [, rows] of this.navButtons || []) for (const entry of rows) entry.repaint?.();
   }
 
   _renderModeDetail() {
@@ -292,17 +591,20 @@ export class ConfigMenu {
     const mode = this.selectedMode;
     if (!mode) {
       this.modeDetailEl.append(el('p', {
-        className: 'mode-detail-empty', textContent: 'Select or add a mode.',
+        className: 'mode-detail-empty',
+        textContent: 'Pick a reflex or an app from the list, or install one from Apps.',
       }));
       return;
     }
     this.detailEditor = new ModeEditor(mode, {
       onChange: () => {
         this._markDirty();
-        const entry = this.navButtons?.get(mode);
-        if (entry) {
+        // Every row this mode has - a scheduled app is listed under both
+        // groups (48a), and updating only the first left the other showing
+        // the name you had just changed away from.
+        for (const entry of this.navButtons?.get(mode) || []) {
           entry.nameEl.textContent = mode.name || '(unnamed)';
-          entry.summaryEl.textContent = describeTemplate(mode);
+          entry.summaryEl.textContent = entry.summary(mode);
           entry.repaint();
         }
       },
@@ -314,6 +616,23 @@ export class ConfigMenu {
       },
       onMoveUp: () => this._move(mode, -1),
       onMoveDown: () => this._move(mode, 1),
+      // Moving between the items of one app from inside it (TODO 51). The
+      // editor asks rather than reaching for the modes list, exactly as it
+      // does for every other list operation - this owns which one is selected.
+      onSelect: (next) => this._renderModes(next),
+      // "+ Add another" on an app's own page. Routed through the same two
+      // helpers the App page's Install button uses, so an item added from
+      // either place is named and seeded identically.
+      onAddSibling: () => {
+        const descriptor = TEMPLATE_BY_TYPE[mode.template];
+        if (!descriptor) return;
+        this._addMode(this._uniquelyNamed({
+          name: descriptor.label,
+          template: descriptor.type,
+          activation: { type: (descriptor.allowedActivations || ['manual'])[0] },
+          ...descriptor.defaults(),
+        }));
+      },
       // Only everyday modes are read in order, so only they get the reorder
       // arrows - a takeover mode is found by name, and offering to reorder it
       // would imply a priority it does not have.
@@ -325,10 +644,12 @@ export class ConfigMenu {
       // *managed*, not where they have to be born.
       getModes: () => this.model.modes,
       getLooks: () => this.model.looks || {},
+      getPalette: () => this.model.led_palette || {},
       getActions: () => this.model.actions || {},
       getFloor: () => this.model.min_flash_period_s,
       api: this.api,
       addLook: (name, effect) => this._addLook(name, effect),
+      addAction: () => this._addAction(),
       onLooksChanged: () => {
         this._renderLooks();
         this._repaintNavSwatches();
@@ -386,11 +707,13 @@ export class ConfigMenu {
     // nothing until it is saved rather than something confidently wrong.
     const gesturesFor = (name) => (this.dirty ? [] : (gesturesByMode.get(name) || []));
 
-    for (const [mode, entry] of this.navButtons || []) {
+    for (const [mode, rows] of this.navButtons || []) {
       const gestures = gesturesFor(mode.name);
-      entry.dot.hidden = !gestures.length;
-      entry.dot.title = gestures.length
-        ? `Right now, a ${gestures.join(' or a ')} would be handled by this mode.` : '';
+      for (const entry of rows) {
+        entry.dot.hidden = !gestures.length;
+        entry.dot.title = gestures.length
+          ? `Right now, a ${gestures.join(' or a ')} would be handled by this mode.` : '';
+      }
     }
     if (this.detailEditor && this.selectedMode) {
       this.detailEditor.setActive(gesturesFor(this.selectedMode.name));
@@ -409,24 +732,8 @@ export class ConfigMenu {
     // validator per re-render for nodes nobody can see.
     this.paletteValidators = [];
 
-    const group = (states) => {
-      const wrap = el('div', { className: 'palette-wrap' });
-      for (const state of states) {
-        if (!this.model.led_palette[state.key]) continue; // server decides the set
-        wrap.append(this._renderEffectRow({
-          get: () => this.model.led_palette[state.key],
-          label: state.label,
-          meaning: state.meaning,
-          previewState: state.key,
-          // What makes "a named look" an option in this row's Style dropdown
-          // (TODO 36f). Handed in rather than reached for, so the engine never
-          // learns where a state look is stored - the same seam the pool and
-          // the mode editor already use.
-          namedLook: this._stateLookHandle(state),
-        }));
-      }
-      return wrap;
-    };
+    this.systemStatesWrap = el('div', { className: 'palette-wrap' });
+    this._renderSystemStates();
 
     this.looksWrap = el('div', { className: 'palette-wrap looks-list' });
     this._renderLooks();
@@ -449,12 +756,67 @@ export class ConfigMenu {
     // entries stay in config even though this stopped editing them.
     return el('div', {}, [
       el('p', { className: 'menu-hint', 'data-help': true, textContent: "The button's own vocabulary - what it looks like when it is idle, listening, thinking, or reporting a result. Saving sends these straight to the device: no reflash, no restart." }),
-      group(SYSTEM_LED_STATES),
+      this.systemStatesWrap,
       el('h3', { className: 'palette-group', textContent: 'Named looks' }),
       el('p', { className: 'menu-hint', 'data-help': true, textContent: 'A shared pool of appearances. Name one here and any mode - or any of the states above - can wear it, or make one straight from a mode. This is where they all end up either way.' }),
       this.looksWrap,
       add,
     ]);
+  }
+
+  /** The five system states as a list, one editor open at a time (TODO 54) -
+   *  the pool's own pattern (`_renderLookEntry`), reused rather than
+   *  reinvented. They used to render fully expanded, which was the exact
+   *  "six editors, which one is Ember?" problem the pool's row was written
+   *  to fix, still there in the one place a novice lands first. */
+  _renderSystemStates() {
+    clear(this.systemStatesWrap);
+    for (const state of SYSTEM_LED_STATES) {
+      if (!this.model.led_palette[state.key]) continue; // server decides the set
+      this.systemStatesWrap.append(this._renderStateRow(state));
+    }
+  }
+
+  /** One state: the line, plus its editor when it is the open one. Mirrors
+   *  `_renderLookEntry` minus Duplicate/Delete - a system state is fixed,
+   *  never added or removed. */
+  _renderStateRow(state) {
+    const effect = this.model.led_palette[state.key];
+    const open = this._expandedState === state.key;
+
+    const swatch = el('span', { className: 'palette-swatch' });
+    applySwatch(swatch, effect);
+    const summary = el('span', { className: 'palette-summary', textContent: describeEffect(effect) });
+
+    const line = el('div', { className: 'look-line' }, [
+      swatch,
+      el('span', { className: 'palette-name', textContent: state.label }),
+      el('span', { className: 'palette-meaning', textContent: state.meaning }),
+      summary,
+      el('button', {
+        type: 'button', className: 'mini',
+        textContent: open ? 'Done' : 'Edit',
+        onclick: () => {
+          this._expandedState = open ? null : state.key;
+          this._renderSystemStates();
+        },
+      }),
+    ]);
+
+    if (!open) return el('div', { className: 'look-entry' }, [line]);
+
+    const editor = this._renderEffectRow({
+      get: () => this.model.led_palette[state.key],
+      label: state.label,
+      meaning: state.meaning,
+      previewState: state.key,
+      // What makes "a named look" an option in this row's Style dropdown
+      // (TODO 36f). Handed in rather than reached for, so the engine never
+      // learns where a state look is stored - the same seam the pool and
+      // the mode editor already use.
+      namedLook: this._stateLookHandle(state),
+    });
+    return el('div', { className: 'look-entry open' }, [line, editor]);
   }
 
   /**
@@ -631,20 +993,27 @@ export class ConfigMenu {
    * in it. On the Modes tab rather than a tab of its own, because concept
    * count is the enemy and an action is a thing a *gesture* has.
    */
+  /** A free-named pool entry (`{action: 'log', event: ''}`), added and
+   *  rendered. Shared by the pool's own "+ Add" button and a gesture's empty
+   *  named-action picker (TODO 61's "Make one") - one path to a new entry,
+   *  not two. Returns the name actually used. */
+  _addAction() {
+    if (!this.model.actions) this.model.actions = {};
+    let name = 'action';
+    for (let n = 2; this.model.actions[name]; n += 1) name = `action ${n}`;
+    this.model.actions[name] = { action: 'log', event: '' };
+    this._renderActionPool();
+    this._markDirty();
+    return name;
+  }
+
   _renderActionPoolSection() {
     this.actionsWrap = el('div', { className: 'palette-wrap' });
     this._renderActionPool();
 
     const add = el('button', {
       type: 'button', textContent: '+ Add a named action',
-      onclick: () => {
-        if (!this.model.actions) this.model.actions = {};
-        let name = 'action';
-        for (let n = 2; this.model.actions[name]; n += 1) name = `action ${n}`;
-        this.model.actions[name] = { action: 'log', event: '' };
-        this._renderActionPool();
-        this._markDirty();
-      },
+      onclick: () => this._addAction(),
     });
 
     return el('div', { className: 'action-pool', 'data-tier': 'tinker' }, [
@@ -774,9 +1143,49 @@ export class ConfigMenu {
     return editor.el;
   }
 
+  /** A read-only view of the working config, plus a copy button (TODO 59).
+   *  The tinkerer persona is defined by wanting to see the document; Export
+   *  downloads a scene and Import replaces one, neither of which answers
+   *  "what does this control actually write" without leaving the page. */
+  _renderRawJson() {
+    const pre = el('pre', { className: 'menu-result', hidden: true });
+    const copyBtn = el('button', {
+      type: 'button', className: 'mini', textContent: 'Copy', hidden: true,
+      onclick: async () => {
+        try {
+          await navigator.clipboard.writeText(pre.textContent);
+          copyBtn.textContent = 'Copied!';
+        } catch {
+          copyBtn.textContent = 'Copy failed';
+        }
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+      },
+    });
+    const toggle = el('button', {
+      type: 'button', className: 'mini',
+      textContent: 'View raw JSON',
+      onclick: () => {
+        const show = pre.hidden;
+        if (show) pre.textContent = JSON.stringify(this.model, null, 2);
+        pre.hidden = !show;
+        copyBtn.hidden = !show;
+        toggle.textContent = show ? 'Hide raw JSON' : 'View raw JSON';
+      },
+    });
+    return el('div', { className: 'settings-group' }, [
+      el('h4', { className: 'settings-title', textContent: 'Raw config' }),
+      el('p', { className: 'menu-hint', textContent:
+        'Read-only, and always the working copy - editing here does nothing. '
+        + 'The fastest way to learn what any control above actually writes.' }),
+      el('div', { className: 'add-row' }, [toggle, copyBtn]),
+      pre,
+    ]);
+  }
+
   _renderSettingsSection() {
     const wrap = el('div', { className: 'settings-wrap' });
     this.settingValidators = [];
+    wrap.append(this._renderRawJson());
     for (const group of SETTINGS_GROUPS) {
       const grid = el('div', { className: 'settings-grid' });
       for (const spec of group.fields) {
@@ -784,8 +1193,19 @@ export class ConfigMenu {
         this.settingValidators.push(field.validate);
         grid.append(field.el);
       }
-      wrap.append(el('div', { className: 'settings-group' }, [
+      // A group whose every field is Tinker-tier is itself Tinker-tier, or a
+      // basic user gets a heading with nothing under it - which is what the
+      // Device page did: "WEB SERVER" followed by empty space, because all
+      // three of its fields are hidden (TODO 47's fix pass). Derived from the
+      // specs rather than declared on the group, so a group that gains one
+      // basic field starts showing again on its own.
+      const allTinker = group.fields.every((spec) => spec.tier === 'tinker');
+      wrap.append(el('div', {
+        className: 'settings-group',
+        ...(allTinker ? { 'data-tier': 'tinker' } : {}),
+      }, [
         el('h4', { className: 'settings-title', textContent: group.title }),
+        group.note ? el('p', { className: 'menu-hint', textContent: group.note }) : null,
         grid,
       ]));
     }
@@ -874,6 +1294,12 @@ export class ConfigMenu {
 // Composition root: wire a ConfigMenu to its mount points if present.
 const mounts = {
   modes: document.getElementById('panel-modes'),
+  // The shell's side panel, where the mode list lives on the served page.
+  // Absent in the offline editor, which keeps the nav inside the panel.
+  nav: document.getElementById('mode-nav-mount'),
+  // Optional for the same reason: the offline editor has no App page, and a
+  // missing mount means one section fewer, not a broken menu.
+  apps: document.getElementById('panel-apps'),
   lights: document.getElementById('panel-lights'),
   device: document.getElementById('panel-device'),
   bar: document.getElementById('menu-bar'),

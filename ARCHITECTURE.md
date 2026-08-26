@@ -192,6 +192,17 @@ and answers with an event the app can transition on. Every "smart" feature
 in Stage 6 arrives through that one hole, and the device learns nothing about
 HTTP.
 
+**`sensor` is in that event list and nothing produces one yet.** Every other
+kind has a source today — a press, a timer, the scheduler, a sync — while the
+one that means *"something in the world changed"* is a slot with nothing
+plugged into it. TODO **70** fills it on the host, and it is worth doing early
+for a reason that has nothing to do with sensors on the button: an inbound
+event is how a DAW tells the button what the transport is doing (TODO **25**),
+how a script triggers an app, and how a plant's moisture probe rings an alarm.
+None of those need the device to grow a part. **The migration path is the
+usual one** — the host produces the event now, the phone produces it later,
+and the app's `(state, event, now)` never learns which.
+
 ### What this deliberately cannot express
 
 Arbitrary computation. A Simon-Says memory game needs to emit a generated

@@ -41,8 +41,13 @@ A rule governing *future* code belongs in [CLAUDE.md](CLAUDE.md); this file
 records the decision and points at it. Shipped items are compressed to the
 choices that still bind.
 
-Before touching code: read [CLAUDE.md](CLAUDE.md), and run the suite before and
-after.
+Before touching code: read [CLAUDE.md](CLAUDE.md).
+
+**This file used to say "run the suite before and after" and no longer does.**
+That line is what turned one authorised run into three in a single session, at
+3.5 minutes and a slice of the budget each. The rule is now
+[CLAUDE.md](CLAUDE.md)'s *"Do not run the tests without being asked"*: write
+them, hand over the command, and let the person paying decide when to spend it.
 
 ```bash
 .venv/Scripts/python -m pytest -q
@@ -54,7 +59,7 @@ real button.
 
 ## Where Stage 2 stands
 
-[ROADMAP.md](ROADMAP.md)'s exit gates, scored 2026-08-22.
+[ROADMAP.md](ROADMAP.md)'s exit gates, scored 2026-08-26.
 
 | Gate | State |
 |---|---|
@@ -63,8 +68,8 @@ real button.
 | Verified power-cycle recovery | ✔ reconnected cleanly on a real replug |
 | A launcher | ✔ **0a** |
 | **10 apps** verified on hardware | **eleven built.** Ten verified; **Signal and the control surface have never met the button** |
-| **A naive-user run** | not started; unblocked since **14** |
-| **24-hour soak** | not started |
+| **A naive-user run** | not started; unblocked since **14**, and **47** is the desk-bound rehearsal for it - three personas walked the shell, three dead ends fixed, fifteen improvements as **54-68** |
+| **24-hour soak** | not started. The service has now sat up for 12 h unattended and **an alarm rang for seven of them** with the button disconnected - not a soak, but the first evidence of what one would find |
 
 **Nothing left is blocked on design.** What remains is hardware time (**0c**,
 the soak, walking Signal) and one person sitting down with the button (**14**'s
@@ -82,17 +87,440 @@ what to do next. This is the other view.
 | **The gesture engine** — N taps, hold levels | 0b·2 ✔, 28 ✔ | Taps done. Hold levels need firmware — the cheap half of **29** |
 | **Composition** — hooks, session summaries | 23 ✔, **31** ✔, **32** ✔ | Done |
 | **Actions as a first-class idea** | 30a ✔, **33**, **34** | The pool shipped; the sequence and app documents are open |
-| **Reach and hosting** — launcher, ten apps, remote UI | 0a ✔, 7 ✔, **8** | Only the hardware walk on 7 |
+| **Reach and hosting** — launcher, ten apps, remote UI | 0a ✔, 7 ✔, **8**, **40**, 42 ✔, **43** | The page works at phone width (42); reaching it is 8(d), an install not a feature. **40** and **43** are both "where does the host live", answered differently |
 | **Reaching other software** — OSC, MIDI out, clock in | 22 ✔, 24 ✔, **25** | Sending and listening work. **25** needs the DAW's Send To pointed back |
 | **Saying a number** — ambient counting, count readout | 15 ✔, 17 ✔ | Only the human read test, on hardware |
 | **Play** — timing and guessing games | 16 ✔ | Done for forgiving games; tight rhythm needs Stage 3 |
+| **The light as a show** — a playlist app, and the ring itself | 52a ✔, **52b** | The show ships on today's wire and cost no wire code; per-pixel (52b) is still a proposal |
 | **Getting around** — launcher, control surfaces, colour coding | 0a ✔, 26 ✔, 27 ✔, 28 ✔ | Only **26b**, an eyeball test |
 | **Power** — sleep, wake, deliberate off | **29** | Blocked on measuring what it draws |
+| **The shell and its vocabulary** — what things are called, where they sit | 46 ✔, 45 ✔, 48c ✔, 53 ✔, 47 ✔ | **Done.** The Events page grew its charts and the read-back ran against the finished shell; what it found is **54-68** |
+| **The app paradigm** — an app installed once, holding many items | 48a ✔, 48c ✔, 49 ✔, 50 ✔, 51 ✔ | **Done.** The list groups by app, the page reports reachability, and an app's own page is now the app (51) rather than its settings. Nesting the *format* is parked as **48b**, with the measurement that put it there |
+
+| **Reflexes** — a circumstance, with an action attached | **70**, **71**, **72**, **73**, **74**, **75**, **79** | **New, 2026-08-26, and the biggest thing open.** ARCHITECTURE.md already lists `sensor` as an event kind and nothing produces one. **D10 is decided**: a reflex is an object, because most reflexes start no app at all. **71** (HTTP in) delivers most of it |
+| **The DAW, both ways** — the button hears what the transport is doing | 22 ✔, 24 ✔, **25**, **73**, **77**, **78** | **25 stops being a design problem** the moment 73 lands: MCU is two-way, so "recording" is a fact the DAW sends rather than a guess. **77** is the light, **78** is the state machine |
+| **Reading it back** — what fifteen minutes as someone else turns up | 42 ✔, 47 ✔, **54-68** | The walk is done and its dead ends are fixed; the improvements are fifteen separate items, none of them blocking |
 
 Outside the table: **0c** is hardware and gates nothing but its own
 verification; **18** (Notion) is process and is parked.
 
+## Start here next session
+
+Written 2026-08-26 at the end of the sprint below, so a cold session does not
+have to reconstruct it.
+
+**Nothing is blocked on a decision.** ROADMAP **D10** was the one open
+question and it was answered on 2026-08-26: **a reflex is an object, not a
+field on a mode** — because most reflexes start no app at all, and a field
+cannot express "the DAW began recording, so change the light". Read **70**
+first; it is the umbrella and it explains why the rest are shaped as they are.
+
+**Start with 71.** A top-level `reflexes` list plus `POST /api/reflex/{name}`,
+dispatched through the action machinery that already exists. It makes the plant
+alarm real, it is the well-worn 4-to-6 file shape, and every later reflex
+source (**73** MIDI in, **79** media keys) plugs into the same dispatch. The
+one thing not to forget is that `reachableModes` gains a new root — miss it and
+the App page calls a working config broken.
+
+**Then the DAW, which is the demo worth having**: **73** (MIDI in) → **74** (a
+reflex reaching a running app) → **77** (the light follows the transport). That
+chain turns item **25** from a design problem into a thin app, and it is the
+one sequence with a person waiting for it.
+
+**The cheap-and-unblocked queue that was here is now empty.** **69, 76, 56**
+and **57** all shipped 2026-08-26, in a low-hanging-fruit pass done on Sonnet
+between sessions - see Done. What is left of the read-back is **54, 55** and
+**58-68**: thirteen items, still none of them blocking, still each an hour or
+less. **71** (below) remains the biggest thing open and the recommended next
+start; treat the read-back as filler for a session that stalls on it, same as
+before.
+
+**Two things that are not code and block a Stage-2 gate:** a hardware sitting
+(**0c**, plus the Signal and control-surface walks and **26b**), and **14**'s
+naive-user run. Neither has moved in three sprints.
+
+**Known live state you may trip over:** the service has been up ~12 h with the
+button **disconnected**, and an alarm fired at 07:00 and was still ringing.
+There is a **Dismiss** button in the header now. The `no-store` header on
+`/static` still needs a service restart to take effect — until then a browser
+will happily run a stale ES module graph, which looks exactly like your edit
+not having happened. Priming the HTTP cache with
+`fetch(url, {cache: 'reload'})` for each module before reloading is the
+workaround that got this session verified.
+
 ## Sprint
+
+### 70. Reflexes — a circumstance, with an action attached
+
+**Asked for 2026-08-26, and named by the owner: these are reflexes.** Not
+signals, not triggers — and the word is load-bearing rather than decorative,
+because it says what the thing *is*. A reflex is **a circumstance or event with
+an action attached to it**, and the button acts on it without anyone pressing
+anything.
+
+**This is not a new architecture. It is the host-side half of one already
+decided.** [ARCHITECTURE.md](ARCHITECTURE.md)'s app runtime lists its event
+kinds as *"gesture · timer expiry · schedule fire · sync reply · **sensor**"*,
+and `Request` is described as answering "with an **event** the app can
+transition on". Inbound events are in the target design; nothing has ever
+produced one. ROADMAP's Stage 6 table says "sensors as activations, same slot
+as geofencing" in three separate rows, **and there is no such slot.** This
+builds it, on the host, years before any of that hardware.
+
+**Worked examples, the owner's own:** a plant's moisture sensor crossing a
+threshold rings an alarm; a DAW reporting that it has started recording changes
+what the light does (**77**); a script on the PC starts an app; media
+play/pause moves the button into a transport page (**79**).
+
+#### The decision this settles: a reflex is an object, not a field
+
+**ROADMAP D10 is answered, and the owner's definition is what answers it.**
+The earlier draft of this item made an inbound event a new *activation type* —
+a field on a mode, beside `schedule`. That was wrong, and the reason is in the
+word "reflex": *most reflexes do not start an app at all.* "When the DAW starts
+recording, make the light pulse red" enters no mode, logs nothing, and has no
+mode to be a field on. A field can only ever express "this app starts now",
+which is one of the things reflexes do and not the interesting one.
+
+So a reflex is a standalone object:
+
+```
+when    a circumstance — an arriving event, optionally with a test on it
+then    an action — any action the button already has
+```
+
+**And `then` being "any action the button already has" is the whole economy of
+this item.** `resolve_action` and `actions.execute()` already exist; a reflex
+firing `enter_mode` covers everything the activation-field design could do, and
+a reflex firing `osc`, `webhook`, `midi` or a **named action from the pool**
+covers everything it could not. Adding reflexes adds a source of events and
+**no new vocabulary of consequences.**
+
+**Scope: system-wide by default, app-scoped by exception.** The owner's read is
+right — most reflexes are about the button and the world, not about one app. So
+`reflexes` is a top-level list. An optional `while: <app name>` limits one to
+the times that app is open, which is what **77**'s transport lights want and
+what stops a DAW reflex repainting the light in the middle of a Pomodoro.
+
+#### Where a circumstance comes from
+
+Ranked, and the ranking is the recommendation:
+
+1. **HTTP — `POST /api/reflex/{name}`.** Near-zero code, and it **subsumes
+   almost everything**: anything that can make a request can drive the button,
+   so the plant sensor, a cron job, Home Assistant, an iPhone Shortcut
+   (**39**) and any script arrive through one hole. Do this first and most of
+   the item is delivered.
+2. **MIDI in** (**73**). Half-built — `midi_io` already opens an input for the
+   metronome's clock listener. **This is what item 25 has been waiting for.**
+3. **OSC in**, the mirror of the `osc` action. Cheap.
+4. **OS media transport** (**79**) — possible, with caveats worth reading
+   before promising it.
+5. **MQTT** is the home-automation lingua franca and the one that costs a
+   dependency. **Not now** — a bridge posting to (1) is five lines, and the
+   `midi` precedent in CLAUDE.md says check what the platform already has
+   before taking a dependency for one feature.
+
+#### What does *not* change
+
+**Schedules stay where they are.** An alarm at 07:00 is a circumstance with an
+action attached and is therefore a reflex by this definition — and migrating
+`ScheduleActivation` into the reflex list would rewrite every config and scene
+for no new capability. The line to hold: **an activation says when an app may
+run; a reflex says what makes something happen.** An alarm's time is a property
+of that alarm, the way its message is. A reflex is for what a schedule cannot
+express — which is everything not on a clock, and every consequence that is not
+"start this app".
+
+There is real overlap and it is accepted knowingly. *Do not add a clock source
+to reflexes until something wants one an alarm cannot do.*
+
+**Split into build items 71–74, plus 77–79. Do not build the umbrella.**
+
+### 71. A reflex fires an action, and HTTP is the first source
+
+**The cheap half of 70, and the one that delivers the plant alarm.** A
+top-level `reflexes` list, `POST /api/reflex/{name}`, and dispatch through the
+action machinery that already exists.
+
+The shape, following every other list-of-things in this config:
+
+```json
+"reflexes": [
+  { "name": "moisture_low", "then": { "action": "enter_mode", "target": "Water me" } },
+  { "name": "deploy_done",  "then": "celebrate" }
+]
+```
+
+The second one is a **bare string, which is a named-action reference** —
+`config.resolve_action`, exactly as a gesture binding does. CLAUDE.md is
+explicit that a fifth dispatch site calls the resolver or that surface silently
+cannot use the pool; this is that fifth site.
+
+**Parse-with-fallback applies as everywhere else**: a reflex naming an action
+that does not exist is warned about and left dangling, not quietly dropped.
+
+**The App page has to learn about it.** `reachableModes` starts from the things
+nobody has to start; a reflex firing `enter_mode` is a **new root** in that
+walk. Miss this and the page calls a working config broken — CLAUDE.md says so
+in as many words.
+
+**Definition of done.** A script posting to `/api/reflex/water_me` rings an
+alarm; the App page reports that alarm as reachable *because of the reflex*; a
+reflex nothing ever fires is visible rather than silent; and a `while` scope
+naming a missing app warns.
+
+### 72. A reflex can test the value it arrived with
+
+**The half that makes 70 powerful**, and the half most likely to turn into a
+language if nobody is watching. The body carries JSON; a test is **one field,
+one operator, one number**. `moisture < 30`, and nothing else.
+
+Bounded by construction, for **D2**'s reason: this must be evaluable by the
+on-device runtime eventually, and an expression parser is not. **The moment it
+grows an `if` or an `and`, it is a language and it is host-only forever.**
+
+**The value should land in the event log's `value` column**, which exists for
+exactly this kind of number — and CLAUDE.md's group-by-name rule then gives it
+a chart on the Events page for free.
+
+### 73. MIDI in as a reflex source — and what item 25 was waiting for
+
+A listened MIDI port turns note-on and CC into reflexes. **Read item 25
+first**: it establishes that a Mackie Control is *two-way*, that the DAW tells
+the surface what the transport is doing, and that **derived state beats
+modelled state**. 25's "point the DAW's Send To at a port the button listens
+on" is this item, and 25 stops being a design problem.
+
+**A `when` here needs three fields**: the port, the note (or CC) number, and
+**the velocity** — because MCU feedback uses velocity as the lamp: `127` means
+that button is lit, `0` means it is not. So "the DAW is now recording" is
+*note 95, velocity 127*, and "no longer recording" is *note 95, velocity 0*.
+**The same note number means both things**, which is exactly why 72's test
+exists and why a reflex ignoring velocity would fire on both.
+
+`ClockListener` already owns a MIDI input and a ctypes callback with a lifetime
+trap documented in CLAUDE.md — **reuse it, or read it before writing a second
+one.** A driver calling a collected callback kills the process outright: no
+traceback, no exception to catch.
+
+### 74. A reflex can change what a running app is doing
+
+**The invasive one, and what every interesting example needs.** Starting an app
+is a decision the mode machine already makes; reaching *into* a running
+takeover means the run loop accepting an event that is not a press. Every
+takeover awaits `device.events`, so there is nowhere for one to arrive.
+
+Options, in increasing order of honesty: inject a synthetic press (works today,
+lies about what happened, and a session summary would record a press nobody
+made); give the run loop a **second queue** it selects on alongside the
+device's; or wait for Stage 3, where `(state, event, now)` takes any event kind
+by construction and this costs nothing.
+
+**Recommend the second queue**, and recommend it now rather than at Stage 3,
+because two things want it and one is the reason this item exists: **77**'s
+transport lights, and 47's ringing-alarm dead end solved for a machine rather
+than a person.
+
+*Whatever arrives this way is an event with a kind, not a fake gesture.* An app
+that cannot tell a press from the world is an app that will lie in its log.
+
+### 75. What the mode list is called, now that reflexes are real
+
+**"Reflexes" stops being the wrong word the moment 70 exists**, which settles
+the complaint that started this. Today the group holds gesture maps — the most
+*voluntary* thing on the page — under a word meaning involuntary. After 70 it
+means what it says.
+
+The owner's proposal, and it is better than what is there:
+
+| Group | What it means | Holds |
+|---|---|---|
+| **Menus** | a gesture picks between things | the ambient map, launchers, control surfaces |
+| **Apps** | takeovers that do a job | the other ten |
+| **Reflexes** | the button acts with nobody pressing it | reflexes (**70**), and scheduled apps |
+
+**And it fixes 69's duplication for the new half by construction.** A reflex is
+its own object, so *"moisture_low → Water me"* is a row in Reflexes and the
+alarm is a row in Apps — two different things, listed once each. Only scheduled
+apps still double-list, because their schedule is still a field; that is the
+residue of **70**'s decision not to migrate them, and **69**'s collapsing is
+the answer to it.
+
+*Do not rename anything before 71 ships* — the words follow the concept, and a
+nav group called Reflexes with nothing in it is worse than the current one.
+
+### 77. The DAW tells the button what it is doing, and the light says so
+
+**Asked for 2026-08-26, and it is the example that makes 70 concrete.** The
+owner's words: *one press to record; the DAW tells the button it's recording
+and the light turns bright, gently pulsing red; press again, the light turns
+dark blue for stopped; another press goes back to recording.*
+
+**Every piece of this is expressible once 73 and 74 exist, and none of it needs
+the button to guess.** MCU is two-way: the DAW lights the surface's own Record
+lamp by sending note 95 back, so *"recording"* arrives as a fact rather than an
+inference. That is item 25's central finding and the reason it says **derived
+state beats modelled state** — a local toggle ("I sent Record, so we must be
+recording") is correct until somebody clicks in the DAW, and then it is
+silently inverted for the rest of the session, every press doing the opposite
+of what the light says.
+
+**The design, and it needs one new idea only.** A control surface already owns
+`LISTENING` and already re-paints it after every action — `resting()` does that
+today, which is what makes its light survive each press's SUCCESS flash. What
+it lacks is *more than one* resting look. So:
+
+- A control surface gains **positions**, each with a name and a look. This is
+  **not a new concept**: it is the Signal light's `states`, which is exactly
+  "the app is in one of N visible states", in a second template that needs the
+  same thing.
+- A **reflex sets the current position** (needs **74**). `note 95 velocity 127
+  → "Recording"`; `note 95 velocity 0 → "Stopped"`.
+- `resting()` paints the current position instead of a fixed LISTENING look.
+  **That is the whole rendering change.**
+
+The owner's colours are then config, not code: Recording is a slow breathe on
+bright red, Stopped a solid dark blue. Both are ordinary named looks, and a
+stop list can shape the pulse however it should feel.
+
+**What this deliberately does not do yet:** make one press mean record-or-stop
+depending on the position. That is **78**, and keeping them separate matters —
+the light half delivers most of the value and can ship alone, while the press
+half is a state machine and should be recognised as one.
+
+**Definition of done.** With the DAW's Send To pointed at a port the button
+listens on, arming record **by clicking in the DAW, not by pressing the
+button** turns the light red; disarming turns it blue; and with no feedback
+port configured the surface says it is guessing rather than pretending to know.
+
+### 78. A control surface where the press depends on the position
+
+**The other half of 77, and the one that is a state machine.** Once a control
+surface has positions (**77**), the natural next step is that each position has
+its own gesture map: *while Stopped, short press → Record; while Recording,
+short press → Stop.* One gesture, two meanings, decided by what the DAW last
+reported — which is exactly the owner's "another press goes back to recording".
+
+**This is ARCHITECTURE.md's target app shape arriving early in one template**:
+positions are states, reflexes and gestures are events, and a transition is
+`(position, event) → (position, actions)`. Keep it exactly that shape and it
+ports to the Stage-3 runtime unchanged; let it grow a conditional and it does
+not.
+
+**It also answers item 25's last open question** without a `transport`
+template. 25 notes that MCU has no "return to zero" and that Studio One needs
+*Stop, Stop*, which `MidiAction` cannot express — so this either waits for
+**33** (`SequenceAction`) or lets a position fire two actions in order.
+**Prefer 33**: a flat list of actions with delays is wanted in several places,
+and a per-position pair is that idea with a worse name.
+
+**Do not start this before 77 is running on real hardware.** The whole design
+rests on MCU feedback actually arriving, and that has never been tested here.
+
+### 79. Can the button hear the OS's play/pause? — mostly yes, with caveats
+
+**Asked 2026-08-26**, and worth answering properly because the obvious
+assumption is wrong in an interesting way.
+
+**Receiving the key press: yes, and cheaply.** Windows media keys are ordinary
+virtual key codes (`VK_MEDIA_PLAY_PAUSE` and friends) and can be observed with
+a low-level keyboard hook or a registered hotkey, both reachable through
+`ctypes` on `user32.dll` — **no dependency**, the same move `midi_io.py` made
+with `winmm.dll` and the one CLAUDE.md holds up as the example of checking what
+the platform already has. [keys_io.py](aibutton/keys_io.py) already sends keys,
+so the receiving half has an obvious home.
+
+**But a key press is not a playback state**, and that difference is the whole
+question. A hook tells you *somebody pressed play/pause*; it does not tell you
+whether anything is now playing, what it is, or whether the press was even
+handled by anything. For "the button should know music is playing", that is the
+wrong signal.
+
+**Playback state proper is `GlobalSystemMediaTransportControlsSessionManager`**
+— the SMTC session API: real playing/paused status, track metadata, per-app
+sessions. It is **WinRT**, so it costs a dependency (`winsdk` or similar) and
+is **Windows-only**. That is a real cost against a service that runs on four
+packages and is meant to work headless on a Pi (**40**).
+
+**Two caveats on the cheap route, both of which have bitten people:** a global
+low-level keyboard hook is exactly the shape antivirus and EDR flag, and it
+sits in the input path of every keystroke on the machine — a hook that blocks
+is a hung desktop. If it is ever built it must be **opt-in, off by default, and
+killable from the tray**.
+
+**Recommendation: do not build either until something concrete wants it.**
+Whatever is playing the media can already `POST /api/reflex/now_playing`, which
+is one line in a script, works on any OS, needs no hook and no dependency —
+the same argument that parks MQTT in **70**. Revisit if a real use appears that
+a script genuinely cannot serve.
+
+
+### 54-68. What the three-POV read-back found
+
+**Raised 2026-08-26 by item 47** (see Done), which walked the finished shell as
+three fixed personas. The bugs and dead ends it turned up were fixed in the
+same pass; these were fifteen further improvements, five per point of view,
+deliberately *not* one item - each stands alone and several are an hour.
+**54, 55, 56, 57, 59, 61, 63, 64 and 68 shipped 2026-08-26** - see Done. Six
+remain open: 58, 60, 62, 65, 66, 67.
+
+Nothing here is a bug. The page works; these are the places where it makes the
+reader do the work.
+
+#### (a) The household user - never opens a config file
+
+- **58. The only way to press the button is behind a toggle labelled "Test".**
+  That is right when the button is in your hand and wrong in the case that
+  actually sends people to this page: the button is across the room, flat, or
+  out of range. **The ringing-alarm half of this was fixed** (see Done); the
+  general case is still that a disconnected button leaves the page with no
+  visible controls at all.
+
+#### (b) The tinkerer - edits JSON when annoyed
+
+- **60. A validation error names the field and not where it is.**
+  `_collectErrors` produces "Wake up: Give up after must be a number" and the
+  Save bar prints it. Nothing scrolls to the control or marks it. With eleven
+  modes and one editor on screen, finding it is the work.
+- **62. Parser warnings appear once, on load, in the Save bar.** They are
+  per-key and they know which key. A dangling look or a bad ladder rung should
+  mark its own field, not print into a `<pre>` that the next Save overwrites.
+
+#### (c) The developer - wiring the button into other software
+
+- **65. A webhook cannot be previewed or tested.** Every colour picker got
+  "Show on the button"; a webhook has no equivalent. An app's summary keys are
+  merged flat into the payload, and there is no way to see the result without
+  standing up a receiver.
+- **66. Which keys an app reports on exit is discoverable only in `main.py`.**
+  `summary.clean` merges them flat into a webhook and appends them
+  *positionally* to an OSC message - so for OSC the **argument order is the
+  contract**, and CLAUDE.md already says an app reports the same keys every
+  time or none. The editor should list them per app. This is the one that makes
+  `on_exit` usable by someone who did not write the app.
+- **67. A MIDI or OSC action reports its result only in the global status
+  line.** `last_message` carries "MIDI note on 94 vel 127 ch1 -> Microsoft GS
+  Wavetable Synth", which is exactly right and is overwritten by the next
+  action anywhere. Wiring a DAW means watching the header and guessing which
+  press you are looking at.
+
+### 52b. Per-pixel ring patterns *(a protocol proposal, not a decision)*
+
+**The ring is one lamp on today's wire**: `led.py` paints every pixel the same
+colour, and an effect is style plus two colours plus a period. Chases, comets,
+wipes and a ring split between two colours are therefore "a capability the
+device physically cannot express today" - the exact test
+[CLAUDE.md](CLAUDE.md) sets for breaking the v1 freeze.
+
+It needs a firmware renderer that addresses pixels, a **parameterised pattern
+set** on the wire (not a per-frame pixel stream - that is a radio the button
+does not have), and a capability bit so an un-reflashed device degrades to a
+flat colour.
+
+**52a shipped first on purpose.** Play with it before deciding: if a show is
+not fun on one lamp, per-pixel will not save it, and if it is, this item gets
+a much better brief than it has now.
 
 ### 40. A portable host - the button away from the PC
 
@@ -219,13 +647,143 @@ Two consequences worth having before anyone starts:
   function so it ports to the Stage-3 runtime.
 - **Pairing and bonding** are new surface: an HID device must bond, and the
   phone remembers it. What happens when both a phone and a PC want it?
-- **MicroPython HID over GATT is non-trivial.** Spike it against `aioble`
-  before committing to a shape; if it proves impractical, say so here rather
-  than letting the item rot.
+- **MicroPython HID over GATT is non-trivial — and the blocker is cleared.**
+  Spiked 2026-08-25 as far as desk work goes; the code is
+  [spike_hid.py](firmware/spike_hid.py), standalone and imported by nothing.
+  - **Bonding is in the stock build.** This was the risk that would have
+    killed the item, because HOGP is useless on an unencrypted link.
+    `ports/esp32/mpconfigport.h` defines
+    `MICROPY_PY_BLUETOOTH_ENABLE_PAIRING_BONDING (1)` — in **v1.25.0** as well
+    as master — against a default of `(0)` in `extmod/modbluetooth.h`. So the
+    plain `ESP32_GENERIC_S3` build README.md already tells you to flash is
+    enough. **No custom MicroPython build.**
+  - **aioble supplies the rest.** It exports `Descriptor`, which the Report
+    Reference (`0x2908`) needs, and ships `security.py` — `load_secrets()`
+    plus `pair(connection, bond=True, le_secure=True, …)`, persisting bonds to
+    `ble_secrets.json`, reached as `connection.pair()`.
+  - **One real gap, and it is the thing left to test.**
+    `aioble.Characteristic` takes `read/write/write_no_response/notify/
+    indicate/initial/capture` and **no security flags**, so the Report
+    characteristics cannot be declared encrypted-only. The spike asks for
+    encryption from the peripheral side instead. If iOS refuses to drive an
+    HID device whose reports are not access-protected, the escape hatch is raw
+    `bluetooth.gatts_register_services` with `FLAG_READ_ENCRYPTED` for the HID
+    service alone. **Unknown until it meets a phone.**
+  - **The shutter is Consumer Control, one byte, bit 0 = `0xE9`.** Report map,
+    HID Information, Battery and PnP ID are all written and commented in the
+    spike. Advertised appearance is **Keyboard (0x03C1)** so the same run
+    tests whether that alone earns iOS 26's "keyboard connection" trigger —
+    the only native bridge to **39**, and worth knowing rather than assuming.
+  - **What it costs to run:** `main.py` is renamed aside for the duration
+    (it registers its services at import, and re-registering is not something
+    NimBLE promises to survive), so the board boots to a bare REPL until it is
+    renamed back. Recoverable, never bricked. Forget the pairing on the phone
+    between report-map changes or iOS serves a cached GATT table and the
+    edit looks like it did nothing.
+  - **Not yet run on hardware** — the board was unplugged on 2026-08-25.
+    `spike_hid.probe()` answers the build question with no phone involved and
+    is the first thing to run at the bench.
 
 **Definition of done.** The button takes a photo on an iPhone with no computer
 involved, a countdown is visible on the LED, and leaving camera mode returns the
 button to the host without a power cycle.
+
+### 42. The web UI at phone width
+
+**Asked for 2026-08-25**, as the near half of 40: the GUI on an iPhone. The
+page already declared `width=device-width` and the shell already stacked at
+900px, so this read as done and was not. Measured at 375×812, every tab had
+content rendering past the right edge.
+
+**Three faults, and the first was not a phone bug at all.**
+
+- **`.inp { width: 100% }` sat at the bottom of the stylesheet**, below
+  `.inp-color`, `.ladder-every`, `.inp-range-num` and `.ramp-at` — equal
+  specificity, so source order decided it and every fixed-width control lost
+  its width. The visible casualty was the slider rows: the typed number took
+  the whole row and pushed the readout off the end **at every window size**,
+  desktop included. The rule now sits with the base input styling, above the
+  variants that narrow it.
+- **The Modes tab put a 250px nav beside the detail form**, leaving the form
+  65px wide at 375 — it rendered off-screen, reachable only by scrolling the
+  panel sideways, which looks exactly like the mode editor being blank. Now
+  stacks below 640px, with the nav unpinned while stacked. 640 rather than
+  900 because the split still fits an iPhone in landscape.
+- **The Events table dragged its panel sideways.** Six columns will not fit a
+  phone at any font size, so the log scrolls in a box of its own.
+
+Verified by measuring every element's right edge against the viewport on all
+four tabs at 375 and at 1280: zero overflow at both, and the slider row went
+from 500px of content in a 313px row to fitting.
+
+**What is left, and it needs a hand and a phone, not code:** touch targets.
+`.mini` buttons are ~24px against Apple's 44px guidance, and there are a lot
+of them. Worth a decision — bigger controls on a coarse pointer
+(`@media (pointer: coarse)`) is the cheap version — but taken after someone
+has actually used the page on a phone rather than before. Fold the dashboard
+away first (**◧ Panel**); it costs a third of the screen.
+
+**Reaching it is 8(d), and it is not code.** Tailscale on the host and the
+phone, `http://<machine>:8080` from anywhere, nothing public — written up in
+MANUAL §4.5. The web UI still has no authentication, so that stays the only
+recommended route off the LAN.
+
+### 43. Can the button host the page itself?
+
+**Asked 2026-08-25, and the answer is "yes, and that is not the constraint".**
+Recorded because it is the obvious idea and deserves a real answer rather than
+being re-derived.
+
+**The page fits, easily.** The whole authoring UI already exists as one
+self-contained file — `dist/button-editor.html`, 341 KB, built by
+[build_editor.py](tools/build_editor.py) — and it runs with **no service at
+all**, swapping `ConfigApi` for `FileApi`. Gzipped it is well under 100 KB
+against 4 MB of flash. ARCHITECTURE.md's budget table says it outright:
+*storage is a non-issue; RAM headroom and power are the real constraints.*
+
+**So what stops it is not the device. Three things, in order:**
+
+- **Power, which is decisive and is already scored in 21.** BLE connected is
+  single-digit mA; WiFi associated is an order of magnitude more with 100-300
+  mA bursts, against a 7-day idle target. A button holding a web server up is
+  a different battery and therefore a different enclosure.
+- **The served page is a view onto the service, not a standalone app.** It
+  talks to a REST API that *is* the host: parse-with-fallback, scenes, the
+  event store, the scheduler, rules, and the webhook/OSC/MIDI actions. Move
+  the page without the brain and you get an editor with nothing behind it.
+- **It inverts a decided ownership rule.** ARCHITECTURE.md: config's source of
+  truth is the **phone**, and *the device never edits config*. A device-hosted
+  config editor writes config on the device, which is the one direction the
+  sync design forbids.
+
+**The shape that survives all three: a momentary SoftAP setup mode.** Hold to
+enter, the S3 raises its own access point, serves the offline editor from
+flash, takes the edited JSON back over one POST, writes it, drops the AP.
+WiFi is up for minutes rather than days, so the power objection goes; BLE is
+down while it is up, which is exactly 21's *config-time either-or, never
+concurrent*; and it needs no brain on the device because the offline editor
+already runs without one.
+
+**Its honest limit today is that the button cannot act on what you edited** —
+every decision is host-side, so a config the device holds and the host never
+sees does nothing. That makes this a **Stage-3 companion**, useful the moment
+the on-device runtime lands and near-useless before it. Same verdict, same
+reason, and the same trigger as **21**: measure at ROADMAP **3c**, build
+after.
+
+**On upgrading the board — don't, for this.** No MCU swap moves the binding
+constraint, because the constraint is not flash:
+
+- **S3 N8R8 / N16R8** (8-16 MB flash, 8 MB PSRAM) — same chip, same firmware,
+  more room. Buys **RAM headroom for the Stage-3 runtime**, which is one of
+  21's named triggers, and buys nothing for hosting. The only upgrade worth
+  considering, and 21 says measure before buying.
+- **ESP32-P4** — much faster, and **no built-in radio**; it needs a companion
+  wireless chip. Wrong direction.
+- **ESP32-C6** — better low-power silicon and Thread/Matter, but a weaker
+  single RISC-V core than the S3's two. Interesting for **29**, not for this.
+- **Pi Zero 2 W** — runs the real service unchanged, which is **40**. ~100 mA
+  idle and a ~20 s boot: right in a bag, wrong in a pocket.
 
 ### 0c. Re-solder the button, and move its LED to 5 V while it is off
 
@@ -396,11 +954,17 @@ certbot, add a docker-compose service and a reverse-proxy vhost.
 
 ### 10. Checkpoint — review and re-triage
 
-**Last run: 2026-08-19**, at the end of the host-side sprint that shipped
-items **5, 9, 14, 15, 17, 19b, 26, 27, 28**, the MIDI port dropdown, the
-item-23 design and decision **D9**, and created build items **31–34**.
-Shipped items are compressed into **Done**, superseded scope deleted, and
-the gates re-scored above. Nothing shipped today has met the button.
+**Last run: 2026-08-26**, at the end of the sprint that shipped **44, 45, 46,
+48a, 48c, 49, 50, 51, 52a, 53** and ran the **47** read-back. It compressed
+those into **Done**, rescored the gates, deleted the launcher-`targets` note
+that got fixed, and created **54-68** (the read-back's findings) and **69-75**
+(signals, and what the mode list is called). Decision **D10** was opened.
+
+Previous run: 2026-08-19, which shipped **5, 9, 14, 15, 17, 19b, 26, 27, 28**,
+the MIDI port dropdown, the item-23 design and **D9**, and created **31-34**.
+
+**Nothing in either sprint has met the button.** Eleven items of host-side work
+now sit between the last hardware sitting and this line.
 
 **Next checkpoint: after the next hardware sitting.** That sitting now has
 a queue worth doing in one go: **0c** (re-solder + the 5 V rework), the
@@ -485,6 +1049,11 @@ most DAWs. Those three are a `control` surface today (**shipped**), and if that
 is all someone wants, this item is not needed. **Only the record cycle needs
 state**, because "start recording" and "stop and rewind" are different messages
 that share a gesture.
+
+**Superseded in part by item 73.** "A port the button listens on" is now its
+own item, under the umbrella of **70** - so this stops being a design problem
+and becomes a thin app on top of a general inbound-signal source. **Read 70
+before starting this.**
 
 **The important finding: the state does not have to be guessed.** A Mackie
 Control is a *two-way* protocol - the DAW sends note-on back to the surface to
@@ -749,6 +1318,41 @@ denominator along with the deadline.
 
 ## Parking lot (deliberately later)
 
+- **48b. Nesting the config format: apps over items.** ⏸ Considered and
+  parked 2026-08-25, **on a measurement rather than a preference** - and the
+  measurement contradicted this file's own triage of it a day earlier.
+
+  The idea: `modes` stops being a flat list and becomes apps, each holding its
+  items, so five alarms are one Alarm app with five alarms in it.
+
+  **Every runtime consumer of `modes` is flat** - all nine. `bound_triggers`
+  scans, `rules.resolve` walks in priority order, `due_alarm` scans,
+  `launcher_targets` filters, `enter_mode` resolves `m.name == target` twice.
+  Nesting would be flattened again at every one of those sites, because the
+  grouping answers an authoring question the runtime never asks.
+
+  **The migration driver named in triage does not exist.** "A target becomes
+  app+item, so every `config.json`, scene and pool action needs rewriting" is
+  true only if targets are made *structural*. Item names are already globally
+  unique - that is how `enter_mode` resolves today - so with resolution left as
+  a name lookup, nothing needs rewriting. The expensive half was self-inflicted.
+
+  **Cost if done anyway:** `_parse_mode` (139 lines) and `_parse_modes` (62)
+  restructured, `_mode_to_dict`, `scenes.py`'s merge (a scene layers a `modes`
+  list), the migration ladder plus a rung, `model.modes` throughout the editor
+  JS, 25 test files. **Runtime benefit: none.**
+
+  **What the ask wanted is already shipped.** "Several alarms from one alarm
+  app, not several alarm apps" is **48a** (the list groups by app) plus **49**
+  (one card, "+ Add another", copies underneath) plus **48c** (the item's page
+  names its app). Those cost no format change.
+
+  **The trigger to reopen it: the first thing that needs genuinely app-level
+  state** - a setting shared by every alarm that no single alarm can own.
+  There is none today, and adding the container before there are contents is
+  how a config format grows a level nobody uses. Reopen with that setting as
+  the reason, and the cost above as the budget.
+
 - Battery + deep sleep — the one thing that might justify a C++/NimBLE rework.
   **Now written up as item 29**, which was asked for directly; this line stays
   because the *battery* half is still parked and 29 says to measure first.
@@ -784,6 +1388,494 @@ denominator along with the deadline.
 
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
+
+- ~~**A named look built from a preset arrived empty**~~ - 2026-08-26.
+  Reported as "it always defaults to selecting single colour, which removes the
+  other colours in a sequence, and they don't come back".
+
+  **`modeEditor.js` read `preset.effect`, and most presets do not have one.**
+  105 of the 142 look presets are sequence-only and carry `stops` instead, so
+  `.effect` was `undefined`, `_addLook` spread it into `{}`, and the new look
+  was genuinely empty - which is why the editor showed *single colour* (an
+  empty object has no stops) and why the colours never came back (they had
+  never been copied anywhere). It now goes through `presetLook`, which is
+  `sequence || effect` **deep-copied** - and the copy matters as much as the
+  fallback, because handing over the preset's own object would have shared its
+  stops array with the module-level table and let editing your look rewrite the
+  preset for the rest of the session. Every other preset consumer in the app
+  already used that helper; this was the one that did not.
+
+  **Merely looking at an existing sequence never corrupted it** - checked
+  against the real component, which mutates nothing on mount. The damage was
+  only ever at the moment of creating one from the dropdown, which is why it
+  read as "always".
+
+  The destructive toggle underneath it was **76**, fixed below.
+
+- ~~**76. Switching a look to "single colour" destroyed it, silently**~~ -
+  2026-08-26. `switchShape` in
+  [colorEngine.js](aibutton/web/static/colorEngine.js) `delete`d every key on
+  a flip with nothing kept, so one accidental click on *Single colour*
+  discarded a stop list you had spent ten minutes on, with no confirmation and
+  nothing to recover from.
+
+  **Fixed by parking, not by asking.** Each shape now parks the exact fields
+  it is leaving in the widget's own closure - never written to the model, so
+  it costs the saved config nothing - and a flip back restores them rather
+  than rebuilding from the one carried colour. Only the first flip into a
+  shape (nothing parked yet) falls back to that reconstruction, same as
+  before. A confirm dialog would have been noise for the direction that loses
+  nothing; parking fixes the direction that does.
+
+- ~~**69. The mode list needed to fold**~~ - 2026-08-26. With eleven modes the
+  side panel ran longer than the screen, and the group you were not working in
+  was pure scrolling. Each group's title in
+  [menu.js](aibutton/web/static/menu.js) is a button now; a click folds that
+  group's body, remembered per browser via `nav-fold:<nature>` in
+  [prefs.js](aibutton/web/static/prefs.js) - a view preference, so it costs
+  `config.json` nothing and does not survive to a scene.
+
+  **The item's second complaint - Alarm and its kind listed twice - is
+  deliberately untouched.** That is **48a** working as designed, and the real
+  fix is **75**'s taxonomy; folding was named as the cheap mitigation for it
+  and nothing more, so 75 keeps whatever it still has to say.
+
+- ~~**56. The App page led with a warning a novice could not act on**~~ -
+  2026-08-26. "4 installed apps have nothing that can reach them" sat above
+  every app in [menu.js](aibutton/web/static/menu.js)'s `_renderAppsSection` -
+  the best line on the page for a tinkerer, a wall of alarm for someone who
+  had installed one thing.
+
+  **Deleted, not moved.** The diagnosis it was aggregating already sits beside
+  the app it is about: the "Unreachable" pill on the card (`_appStatus`) and,
+  per copy, exactly why (`_howReached`, "nothing opens it - bind a gesture to
+  ‘Launch an app’…"). The count was reporting nothing those two did not already
+  say, one level up and with less specificity. The dangling-target warning
+  stays - it names a gesture pointing at an app that does not exist, which has
+  no card to sit beside and is directly actionable ("Install it below").
+
+- ~~**57. Nothing said what a press would do right now**~~ - 2026-08-26. The
+  nav's live dot already knew - `active_modes` from `/api/status`, the same
+  ambient resolution the dot's hover title used - but seeing it meant hovering
+  a dot in a list you might not have open.
+
+  **A line under the header's "Last: …"** (`aibutton/web/index.html`) now says
+  it without being asked: `Right now: short press → Coffee count · long press
+  → Focus`, one entry per bound gesture, in `GESTURES` order. No backend
+  change - `active_modes` already carried exactly this, one poll away.
+
+- ~~**55, 63, 64, 68 - four small read-back fixes**~~ - 2026-08-26, a
+  low-hanging-fruit pass done on Sonnet between sessions.
+
+  - **55.** Header no longer counts modes - "11 modes" was the one number
+    nobody could act on, left over from the vocabulary item 46 retired.
+    Dropped rather than recomputed, since nothing needed the exact split.
+  - **63.** The flash floor's readout says `Floor: 0.30s (3.3 flashes/sec)`
+    now (`schema.js`) - the word was previously only in tinker-tier help text,
+    for the one setting that is *honoured and warned about* rather than
+    clamped.
+  - **64.** The Web server settings group carries a line pointing at `/api/`
+    and webui.py's own docstring for the endpoint list - zero mentions of the
+    REST API existed anywhere in the UI before. Gated the same as the rest of
+    that group (Tinker-tier): the fields it sits beside already are, and one
+    visibility rule beat a special case for one paragraph.
+  - **68.** `DeviceInfo.names_absent` (`device.py`) mirrors `.names` - what a
+    device does *not* claim, from the same `CAPABILITY_NAMES` table, so no
+    second list to drift. `/api/status` carries it as `capabilities_absent`
+    and the header shows `(missing: …)` when non-empty - the half that
+    decides whether a developer's feature will work, previously invisible.
+
+- ~~**54. The Lights tab opened five colour editors at once**~~ - 2026-08-26.
+  The named-look pool got a collapsed row years ago for exactly this reason;
+  the five system states still rendered fully expanded, the same problem in
+  the first place a novice lands.
+
+  `_renderStateRow` (`menu.js`) mirrors `_renderLookEntry` exactly - swatch,
+  name, summary, one **Edit**/**Done** toggle, one open at a time
+  (`_expandedState`) - minus Duplicate/Delete, which a fixed system state
+  does not have.
+
+- ~~**59. There was no way to see the JSON**~~ - 2026-08-26. Export downloads
+  a scene and Import replaces one; neither answers "what does this control
+  actually write" without leaving the page.
+
+  A **View raw JSON** toggle on the Device tab (`_renderRawJson`, `menu.js`)
+  shows the working copy as formatted, read-only JSON, plus **Copy**. Nothing
+  new to load - it stringifies `this.model`, the same object every other
+  control already edits.
+
+- ~~**61. The named-action pool was invisible until you knew it existed**~~ -
+  2026-08-26. An empty picker under a gesture's "Use a named action" described
+  in prose where the pool was, on a page that already scrolled.
+
+  A **Make one** button (`modeEditor.js`'s `_namedActionField`) creates a pool
+  entry and points the gesture at it in one click, through the same
+  `_addAction` the pool's own "+ Add" button now calls
+  ([menu.js](aibutton/web/static/menu.js)) - one path to a new entry, not two.
+
+- ~~**A control surface's DAW commands appeared wiped on reload**~~ -
+  2026-08-26. Reported as settings that "save and appear to update the button
+  but when I re-open the page, the settings appear wiped".
+
+  **Nothing was ever wiped, and no config on disk was damaged** - the notes,
+  channels and ports were correct the whole time. `daw_command` is a *preset
+  inserter*: it fills in the real fields and is deliberately not round-tripped,
+  which is the right lifetime for "this is how the number got there". But the
+  widget recovered its selection only by reading that dropped key, and **every
+  raw MIDI field is Tinker-tier and hidden** - so after any save the dropdown
+  was the only control on screen for that gesture, and it reverted to
+  "- start from… -" while the button went on sending the right note.
+
+  Fixed by making the preset recognisable again from what it wrote: a `derive`
+  hook on the field spec, pointed at `dawCommandFor` - the reverse lookup
+  `describe()` had been using all along to show "Play" beside note 94.
+
+  **The MIDI numbers were also doubted and are correct.** The MCU table is
+  internally consistent, has no duplicate note numbers across 60+ entries, and
+  every gesture's label matches its own number. The doubt was almost certainly
+  caused by this bug: with the labels blanked there was no way to confirm at a
+  glance what each gesture sent. If a DAW still ignores a command, README's
+  note applies - the port has to be added as a **Mackie Control**, not as a
+  new keyboard.
+
+- ~~**47. Read the menu back from three points of view**~~ - 2026-08-26. Three
+  personas walked the finished shell. **Fifteen improvements are items 54-68**;
+  what follows is only what got fixed on the way.
+
+  **Three dead ends, and the third had been live for seven hours.**
+
+  - **A curated launcher menu could not survive being looked at.** `targets` is
+    a textarea, so the editor writes a string; `_parse_launcher_body` accepted
+    only a list, so opening a launcher in the web UI and saving reverted it to
+    "offer every app" - error in the log, nothing in the UI. `cues` had taken
+    both shapes since 52a *and said so in a comment pointing at this bug*.
+    Now a rule in CLAUDE.md rather than a comment.
+  - **A heading with nothing under it.** All three "Web server" settings are
+    tinker-tier, so a basic user got the title and blank space. A group is now
+    tinker-tier when every field in it is - derived from the specs, so a group
+    that gains a basic field starts showing again on its own.
+  - **A ringing alarm could be seen and not acted on.** The badge pulses red,
+    the only presses live behind a toggle labelled *Test panel*, and the button
+    was disconnected - so there was nothing in the room to press either. Found
+    with a real alarm that had been ringing since 07:00. There is a **Dismiss**
+    button in the header now, shown for `ALARMING` and nothing else: any press
+    dismisses an alarm, so it is an ordinary short press rather than a new
+    endpoint. Every other takeover is something you chose to open and can leave
+    with a long press, and a page-wide "get me out" would compete with the
+    button itself.
+
+  Also fixed, found by the suite rather than the walk: the **5AM alarm preset
+  was unsaveable**. It hand-listed its fields and predated `grace_minutes`, so
+  the editor's own check refused it the moment it was added. It spreads the
+  template defaults now, like every other preset.
+
+  **What it did not cover, deliberately:** touch targets. 42 already settled
+  that they need a hand and a real phone.
+
+- ~~**53. The Events page grows sub-tabs and charts**~~ - 2026-08-26. The table
+  keeps its place as the default view and gains three sibling pages - Overview
+  & Activity, Mode & Time, Patterns & Metrics - carrying nine charts. Verified
+  against the live log (380 rows): zero overflow at 375 and 1280, every view.
+
+  **The two decisions the item pre-answered held.** No library: every chart is
+  hand-rolled, no build step, no runtime dependency. Aggregation is client-side
+  and there are no new endpoints - the same grouping logic in Python *and*
+  JavaScript would be a mirrored table with no test behind it.
+
+  **The open question is answered: the offline editor gets none of it.** It has
+  no service and therefore no events, so `eventCharts.js` is simply not in
+  build_editor's entry list - the seam `sidepane.js` already sits on. Verified
+  by serving the bundle and driving it.
+
+  **Mostly not SVG, which is where this departs from the item's own
+  recommendation.** Text inside a `viewBox` scales with the box, so an 11px
+  label is 6px on a phone - unreadable rather than overflowing, which no
+  measurement catches. Rule now in CLAUDE.md.
+
+  **Two things the data would have got wrong**, both now pinned by tests:
+  summing `timer_stop` *and* `mode_exit` double-counts a stopwatch, and
+  `toISOString().slice(0, 10)` files evening events under tomorrow for everyone
+  not on UTC.
+
+  The fetch bug the item named is fixed: `/api/events` defaults to 50, so every
+  caller now states its own limit. The table draws 200 of them and says "200 of
+  380 rows" when that bites.
+
+- ~~**51. Apps with real interfaces**~~ - 2026-08-26. An app's page is the app
+  now, not just its settings: what it has done sits above the knobs. **Zero
+  Python** - it reads `/api/events` and the config, which is exactly the line
+  the item drew.
+
+  **Two halves.** A stopwatch shows its runs compared against each other -
+  bars, best and worst, and each run's delta against the one before it. And an
+  app with more than one item lists its siblings, so you move between your two
+  alarms from inside the alarm. Two or more, like the nav's grouping: a row of
+  chips holding only the item you are looking at says nothing.
+
+  **Declared as data, so it is not a stopwatch feature.** Thirteen templates
+  carry a `readout`, and a new app gets a history by adding four keys.
+  `measure` has four values because `value` is one untyped column - and the
+  reason `outcome` exists is that an alarm's 0/1 must be counted, never
+  averaged into "0.86 alarms".
+
+  **`better` is null far more often than not**, and that is the point of it
+  being nullable: a tempo has no good end and neither does a countdown's
+  length. Only a game declares one.
+
+  **The exact-name filter is client-side on purpose.** `/api/events?name=` is a
+  substring match - right for a search box, wrong for "this counter's rows",
+  where a counter called `water` would quietly absorb `water_reminder`.
+
+  Found while walking it: `noun + 's'` gave "presss", "guesss" and "launchs".
+  One `plural()` in format.js, because a `plural` key on twelve descriptors to
+  fix three of them is a field nobody reads.
+
+- ~~**48c. The editor reads as an app and its items**~~ - 2026-08-25. The nav
+  groups by app and the App page lists the copies; a mode's own page was the
+  last screen still calling one of them a mode. Its head now names the app
+  (ALARM, INTERVALS) and the name field says what it is naming.
+
+  **Delete says the item's name, not its kind.** "Delete this alarm" was fine
+  and "Delete this intervals" and "Delete this hot / cold" were not - a label
+  built from a template name has to survive every template. `Delete "Wake up"`
+  survives all twelve and says exactly what is about to go.
+
+  Vocabulary only. No data changed, which is the whole point of it being
+  separable from **48b**.
+
+- ~~**44. Dead man's switch - an alarm that acts when you *don't* answer**~~ -
+  2026-08-25. Two fields on `AlarmBehavior`: `grace_minutes` and `on_timeout`.
+  With no grace period it is today's alarm, byte for byte - the switch is
+  opt-in, and a test pins that.
+
+  **The mechanism was already next door, inverted.** `run_reminder`'s timeout
+  branch says a timeout is not a clear, *because nobody saw it*; this is that
+  sentence turned around - nobody saw it, so tell someone. It hangs off the
+  alarm rather than the reminder because the alarm **insists** (it loops, it
+  snoozes) where a reminder gives up.
+
+  **A preset, not a template**, which is the whole point: the alarm already
+  rings and already waits, so the switch is two fields. What the preset buys is
+  **findability** - nobody looking for a dead man's switch would think to open
+  an alarm and read its fields.
+
+  **`on_timeout` is a binding, not a field.** There is no `kind: 'action'`
+  widget and there should not be one: an action bound to something that is not
+  a press is exactly what a hook already is, so it reuses that sub-editor
+  through a new **`bindings`** key on the descriptor. It offers `HOOK_ACTIONS`
+  only - `enter_mode`, `readout` and `standby` change what the mode loop does
+  next, and there is no loop left to change once the alarm has given up.
+
+  **Every outcome is logged, not just the dismissal.** `dismiss_event` now
+  writes `value: 1` when answered and `value: 0` when not - same event name,
+  both outcomes, one place to look. A switch that fires while nobody is
+  watching is only worth having if the record says what happened.
+
+  **It depends on this host being awake and its whole point is firing while
+  nobody is watching.** Service stops, machine sleeps, Bluetooth drops - it
+  does not fire, and cannot know it did not. Said plainly in the editor hint,
+  commented at the dataclass, and the reason for the logging above. *It is a
+  nudge, not a safety device.*
+
+  Verified through `main.run` with the clock parked on the alarm's minute:
+  answered runs nothing, unanswered runs the action, it stops ringing once it
+  has given up, and `grace_minutes: 0` still rings forever.
+  [test_dead_man_switch.py](tests/test_dead_man_switch.py).
+
+- ~~**52a. A light show app**~~ - 2026-08-25. A playlist of named looks,
+  walked on a clock. Short press is the next cue, **double tap holds** it on
+  the one you liked, long press leaves.
+
+  **Why it earned a template rather than a preset**, which was the first thing
+  triage checked: everything else about a show is already data - a look can be
+  a stop list, and a stop list already fades, holds and loops. What no existing
+  template can do is **advance on its own**. A Signal light waits for a press;
+  a look, however long, is one look. The clock is the only new thing, and the
+  clock is the code.
+
+  **A cue names a look; it never carries one** - the opposite of a Signal
+  position, for the opposite reason. A position is a status you invented and
+  nothing else could mean it, so it carries its colour inline. A cue wants the
+  *rich* form, which only exists in the pool, and naming one means retuning
+  "Ember" retunes every show using it.
+
+  **It owns no `LEDState`**: each cue is pushed as an ephemeral effect over
+  LISTENING, exactly as a Signal position is, so the whole app cost **no wire
+  code** and stores nothing on the device.
+
+  **The dwell has a floor of its own (1s), and needed one.** `sequence_safe`
+  governs how fast a look flashes *inside itself*; nothing watched how fast the
+  show swaps between looks, so a `dwell_s: 0.05` would have been a strobe the
+  existing guard could not see.
+
+  **Verified against a real run loop**, not just the dataclass: enters on the
+  first cue, short press advances, **advances on the clock with no press**,
+  double tap holds it through a full dwell, long press returns to IDLE, and an
+  empty show reports an error instead of spinning. [test_lightshow.py](tests/test_lightshow.py)
+  covers the same six plus the parser rules.
+
+  **(b), per-pixel ring patterns, remains a proposal** and is unchanged by
+  this: the ring is still one lamp, and (a) is what says whether it needs to
+  stop being one.
+
+- ~~**50. A colour on the app pickers**~~ - 2026-08-25. "Launch an app" is a
+  button and a list of buttons now, not a `<select>`: each option carries the
+  same live swatch the nav and the App page paint, plus what that app does.
+  A `<select>` could never do it - an `<option>` holds text, and the half of a
+  look that identifies it is the **movement**. "The slow blue one" is how
+  anyone actually refers to a mode.
+
+  **A widget kind (`modeSelect`), not a special case in the picker**, because
+  capability is declared as data here: anything that comes to pick a mode asks
+  for that kind and gets the swatch. The options are real buttons, so Tab and
+  Enter work without a listbox implementation; Escape closes and hands focus
+  back.
+
+  **`modeLook` moved into [schema.js](aibutton/web/static/schema.js)** and the
+  nav's private copy became a call to it - three places now answer "what
+  colour does this run in?" with one function, which is the rule the colour
+  engine already sets. A target naming a mode that no longer exists shows as
+  **"(missing)"** in amber rather than as unset, because the parser warns
+  about exactly that and the editor must not disagree with it.
+
+  **Fixed while here, and it was a live bug**: 48a made `navButtons` a list of
+  rows per mode, and the rename handler still treated it as one row - typing in
+  a mode's name threw. Each row now also remembers *which line it shows*, so a
+  rename cannot swap a Reflex row's trigger for a template summary.
+
+  **The web UI's own assets are served `no-store`.** There is no build step and
+  no hashed filenames, so an edited module keeps its URL - and a browser that
+  caches it runs last week's editor against this week's service. An ES module
+  graph is cached per URL, so a reload will not shift it, which makes the
+  failure look exactly like the edit not having happened. It cost real time
+  twice in one session. Needs a service restart to take effect.
+
+  **Not done, deliberately:** the launcher's target list. It is a textarea of
+  free-typed names, and turning it into a multi-select is a different job from
+  putting a colour on a picker.
+
+- ~~**49. An App management page**~~ - 2026-08-25. A fourth destination
+  listing every app as **Available**, **Installed** or **Unreachable**, with
+  each installed copy showing *how* it is reached ("Triple tap → Home", "at
+  07:00 Mon-Fri") or what to do if it is not.
+
+  **Reachability is a walk, not a filter, and that is the whole value.** Roots
+  are the things nobody has to start - a gesture map is live by definition, a
+  clock starts its own apps - and everything else is reachable only by being
+  pointed at. It is **transitive**, because a launcher you cannot open cannot
+  open anything either. `reachableModes` is pure over data
+  ([schema.js](aibutton/web/static/schema.js)), so it is the same kind of
+  function as `rules.py`, and it resolves **named actions** on the way -
+  `findEntryPoints` never did, so a gesture holding a pool entry read as going
+  nowhere.
+
+  **It found four real faults in the live config the moment it rendered**:
+  Counter, Metronome, Intervals and Reaction stranded with nothing able to
+  open them, and a long press pointing at a "Launcher" that does not exist.
+  That is the case for the page in one screenshot - none of it is visible from
+  any single mode's card.
+
+  **Installing a launcher nobody can open fixes nothing, and the page says
+  so.** Verified both ways: install it and the four stay stranded; point one
+  gesture at it and all four flip to reachable as the walk runs through it.
+
+  **Two verbs under the mode list, not one.** "+ Add mode" became **"+ Add
+  reflex"** and **"Manage apps →"**, because writing a gesture map and choosing
+  between twelve apps are not the same act. The ready-made picker went with it:
+  its fourteen presets are now what **Install** offers, so choosing an app and
+  choosing which *kind* of it you want stopped being two controls in two
+  places.
+
+  **The offline editor got the page too, rather than a second code path.**
+  Removing the picker had quietly left it with no way to add an app at all -
+  the mount is optional, and it was resolving to nothing. It now has the panel,
+  the tab, and the `button:show-panel` listener that makes "Manage apps"
+  more than a dead button there.
+
+- ~~**48a. Alarms stop looking like five apps**~~ - 2026-08-25. Presentation
+  only: no `config.py`, no `main.py`, no wire. Two alarms now read as
+  **"Alarm (2)"** with both nested under it, and grouping starts at two -
+  a header over a single child doubles the list to say nothing, and one
+  stopwatch really is one stopwatch.
+
+  **A mode may be listed twice, and that is the point.** The two groups
+  stopped being boxes a mode falls into and became two questions - *what
+  wakes the button up*, *what can it run* - so an alarm answers both and
+  appears under both. `startedBy: 'schedule'` is the test rather than a list
+  of templates, because it is already the descriptor's answer to "does a
+  person start this?", so a new clock-started template joins the Reflexes list
+  with no edit to the nav.
+
+  **The two listings must not read identically**, or the second looks like a
+  duplicate rather than a second answer: the Reflex row shows the *trigger*
+  ("at 07:00 Mon-Fri"), the Apps row shows the template summary.
+
+  **Reflexes is two sections, because only one of them is a queue.** A gesture
+  map is read top-to-bottom, first match wins, and its order is a setting the
+  blurb tells you to use. A scheduled app's position means nothing. Run
+  together they read as one priority list and someone would reasonably drag an
+  alarm up the page expecting it to matter - so anything a clock owns sits
+  below its own **"On a schedule"** label, and the blurb now says so. *The
+  blurb was the bug: it promised priority ordering over a list that had just
+  stopped being one.*
+
+  `navButtons` maps a mode to a **list** of rows, not one row. Both consumers
+  walk it; with a bare entry the second row silently replaced the first and
+  only one of a mode's two rows ever lit its live dot.
+
+- ~~**45. The modes list is the side panel; the page opens on Events**~~ -
+  2026-08-25. The tab bar is gone. The side panel is the whole navigation -
+  Events, Lights, Device, then every mode under **Reflexes** and **Apps** -
+  and the main pane shows whichever one you picked. **One nav, not two**: the
+  mode list used to be a second 250px nav *inside* one of four tabs, so
+  reaching a mode was two choices and the list vanished the moment you looked
+  at anything else.
+
+  **`mounts.nav` is optional, and that is what keeps the offline editor
+  alive** - with nowhere to put the nav it renders inside the panel exactly as
+  before. `menu.js` **asks** the shell to show the modes panel
+  (`button:show-panel`) rather than reaching for its tab state; rule in
+  [CLAUDE.md](CLAUDE.md).
+
+  **The test panel is a popover** hanging off the header, not remembered
+  between loads - appearing unasked is the column it replaced. Closes on
+  Escape, the toggle, or a click outside; clicks *inside* keep it up, because
+  pressing the simulated button four times running is the main thing anyone
+  does in there.
+
+  **The narrow layout was rebuilt, and the bug it had was invisible.** Stacked,
+  the fixed-height frame gave the work surface zero height - nothing
+  overflowed, so 42's measurement passed while the page rendered empty. Below
+  900px the shell is a scrolling document now. The override that fixed it
+  *also* failed silently first, sitting above `.tab-panel { position:
+  absolute }` at equal specificity - the second time this stylesheet has lost
+  that argument. Both rules are in CLAUDE.md.
+
+  Left for **47**: the Actions pool still sits at the foot of the mode page
+  rather than having a destination of its own, which is a thing to look at
+  once someone reads the nav cold.
+
+- ~~**46. What the two kinds of mode are called**~~ - 2026-08-25.
+  **Takeover → App, Everyday → Reflex.** Half of it was decided elsewhere
+  already: the product line is "a button that runs swappable apps", so using
+  the word now avoids renaming twice. The other group needed a word for
+  *always on, fires instantly, never seizes the button* - a reflex fires
+  without thinking, an app takes over. Rejected: **Hotkeys / Apps** (no
+  flair), **Daemons / Apps** (accurate, asks too much of someone who has never
+  met the word). The `enter_mode` action reads **"Launch an app"** and
+  describes as `Launch “X”`, which is what makes the group name land - the
+  gesture that starts one now says the same word the group does.
+
+  **The copy changed and no token did.** `nature: 'takeover'`, the dataclass
+  names, `TAKEOVER_BEHAVIORS`, the config key `modes` and the wire are
+  untouched, so the mirrored-table tests were never in play; comments and
+  docstrings keep the old words where they describe code. Files:
+  `schema.js`, `menu.js`, `modeEditor.js`, README, MANUAL.
+
+  **"Mode" survives as the umbrella noun** in generic chrome - Add mode, Mode
+  name, Delete mode - because a reflex and an app are two kinds of one config
+  object and the key is literally `modes`. Whether the umbrella needs its own
+  word is a question for **45**, which replaces the tab bar that carries it.
 
 - ~~**41. The colour menus say what the button will actually do**~~ -
   2026-08-23. Seven reports from using it, one cause under most of them: the

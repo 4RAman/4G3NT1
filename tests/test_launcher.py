@@ -280,11 +280,46 @@ def test_it_may_only_be_started_by_a_gesture():
 
 
 def test_every_field_falls_back_on_its_own():
+    # `targets` is a number rather than a string here on purpose: a *string* is
+    # a legitimate shape now (see below), so it is no longer an example of
+    # something the parser should reject.
     cfg = parse_config({"modes": [
         {"name": "Menu", "template": "launcher", "activation": {"type": "manual"},
-         "targets": "nope", "return_after": "yes", "log_as": 7},
+         "targets": 7, "return_after": "yes", "log_as": 7},
     ]})
     assert cfg.modes[0].behavior == LauncherBehavior()
+
+
+def test_a_typed_out_menu_survives_being_saved_from_the_web_ui():
+    """The bug this pins: the editor's field for `targets` is a textarea, so it
+    writes one name per line as a plain string. Accepting only a list meant
+    that opening a launcher in the web UI and pressing Save silently turned a
+    curated menu into "offer every app" - an error in the log, and nothing at
+    all on screen. `cues` had taken both shapes since 52a."""
+    cfg = parse_config({"modes": [
+        {"name": "Menu", "template": "launcher", "activation": {"type": "manual"},
+         "targets": "Water\nFocus"},
+    ]})
+    assert cfg.modes[0].behavior.targets == ("Water", "Focus")
+
+
+def test_a_typed_menu_ignores_blank_lines_and_stray_spacing():
+    cfg = parse_config({"modes": [
+        {"name": "Menu", "template": "launcher", "activation": {"type": "manual"},
+         "targets": "  Water  \n\n\n  Focus\n"},
+    ]})
+    assert cfg.modes[0].behavior.targets == ("Water", "Focus")
+
+
+def test_an_emptied_box_means_every_app_which_is_what_the_field_promises():
+    """Blank offers everything - the field's own hint says so, and an
+    all-whitespace box has to mean the same thing as an empty one."""
+    for typed in ("", "   ", "\n  \n"):
+        cfg = parse_config({"modes": [
+            {"name": "Menu", "template": "launcher", "activation": {"type": "manual"},
+             "targets": typed},
+        ]})
+        assert cfg.modes[0].behavior.targets == (), typed
 
 
 def test_bad_entries_are_dropped_without_losing_the_good_ones():

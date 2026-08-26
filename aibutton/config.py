@@ -325,12 +325,31 @@ class AlarmBehavior:
     """The takeover alarm template: rings (ALERT LED + looping tone) until a
     press dismisses it, or - on long_press with snooze_minutes set - snoozes.
     Handled by main.py's ring loop, not actions.execute(), since ringing
-    owns the LED/sound/button-event loop."""
+    owns the LED/sound/button-event loop.
+
+    **`grace_minutes` + `on_timeout` make it a dead man's switch**: an alarm
+    that fires an action because it was *not* answered. `run_reminder` next
+    door already has the timeout branch and its docstring says a timeout is
+    not a clear, *because nobody saw it*; this is that branch inverted - nobody
+    saw it, so tell someone. It hangs off the alarm rather than the reminder
+    because the alarm insists (it loops, it snoozes) where a reminder gives up.
+
+    **It depends on this host being awake, and its whole point is firing while
+    nobody is watching.** If the service stops, the machine sleeps, or BLE
+    drops, it does not fire and cannot know that it did not. That is why every
+    outcome is logged (see `run_alarm`) and why the editor says plainly that
+    this is not a safety device. A promise the button cannot keep is worse
+    here than in any other app.
+    """
 
     message: str = ""
     label: str = ""
     snooze_minutes: float = 0  # 0 = long_press dismisses like any other press
     dismiss_event: str = ""  # optional `log` event name written on dismiss
+    # The dead man's switch (TODO 44). 0 = today's behaviour exactly: ring
+    # until answered, forever, and nothing else happens.
+    grace_minutes: float = 0
+    on_timeout: Action | None = None
 
     @property
     def template(self) -> str:
@@ -689,6 +708,60 @@ def _default_signal_states() -> tuple[SignalState, ...]:
     )
 
 
+# A show swaps looks; it does not animate inside one, so the flash floor
+# (which governs a look's own rate) cannot see this axis at all. One second
+# is already faster than anything a person reads as a scene change.
+_MIN_SHOW_DWELL_S = 1.0
+
+
+@dataclass(frozen=True)
+class ShowCue:
+    """One scene of a light show: a look from the pool, and how long it holds.
+
+    It **names** a look rather than carrying one, which is the opposite of a
+    Signal position and for the opposite reason. A position is a status you
+    invented and there is nothing else in the system it could mean, so it
+    carries its colour inline. A cue is the whole point of the app - it wants
+    the *rich* form, a `sequencer.Sequence` with curves and stops, and that
+    only exists in the look pool. Naming one also means a show and a mode can
+    share a look, so retuning "Ember" retunes both.
+    """
+
+    look: str
+    hold_s: float = 0.0  # 0 = use the show's own dwell
+
+
+@dataclass(frozen=True)
+class LightShowBehavior:
+    """A light show: a playlist of looks the button walks through.
+
+    **Why this is a template and not a preset.** Everything else here is data
+    already - a look can be a stop list, a stop list already fades and holds
+    and loops. What no existing template can do is *advance on its own*: a
+    Signal light waits for a press, and a look, however long, is one look. A
+    show is a sequence of them with a clock, and the clock is the code.
+
+    Gestures follow the house rules: **long press leaves**, short press is the
+    next cue, and double tap holds where it is - a show you can freeze on the
+    one you liked. Holding stops the clock, not the look: the cue underneath
+    carries on animating, because a stop list is a schedule the host is
+    already walking.
+
+    It owns no `LEDState` (see `MODE_LED_STATES`). Each cue is pushed as an
+    ephemeral effect over LISTENING, exactly as a Signal position is, so the
+    show costs no wire code and stores nothing on the device.
+    """
+
+    cues: tuple[ShowCue, ...] = ()
+    dwell_s: float = 8.0
+    auto: bool = True  # False: it only ever moves when you press
+    log_as: str = ""  # optional: one row per cue change
+
+    @property
+    def template(self) -> str:
+        return "lightshow"
+
+
 @dataclass(frozen=True)
 class SignalBehavior:
     """A signal light: short press moves to the next position, and it *stays*
@@ -823,7 +896,7 @@ Behavior = (
     ActionsBehavior | AlarmBehavior | StopwatchBehavior | CounterBehavior
     | PomodoroBehavior | MetronomeBehavior | CountdownBehavior
     | ReminderBehavior | LauncherBehavior | HotColdBehavior | ReactionBehavior
-    | SignalBehavior | ControlBehavior
+    | SignalBehavior | ControlBehavior | LightShowBehavior
 )
 
 # Which activation types each template accepts (per-template allow-list,
@@ -847,6 +920,7 @@ _ALLOWED_ACTIVATIONS = {
     "signal": (ManualActivation,),
     # An always-on control surface is just an actions mode, which exists.
     "control": (ManualActivation,),
+    "lightshow": (ManualActivation,),
 }
 
 # Which LED states belong to a *mode* rather than to the button - the split
@@ -872,6 +946,9 @@ MODE_LED_STATES: dict[str, tuple[str, ...]] = {
     "hotcold": (),
     "reaction": (),
     "signal": (),  # a position's colour is the app's own, not a state
+    # Same answer, same reason: a cue's colour is a look it names, and there
+    # can be twenty of them. Nothing here is a *state*.
+    "lightshow": (),
     # LISTENING is ownable here because a control surface is not only a remote:
     # bind enter_mode and it is a menu of pages, and a menu's job is telling you
     # where you are. A page names a look for the state it sits in between
@@ -1961,14 +2038,36 @@ def _parse_control_body(
     )
 
 
-def _parse_alarm_body(raw: dict, where: str) -> AlarmBehavior:
+def _parse_alarm_body(
+    raw: dict, where: str, actions: set[str] | None = None
+) -> AlarmBehavior:
     """Parse the flat alarm-template fields, each falling back per-key."""
     defaults = AlarmBehavior()
+    grace = _nonneg(raw, "grace_minutes", where, defaults.grace_minutes)
+    on_timeout = (
+        _parse_action(raw["on_timeout"], f"{where}.on_timeout", actions)
+        if raw.get("on_timeout") is not None else None
+    )
+    # Each half is useless without the other, and silence about it would be the
+    # worst kind: a dead man's switch that was never armed looks identical to
+    # one that was. Warn, and leave both as written so the fix is one field.
+    if grace and on_timeout is None:
+        log.warning(
+            "config: %s sets grace_minutes but no on_timeout - nothing will "
+            "happen if this alarm goes unanswered", where,
+        )
+    if on_timeout is not None and not grace:
+        log.warning(
+            "config: %s sets on_timeout but grace_minutes is 0 - it will never "
+            "fire, because the alarm rings until answered", where,
+        )
     return AlarmBehavior(
         message=_string(raw, "message", where, defaults.message),
         label=_string(raw, "label", where, defaults.label),
         snooze_minutes=_nonneg(raw, "snooze_minutes", where, defaults.snooze_minutes),
         dismiss_event=_string(raw, "dismiss_event", where, defaults.dismiss_event),
+        grace_minutes=grace,
+        on_timeout=on_timeout,
     )
 
 
@@ -2048,10 +2147,24 @@ def _parse_reminder_body(raw: dict, where: str) -> ReminderBehavior:
 
 
 def _parse_launcher_body(raw: dict, where: str) -> LauncherBehavior:
-    """Parse the flat launcher fields, each falling back per-key."""
+    """Parse the flat launcher fields, each falling back per-key.
+
+    `targets` accepts a newline-separated **string** as well as a list, which
+    is not a convenience: the editor's field for it is a textarea, so it writes
+    a string, and accepting only a list meant that opening a launcher in the
+    web UI and saving turned a curated menu into "offer every app" - with an
+    error in the log and nothing at all in the UI. `_parse_show_cues` already
+    took both shapes for exactly this reason and said so in a comment pointing
+    here; this is that comment being acted on (TODO 47's fix pass).
+    """
     defaults = LauncherBehavior()
 
     targets = raw.get("targets", defaults.targets)
+    if isinstance(targets, str):
+        # One mode name per line, blanks dropped. An all-whitespace box means
+        # an empty list, which is what the field's own hint promises: blank
+        # offers every app.
+        targets = [line.strip() for line in targets.splitlines() if line.strip()]
     if isinstance(targets, (list, tuple)):
         named = [t for t in targets if isinstance(t, str) and t]
         if len(named) != len(targets):
@@ -2345,6 +2458,75 @@ def _parse_reaction_body(raw: dict, where: str) -> ReactionBehavior:
     )
 
 
+def _parse_show_cues(raw, where: str, looks: dict[str, object]) -> tuple[ShowCue, ...]:
+    """A show's cue list, dropping anything unusable rather than the show.
+
+    A cue naming a look that is not in the pool is **kept and warned about**,
+    not dropped: that is the same dangling-reference rule `enter_mode` targets
+    follow, and for the same reason - quietly removing a cue would renumber the
+    show under someone who was mid-edit, and a missing look is much more often
+    a rename than a mistake. The run loop skips it and says so.
+    """
+    if isinstance(raw, str):
+        # What the editor's textarea writes: one look name per line. Accepted
+        # rather than rejected because the launcher's `targets` does *not*
+        # accept it, and the result there is a list silently reverting to "all
+        # apps" the moment someone edits it in the web UI.
+        raw = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not isinstance(raw, list):
+        if raw is not None:
+            log.error("config: %s.cues must be a list of look names - using none", where)
+        return ()
+    cues: list[ShowCue] = []
+    for idx, entry in enumerate(raw):
+        at = f"{where}.cues[{idx}]"
+        if isinstance(entry, str):  # a bare look name is the common case
+            entry = {"look": entry}
+        if not isinstance(entry, dict):
+            log.error("config: %s must be an object or a look name - skipped", at)
+            continue
+        look = entry.get("look")
+        if not isinstance(look, str) or not look:
+            log.error("config: %s needs a look name - skipped", at)
+            continue
+        if look not in looks:
+            log.warning("config: %s names look %r, which does not exist", at, look)
+        hold = _nonneg(entry, "hold_s", at, 0.0)
+        cues.append(ShowCue(look=look, hold_s=hold))
+    return tuple(cues)
+
+
+def _parse_lightshow_body(raw, where: str, looks: dict[str, object]) -> LightShowBehavior:
+    """The light show template's body. Every key falls back on its own."""
+    defaults = LightShowBehavior()
+    dwell = _positive(raw, "dwell_s", where, defaults.dwell_s)
+    # A zero dwell would spin the show as fast as the loop can push frames,
+    # which is a strobe nobody asked for and one the flash floor cannot catch
+    # (it governs a look's own rate, not how often we swap looks). One second
+    # is already faster than anything readable.
+    if dwell < _MIN_SHOW_DWELL_S:
+        if raw.get("dwell_s") is not None:
+            log.warning(
+                "config: %s.dwell_s %.2fs is below the %.1fs floor - using the floor",
+                where, dwell, _MIN_SHOW_DWELL_S,
+            )
+        dwell = _MIN_SHOW_DWELL_S
+    auto = raw.get("auto", defaults.auto)
+    if not isinstance(auto, bool):
+        log.error("config: %s.auto must be true or false - using %s", where, defaults.auto)
+        auto = defaults.auto
+    log_as = raw.get("log_as", defaults.log_as)
+    if not isinstance(log_as, str):
+        log.error("config: %s.log_as must be text - ignored", where)
+        log_as = defaults.log_as
+    return LightShowBehavior(
+        cues=_parse_show_cues(raw.get("cues"), where, looks or {}),
+        dwell_s=dwell,
+        auto=auto,
+        log_as=log_as,
+    )
+
+
 def _parse_mode(
     raw, idx: int, looks: dict | None = None, actions: set[str] | None = None,
 ) -> Mode | None:
@@ -2379,7 +2561,7 @@ def _parse_mode(
     if template == "actions":
         behavior = _parse_actions_body(raw, where, name, actions)
     elif template == "alarm":
-        behavior = _parse_alarm_body(raw, where)
+        behavior = _parse_alarm_body(raw, where, actions)
     elif template == "reminders":
         behavior = _parse_reminder_body(raw, where)
     elif template == "launcher":
@@ -2402,6 +2584,8 @@ def _parse_mode(
         behavior = _parse_signal_body(raw, where, actions)
     elif template == "control":
         behavior = _parse_control_body(raw, where, name, actions)
+    elif template == "lightshow":
+        behavior = _parse_lightshow_body(raw, where, looks or {})
     else:  # pragma: no cover - allow-list keys and this dispatch stay in sync
         log.error("config: %s (%r) has unknown template %r - skipped", where, name, template)
         return None
@@ -2990,6 +3174,9 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["label"] = mode.behavior.label
         entry["snooze_minutes"] = mode.behavior.snooze_minutes
         entry["dismiss_event"] = mode.behavior.dismiss_event
+        entry["grace_minutes"] = mode.behavior.grace_minutes
+        if mode.behavior.on_timeout is not None:
+            entry["on_timeout"] = _action_to_dict(mode.behavior.on_timeout)
     elif isinstance(mode.behavior, ReminderBehavior):
         entry["message"] = mode.behavior.message
         entry["label"] = mode.behavior.label
@@ -3079,6 +3266,14 @@ def _mode_to_dict(mode: Mode) -> dict:
             for state in mode.behavior.states
         ]
         entry["start_at"] = mode.behavior.start_at
+        entry["log_as"] = mode.behavior.log_as
+    elif isinstance(mode.behavior, LightShowBehavior):
+        entry["cues"] = [
+            {"look": cue.look, **({"hold_s": cue.hold_s} if cue.hold_s else {})}
+            for cue in mode.behavior.cues
+        ]
+        entry["dwell_s"] = mode.behavior.dwell_s
+        entry["auto"] = mode.behavior.auto
         entry["log_as"] = mode.behavior.log_as
     elif isinstance(mode.behavior, ReactionBehavior):
         entry["min_delay_s"] = mode.behavior.min_delay_s

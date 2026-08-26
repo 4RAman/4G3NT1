@@ -726,6 +726,16 @@ export function createLookEditor(o) {
   // Only offered where a sequence is a legal look at all (see the
   // `allowSequence` doc above). The object is mutated in place, key by key,
   // like `applyPreset` above - callers hold a reference to it.
+  //
+  // A flip used to `delete` every key with nothing kept, so one accidental
+  // click on "Single colour" discarded a stop list with no way back (item
+  // 76). Each shape now parks the exact fields it is leaving, in this
+  // widget's own closure - never written to the model, so it costs the saved
+  // config nothing - and a flip back restores them rather than rebuilding
+  // from the one carried colour. Only the *first* flip into a shape (nothing
+  // parked yet) falls back to that reconstruction.
+  let parkedEffect = null;
+  let parkedSequence = null;
   const switchShape = (wantSequence) => {
     const cur = effect();
     if (Array.isArray(cur.stops) === wantSequence) return;
@@ -735,16 +745,27 @@ export function createLookEditor(o) {
     const carryColor = wantSequence
       ? (typeof cur.color === 'string' && cur.color) || '#ffffff'
       : cur.stops?.[0]?.color || '#ffffff';
+    if (wantSequence) {
+      parkedEffect = { ...cur };
+    } else {
+      parkedSequence = { ...cur, stops: cur.stops.map((s) => ({ ...s })) };
+    }
     for (const key of Object.keys(cur)) delete cur[key];
     if (wantSequence) {
-      // Starts from the one colour already chosen rather than blank: a
-      // single-stop sequence *is* the plain effect it replaces, minus the
-      // animation, so nothing about the current pick needs re-deciding.
-      cur.stops = [{
-        color: carryColor, hold_s: 0.5, fade_s: 0,
-        curve: 'linear', style: 'solid', period_s: 1,
-      }];
-      cur.repeat = true;
+      if (parkedSequence) {
+        Object.assign(cur, parkedSequence);
+      } else {
+        // Starts from the one colour already chosen rather than blank: a
+        // single-stop sequence *is* the plain effect it replaces, minus the
+        // animation, so nothing about the current pick needs re-deciding.
+        cur.stops = [{
+          color: carryColor, hold_s: 0.5, fade_s: 0,
+          curve: 'linear', style: 'solid', period_s: 1,
+        }];
+        cur.repeat = true;
+      }
+    } else if (parkedEffect) {
+      Object.assign(cur, parkedEffect);
     } else {
       Object.assign(cur, { style: 'solid', color: carryColor, color2: '#000000', period_s: 1 });
     }

@@ -1,41 +1,51 @@
-// Folds the side pane (virtual device, simulated presses, test clock) away
-// from a toggle in the header, beside Tips.
+// The test panel: the virtual device, a way to press the button, its tones and
+// its test clock, shown from a toggle in the header beside Tips.
 //
-// Everything in that pane is an inspection surface: someone driving a real
-// button never presses the simulated ones, and on a short viewport the pane is
-// most of the height. So it is worth reclaiming - but it is also where you go
-// when the button is *not* connected, which is why this is a fold rather than
-// a removal, and why the choice is remembered.
+// Everything in it is an inspection surface - someone driving a real button
+// opens it to check something and closes it again - and as a permanent column
+// it cost a third of the screen on a phone and a quarter on a laptop. So it is
+// a popover, and the column it used to occupy is now the app's navigation
+// (TODO 45).
 //
-// Served-page only. The offline editor has no side pane at all (see
-// tools/editor_shell.html), so this module is deliberately not in the editor
-// bundle's entry list, and every lookup below tolerates its element being
-// absent anyway.
+// Deliberately *not* remembered between loads, unlike Tips and the volume:
+// "only appears when you ask for it" is the whole point, and a popover that
+// restored itself over the nav on every reload would be the column again with
+// extra steps.
+//
+// Served-page only. The offline editor has no test panel at all (see
+// tools/editor_shell.html), so this module is not in the editor bundle's entry
+// list, and every lookup below tolerates its element being absent anyway.
 
-import { readFlag, writeFlag } from './prefs.js';
+const pop = document.getElementById('dash-pop');
+const popBtn = document.getElementById('pane-toggle');
 
-const PANE_KEY = 'aibutton-side-collapsed';
-
-const pane = document.querySelector('.app-body');
-const paneBtn = document.getElementById('pane-toggle');
-
-let folded = readFlag(PANE_KEY);
-
-function applyPane() {
-  pane?.classList.toggle('side-collapsed', folded);
-  if (!paneBtn) return;
-  // aria-expanded, not aria-pressed: this is a disclosure for the region named
-  // by aria-controls, and "expanded" says which way it is without anyone
-  // having to decide whether a *collapse* button is "pressed" when the pane is
-  // gone.
-  paneBtn.setAttribute('aria-expanded', String(!folded));
-  paneBtn.textContent = folded ? '◧ Panel hidden' : '◧ Panel';
+function setOpen(open) {
+  if (!pop) return;
+  pop.hidden = !open;
+  popBtn?.setAttribute('aria-expanded', String(open));
 }
 
-paneBtn?.addEventListener('click', () => {
-  folded = !folded;
-  writeFlag(PANE_KEY, folded);
-  applyPane();
+popBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();  // or the document listener below closes it again
+  setOpen(pop?.hidden ?? false);
 });
 
-applyPane();
+// Clicking away closes it. The panel's own clicks are excluded rather than the
+// document listener being skipped while it is open: pressing the simulated
+// button four times in a row has to keep it up, and that is the main thing
+// anyone does in here.
+document.addEventListener('click', (e) => {
+  if (!pop || pop.hidden) return;
+  if (pop.contains(e.target) || popBtn?.contains(e.target)) return;
+  setOpen(false);
+});
+
+// Escape closes it and hands focus back to the control that opened it, so a
+// keyboard is never left pointing at something that is no longer on screen.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !pop || pop.hidden) return;
+  setOpen(false);
+  popBtn?.focus();
+});
+
+setOpen(false);

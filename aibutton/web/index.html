@@ -42,23 +42,31 @@
     border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px;
   }
   input[type=checkbox] { width: auto; accent-color: var(--blue); }
+  /* Full width is the *default* for a field, so it has to be declared here,
+     above every variant that narrows it. It used to sit at the bottom of the
+     sheet, where it beat .inp-color, .ladder-every, .inp-range-num and
+     .ramp-at on source order alone - same specificity, later wins - and every
+     one of those is a control that says in its own comment why it is fixed.
+     The slider rows were the visible casualty: the typed number took the
+     whole row and pushed the readout off the end, at every window size. */
+  .inp { width: 100%; }
 
   /* --- app shell: one fixed-height frame, everything else scrolls inside it --- */
   .app { height: 100dvh; display: flex; flex-direction: column; }
 
   .app-header { flex-shrink: 0; background: var(--panel); border-bottom: 1px solid var(--line);
-                padding: 10px 20px; }
+                padding: 10px 20px; position: relative; z-index: 30; }
   .header-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   #meta { color: var(--dim); font-size: 12px; }
-  #last { color: var(--dim); font-size: 12px; margin: 4px 0 0; min-height: 1.2em;
-          overflow-wrap: anywhere; }
+  #last, #now { color: var(--dim); font-size: 12px; margin: 4px 0 0; min-height: 1.2em;
+                overflow-wrap: anywhere; }
   /* A test clock is a mode, not an event: a small always-visible chip beside
      the status line, so turning it on never reflows the page under you. */
   #clockbar { background: #3a2c10; color: #ffd98a; border: 1px solid #5c4413;
               border-radius: var(--radius); padding: 3px 10px; font-size: 12px; }
   /* One switch for every [data-help] node in the page - see help.js. */
   .help-toggle, .pane-toggle { margin-left: auto; padding: 3px 10px; font-size: 12px; color: var(--dim); }
-  .help-toggle[aria-pressed="true"], .pane-toggle[aria-expanded="false"] {
+  .help-toggle[aria-pressed="true"], .pane-toggle[aria-expanded="true"] {
     color: var(--text); border-color: var(--blue); }
   /* The view switches, grouped: they change how much of the page you are
      looking at, as opposed to anything about the button. One cluster so they
@@ -77,31 +85,49 @@
   .badge.SUCCESS { background: #14452e; color: #8fe6bb; }
   .badge.ERROR, .badge.OFFLINE { background: #58201f; color: #ffb3b0; }
   .badge.ALARMING { background: #6e1d1d; color: #ffdede; animation: alarmPulse .7s steps(1) infinite; }
+  /* Only ever on screen while something is ringing, so it is allowed to be
+     the loudest control on the page - it is the answer to the loudest state. */
+  .dismiss { border-color: var(--red); color: #ffb3b0; padding: 3px 12px; font-size: 13px; }
+  .dismiss:hover { background: #2a0d0d; border-color: var(--red); }
   @keyframes alarmPulse { 0%, 100% { background: #6e1d1d; color: #ffdede; }
                           50% { background: #e05c5c; color: #2a0d0d; } }
   .badge.TIMING { background: #0c4a4a; color: #8ff0ee; }
   .badge.COUNTING { background: #4a1d52; color: #f0b6ff; }
 
-  /* --- the two-pane body: device on the left, tabbed work surface on the right --- */
-  .app-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr; }
-  @media (max-width: 900px) {
-    .app-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-  }
-  /* Folded away (see sidepane.js). The track is removed rather than zeroed so
-     the pane's border doesn't survive as a stray line, and the row axis is
-     reset too because under 900px the pane is a row, not a column. */
-  .app-body.side-collapsed { grid-template-columns: 1fr; }
-  .app-body.side-collapsed > .side-pane { display: none; }
-  @media (max-width: 900px) {
-    .app-body.side-collapsed { grid-template-rows: 1fr; }
-  }
+  /* --- the two-pane body: navigation on the left, one work surface right ---
+     The left column is the app's nav - three destinations and the mode list -
+     so it does not fold away any more. What used to live here (virtual
+     device, simulated presses, tones, test clock) is an inspection surface
+     and moved into the header's popover, which is what freed the column. */
+  .app-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 260px 1fr; }
 
   .side-pane { background: var(--panel); border-right: 1px solid var(--line);
-               padding: 16px 18px; overflow-y: auto; min-height: 0; }
-  @media (max-width: 900px) {
-    .side-pane { border-right: none; border-bottom: 1px solid var(--line); max-height: 38vh; }
-  }
+               padding: 14px 14px 20px; overflow-y: auto; min-height: 0; }
+
+
+  /* The fixed destinations, above the mode list. Same row shape as a mode
+     entry on purpose - they are the same kind of choice, and a nav where the
+     two halves are styled as different things reads as two navs. */
+  .shell-nav { display: flex; flex-direction: column; gap: 1px; margin: 0 0 18px; }
+  .shell-nav-item { background: none; border: none; border-left: 2px solid transparent;
+                    border-radius: 0; text-align: left; font: inherit; font-size: 13px;
+                    color: var(--dim); padding: 7px 8px; margin-left: -2px; cursor: pointer; }
+  .shell-nav-item:hover { background: #1a1f26; color: var(--text); }
+  .shell-nav-item[aria-selected="true"] { background: #161b22; color: var(--text);
+                                          border-left-color: var(--blue); font-weight: 600; }
+
   .side-block + .side-block { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
+
+  /* --- the test panel, hanging off the header ------------------------------
+     Absolutely positioned against .app-header rather than fixed at a magic
+     offset, so it stays put when the status line wraps to two rows. */
+  .dash-pop { position: absolute; right: 16px; top: 100%; z-index: 40;
+              width: min(340px, calc(100vw - 24px)); max-height: 72vh; overflow-y: auto;
+              background: var(--panel); border: 1px solid var(--line);
+              border-radius: var(--radius); padding: 14px 16px;
+              box-shadow: 0 14px 34px rgba(0, 0, 0, .55); }
+  .dash-pop[hidden] { display: none; }
+  .dash-pop h2 { margin-top: 0; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
   /* The preset library. Folded away by default: it is a long list on purpose,
@@ -160,14 +186,6 @@
   .scene-msg.warn { color: var(--amber); }
   .scene-msg.err { color: var(--red); }
 
-  .tab-bar { flex-shrink: 0; display: flex; gap: 2px; padding: 0 20px;
-             border-bottom: 1px solid var(--line); background: var(--bg); }
-  .tab-btn { background: none; border: none; color: var(--dim); padding: 12px 14px;
-             font: inherit; font-size: 13px; cursor: pointer;
-             border-bottom: 2px solid transparent; margin-bottom: -1px; }
-  .tab-btn:hover { color: var(--text); }
-  .tab-btn[aria-selected="true"] { color: var(--text); border-bottom-color: var(--blue); }
-
   .tab-panels { flex: 1; min-height: 0; position: relative; }
   .tab-panel { position: absolute; inset: 0; overflow-y: auto; padding: 18px 20px; }
   .tab-panel[hidden] { display: none; }
@@ -191,6 +209,32 @@
 
   .menu-bar { flex-shrink: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
               padding: 12px 20px; background: var(--panel); border-top: 1px solid var(--line); }
+
+  /* --- the shell, stacked ---
+     Stacked, the two-panes-in-a-viewport model stops working: a wrapped
+     header, a capped nav and a wrapped scene bar between them left the work
+     surface *zero pixels tall* - the page looked empty and the cause was
+     invisible, because nothing overflowed. So below 900 the shell stops being
+     a fixed-height frame and becomes an ordinary scrolling document: the nav
+     keeps a cap and a scroller of its own (11 modes above the editor is its
+     own kind of unusable), and the panel below it flows at whatever height it
+     needs. The save bar sticks to the bottom so it never scrolls out of
+     reach.
+
+     This block sits *below* every rule it overrides on purpose: equal
+     specificity means source order decides, and written higher up it lost
+     to `.tab-panel { position: absolute }` in silence - the same fault item
+     42 found in `.inp`, which is evidently the shape of bug this stylesheet
+     grows. */
+  @media (max-width: 900px) {
+    .app { height: auto; min-height: 100dvh; }
+    .app-body { display: block; }
+    .side-pane { border-right: none; border-bottom: 1px solid var(--line); max-height: 45vh; }
+    .main-pane { display: block; }
+    .tab-panels { position: static; }
+    .tab-panel { position: static; inset: auto; overflow-y: visible; }
+    .menu-bar { position: sticky; bottom: 0; z-index: 20; }
+  }
   .menu-status { color: var(--dim); font-size: 12px; }
   .menu-result { flex-basis: 100%; font-size: 13px; white-space: pre-wrap; margin: 0;
                  overflow-wrap: anywhere; }
@@ -199,6 +243,13 @@
   .menu-result.err { color: var(--red); }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  /* Six columns of log will not fit a phone at any font size, and a table
+     that overflows drags its whole panel sideways - so the log scrolls in a
+     box of its own and the filter bar above it stays put. The min-width is
+     what makes the box scroll rather than the columns crushing together;
+     above it the table is still 100% and nothing changes. */
+  #events { overflow-x: auto; }
+  #events table { min-width: 420px; }
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
   th { color: var(--dim); font-weight: 500; }
   .kind-log { color: var(--green); }
@@ -215,19 +266,57 @@
   .primer-list { margin: 0; padding-left: 18px; color: var(--dim); font-size: 12px; line-height: 1.55; }
   .primer-line { margin-bottom: 3px; }
 
-  /* --- modes: master/detail, not a stack of accordions --- */
+  /* --- modes: master/detail, not a stack of accordions ---
+     The master half is the shell's side panel on the served page, which is
+     why .detail-only exists: the offline editor has no shell, keeps the nav
+     inside the panel, and is the only place this still renders as a split. */
   .mode-layout { display: flex; gap: 20px; align-items: flex-start; }
+  .mode-layout.detail-only { display: block; }
   /* The tab panel is the scroll container (nav + detail scroll together);
      pinning the nav keeps the mode list and "+ Add mode" reachable while a
      long detail form scrolls underneath, the way a real master/detail split
      behaves. */
   .mode-nav-col { flex-shrink: 0; width: 250px; display: flex; flex-direction: column; gap: 12px;
                   position: sticky; top: 0; background: var(--bg); }
+  /* In the shell it *is* the column: full width, not sticky (the pane scrolls
+     as one), and no background of its own to sit proud of the panel. */
+  #mode-nav-mount .mode-nav-col { width: auto; position: static; background: none; }
+  /* Two lines per entry, not one. Beside a detail form the name could be
+     clipped at 100px and the summary given the rest; as the page's navigation
+     both matter, and 232px of column cannot hold them side by side without
+     truncating each into uselessness. Name on the swatch's line, summary
+     under it, aligned past the swatch so the names still read as a column. */
+  #mode-nav-mount .mode-nav-item { flex-wrap: wrap; row-gap: 1px; }
+  #mode-nav-mount .mode-nav-name { max-width: none; flex: 1; min-width: 0; }
+  #mode-nav-mount .mode-nav-summary { flex-basis: 100%; margin-left: 27px; }
+  /* Stacked: a button and a select side by side in this column would each get
+     half of it. */
+  #mode-nav-mount .add-row { flex-direction: column; align-items: stretch; gap: 8px; }
+  /* One selection at a time across the whole nav. A mode stays chosen while
+     you look at Events, but says so quietly - see activate() in the shell. */
+  .side-pane:not(.on-modes) .mode-nav-item.selected { background: none;
+                                                      border-left-color: #2b3440; }
   .mode-nav-group { margin-bottom: 16px; }
-  .mode-nav-group-title { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+  /* A button, not a heading - clicking it folds the group (TODO 69). Reset to
+     look like the label it replaced; only the cursor and the chevron say it
+     does anything. */
+  .mode-nav-group-title { display: flex; align-items: center; gap: 5px; width: 100%;
+                           background: none; border: none; padding: 0; cursor: pointer;
+                           font: inherit; text-align: left;
+                           font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
                            color: var(--text); margin: 0 0 3px; }
+  .mode-nav-group-chevron { font-size: 9px; color: var(--dim); flex-shrink: 0; width: 8px; }
   .mode-nav-group-hint { font-size: 11px; color: var(--dim); line-height: 1.5; margin: 0 0 8px; }
   .mode-nav-empty { font-size: 12px; padding: 2px 0; }
+  /* Several alarms are one app with several alarms in it (TODO 48a). The
+     header names the app and carries the count; the entries indent under it
+     so the nesting is visible without a rule or a disclosure triangle -
+     nothing collapses here, the list is short. */
+  .mode-nav-app { display: flex; align-items: baseline; gap: 6px; padding: 6px 8px 2px; }
+  .mode-nav-app-name { font-size: 12px; font-weight: 600; color: var(--text); }
+  .mode-nav-app-count { font-size: 11px; color: var(--dim); background: #1a1f26;
+                        border-radius: 8px; padding: 0 6px; }
+  .mode-nav-nest { margin-left: 10px; border-left: 1px solid var(--line); padding-left: 4px; }
   .mode-nav-item { display: flex; align-items: center; gap: 8px; width: 100%;
                    text-align: left; background: none; border: none;
                    border-left: 2px solid transparent; border-radius: 0;
@@ -253,6 +342,53 @@
                             border: 1px solid var(--line); }
 
   .mode-detail { flex: 1; min-width: 0; }
+  /* On a phone the split cannot hold. A 250px nav beside a 375px viewport
+     leaves the detail form 65px wide, and the form does not shrink to fit -
+     it renders off the right edge, reachable only by scrolling the panel
+     sideways, which is indistinguishable from the mode editor being blank.
+     So stack, and unpin the nav while stacked: a sticky master sitting on top
+     of a scrolling detail would cover the thing you are editing.
+     640px rather than the shell's 900px, because the split still fits an
+     iPhone in landscape and that is where the fields actually start to
+     overflow. */
+  @media (max-width: 640px) {
+    .mode-layout { flex-direction: column; gap: 12px; }
+    .mode-nav-col { width: 100%; position: static; }
+    /* A 96px label gutter is a quarter of the screen. The gesture's name
+       takes its own line instead, and its fields line up with the rest. */
+    .gesture-head { flex-wrap: wrap; }
+    .gesture-name { min-width: 0; }
+    .gesture-fields { margin-left: 0; }
+  }
+  /* --- picking a mode by its light (TODO 50) ---
+     A button and a list of buttons rather than a <select>, because an
+     <option> holds text and the half of a look that identifies it moves. */
+  .mode-pick-wrap { position: relative; }
+  .mode-pick { display: flex; align-items: center; gap: 8px; width: 100%;
+               text-align: left; cursor: pointer; }
+  .pick-swatch { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+                 background: #20262e; }
+  .pick-swatch.empty { background: transparent; box-shadow: none; border: 1px solid var(--line); }
+  .pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; }
+  .pick-name.unset { color: var(--dim); }
+  .pick-name.missing { color: var(--amber); }
+  .pick-caret { color: var(--dim); font-size: 10px; }
+  .mode-pick-list { position: absolute; z-index: 25; top: calc(100% + 2px); left: 0;
+                    right: 0; max-height: 260px; overflow-y: auto;
+                    background: var(--panel); border: 1px solid var(--line);
+                    border-radius: var(--radius); box-shadow: 0 10px 26px rgba(0,0,0,.5);
+                    padding: 4px; }
+  .mode-pick-list[hidden] { display: none; }
+  .mode-pick-option { display: flex; align-items: center; gap: 8px; width: 100%;
+                      text-align: left; background: none; border: none;
+                      border-radius: 4px; padding: 6px 8px; cursor: pointer;
+                      font: inherit; font-size: 13px; color: var(--text); }
+  .mode-pick-option:hover, .mode-pick-option:focus-visible { background: #1a1f26; }
+  .pick-note { color: var(--dim); font-size: 11px; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
+  .pick-empty { padding: 6px 8px; font-size: 12px; }
+
   .mode-detail-empty { color: var(--dim); font-size: 13px; padding: 8px 0; }
   .mode-active { font-size: 11px; font-weight: 600; color: var(--green); white-space: nowrap; }
   .howto { border-left: 2px solid var(--line); margin-left: 4px; padding: 2px 0 2px 12px; }
@@ -263,6 +399,10 @@
   .mode-body { display: flex; flex-direction: column; gap: 12px; }
   .mode-edit-head { display: flex; gap: 8px; align-items: center; }
   .mode-name { flex: 1; font-weight: 600; }
+  /* The app an item belongs to, at the head of its page (TODO 48c). Reads as
+     a label rather than a field: it is not something you edit here. */
+  .mode-edit-app { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+                   color: var(--dim); font-weight: 600; white-space: nowrap; }
   .pick-row { display: flex; flex-direction: column; gap: 8px; }
   .pick-head { display: flex; gap: 10px; align-items: center; }
   .pick-head .fld-label { min-width: 80px; }
@@ -285,9 +425,108 @@
   .gesture-fields { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 0 96px; }
   .add-mode { margin-top: 2px; }
   .add-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .builtin-wrap { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .builtin-pick { max-width: 100%; }
-  .builtin-blurb { color: var(--dim); font-size: 12px; }
+  /* --- the App page (TODO 49) ---
+     Cards rather than rows: each app carries a status, a description, its
+     installed copies and how to add one, and a table would make the copies
+     look like peers of the app instead of things inside it. */
+  .apps-lead { color: var(--dim); font-size: 12px; margin: 0 0 14px; max-width: 62ch; }
+  .apps-warn { color: var(--amber); font-size: 12px; margin: 0 0 8px; max-width: 72ch;
+               border-left: 2px solid var(--amber); padding-left: 10px; }
+  .apps-group { margin-bottom: 22px; }
+  .apps-group-title { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+                      color: var(--dim); font-weight: 600; margin: 0 0 8px; }
+  .apps-card { border: 1px solid var(--line); border-radius: var(--radius);
+               padding: 10px 12px; margin-bottom: 8px; background: var(--panel); }
+  .apps-head { display: flex; align-items: center; gap: 9px; }
+  .apps-name { font-weight: 600; font-size: 14px; }
+  /* Round, like every other stand-in for the physical LED on this page. */
+  .apps-swatch { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+                 background: #20262e; }
+  .apps-swatch.empty { background: transparent; box-shadow: none; border: 1px solid var(--line); }
+  .apps-about { color: var(--dim); font-size: 12px; margin: 4px 0 0; }
+
+  /* The status is the point of the page, so it reads as a state and not as a
+     label: installed is quiet, unreachable is the one that has to catch you. */
+  .apps-pill { margin-left: auto; font-size: 11px; border-radius: 8px; padding: 2px 8px;
+               white-space: nowrap; }
+  .apps-pill.installed { background: #10331d; color: var(--green); }
+  .apps-pill.available { background: #1a1f26; color: var(--dim); }
+  .apps-pill.partial, .apps-pill.stranded { background: #3a2c10; color: var(--amber); }
+
+  .apps-copy { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+               margin-top: 7px; padding-left: 21px; font-size: 12px; }
+  .apps-copy-name { background: none; border: none; padding: 0; font: inherit;
+                    font-weight: 600; color: #9ec2ff; cursor: pointer; text-align: left; }
+  .apps-copy-name:hover { text-decoration: underline; }
+  .apps-copy-how { color: var(--dim); }
+  .apps-copy.unreachable .apps-copy-how { color: var(--amber); }
+
+  .apps-install { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+                  margin-top: 10px; padding-left: 21px; }
+  .apps-preset { max-width: 100%; flex: 1; min-width: 200px; font-size: 12px; }
+
+  /* --- an app's own page (TODO 51) ---
+     Two things a settings form never showed: the app's other items, and what
+     this one has actually done. */
+
+  /* The sibling items, as chips. Same author-`display`-beats-`[hidden]` trap
+     .ladder-body and .fld already document: this is a flex container, so
+     `node.hidden = true` needs the rule below or the row stays on screen for
+     an app with only one item. */
+  .siblings { display: flex; flex-direction: column; gap: 6px; }
+  .siblings[hidden] { display: none; }
+  .sibling-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .sibling { display: inline-flex; align-items: center; gap: 7px; font-size: 12px;
+             padding: 4px 11px 4px 8px; border-radius: 999px; }
+  /* The one you are on reads as "you are here" rather than as a dead control -
+     it is disabled, and a greyed-out chip would say the wrong thing. */
+  .sibling.current { border-color: var(--blue); color: #cfe0ff; background: #16202f; }
+  .sibling[disabled] { cursor: default; }
+  .sibling[disabled]:hover { background: #16202f; border-color: var(--blue); }
+
+  /* The readout. Indented like .tpl-body so it reads as belonging to the app
+     above it rather than as a new section of the page. */
+  .readout { border-left: 2px solid var(--line); margin-left: 4px;
+             padding: 2px 0 4px 12px; }
+  .ro-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .ro-title { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+              color: var(--dim); font-weight: 600; }
+  .ro-head > .mini { margin-left: auto; }
+  .ro-summary { font-size: 12px; margin: 0 0 8px; }
+  .ro-note { font-size: 11px; color: var(--dim); margin: 6px 0 0; max-width: 62ch; }
+  .ro-note.err { color: var(--red); }
+  .ro-rows { display: flex; flex-direction: column; gap: 3px; }
+  .ro-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .ro-when { color: var(--dim); flex: 0 0 auto; width: 96px; white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; }
+  .ro-row.today .ro-when { color: var(--text); font-weight: 600; }
+  /* The bar is what makes this a comparison rather than a list, which is the
+     thing item 51 actually asked for. Square: it depicts a magnitude, not the
+     physical LED, so it does not borrow the round-light language. */
+  .ro-bar { flex: 1; min-width: 40px; height: 10px; background: #161b22; }
+  .ro-bar-fill { display: block; height: 100%; background: #2f4a75; }
+  .ro-bar-fill.best { background: var(--blue); }
+  .ro-value { flex: 0 0 auto; width: 74px; text-align: right;
+              font-family: ui-monospace, monospace; }
+  .ro-delta { flex: 0 0 auto; width: 66px; text-align: right; color: var(--dim);
+              font-family: ui-monospace, monospace; }
+  /* Coloured only where the app declared which end is good (schema.js's
+     `better`) - a tempo that went up is neither. */
+  .ro-delta.good { color: var(--green); }
+  .ro-delta.bad { color: var(--amber); }
+  .ro-state { font-weight: 600; }
+  .ro-state.good { color: var(--green); }
+  .ro-state.bad { color: var(--amber); }
+
+  /* Below the mode split's own breakpoint, so the readout's four columns are
+     narrowed rather than dropped: the delta is the comparison, and a phone is
+     where you are most likely to be checking a run you just did. Placed under
+     the rules it overrides, per the note on the shell's stacked block. */
+  @media (max-width: 640px) {
+    .ro-when { width: 78px; }
+    .ro-value { width: 58px; }
+    .ro-delta { width: 56px; }
+  }
 
   /* --- lights: one flat divided list, no nested boxes ---
      The rule belongs to the *bottom* of a state's block. It used to sit above
@@ -398,6 +637,92 @@
   .ev-count { color: var(--dim); font-size: 12px; font-family: ui-monospace, monospace; }
   .ev-note { color: var(--dim); font-size: 12px; margin: 0 0 8px; }
 
+  /* --- the Events page's chart views (TODO 53) ---
+     No charting library and no build step, so everything below is the chart:
+     flex and grid for bars, columns and the heatmap, and inline SVG only for
+     the donut and the sparklines. See eventCharts.js for why that split. */
+
+  /* Sub-tabs. A second row of tabs under a page that already has a nav, so
+     they read as *within* this page rather than as a peer of it: text and a
+     rule, not the side panel's filled rows. */
+  .ev-views { display: flex; gap: 2px; flex-wrap: wrap; margin: 0 0 14px;
+              border-bottom: 1px solid var(--line); }
+  .ev-view { background: none; border: none; border-bottom: 2px solid transparent;
+             border-radius: 0; color: var(--dim); font-size: 13px; padding: 6px 10px;
+             margin-bottom: -1px; cursor: pointer; }
+  .ev-view:hover { background: #161b22; color: var(--text); border-color: transparent; }
+  .ev-view[aria-selected="true"] { color: var(--text); font-weight: 600;
+                                   border-bottom-color: var(--blue); }
+
+  .chart { margin: 0 0 26px; }
+  .chart-title { font-size: 13px; margin: 0 0 2px; font-weight: 600; }
+  .chart-blurb { color: var(--dim); font-size: 12px; margin: 0 0 10px; max-width: 72ch; }
+  .chart-note { color: var(--dim); font-size: 11px; margin: 8px 0 0; }
+  /* Anything that cannot shrink past a point scrolls in a box of its own
+     rather than dragging the whole panel sideways - the fix item 42 applied to
+     the events table, and the reason nothing here overflows at 375. */
+  .scroll-x { overflow-x: auto; padding-bottom: 4px; }
+
+  /* Horizontal bars: label, bar, number. */
+  .bars-h { display: flex; flex-direction: column; gap: 4px; }
+  .bar-h { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  .bar-h-label { flex: 0 0 auto; width: 120px; color: var(--dim); white-space: nowrap;
+                 overflow: hidden; text-overflow: ellipsis; }
+  .bar-h-track { flex: 1; min-width: 40px; height: 12px; background: #161b22; }
+  .bar-h-fill { display: block; height: 100%; }
+  .bar-h-value { flex: 0 0 auto; width: 70px; text-align: right;
+                 font-family: ui-monospace, monospace; }
+
+  /* Vertical columns, for anything indexed by time. */
+  .bars-v { display: flex; align-items: flex-end; gap: 2px; height: 130px; }
+  .bar-v { flex: 1 1 0; min-width: 12px; display: flex; flex-direction: column;
+           align-items: stretch; height: 100%; }
+  .bar-v-track { flex: 1; display: flex; align-items: flex-end; min-height: 0; }
+  .bar-v-fill { display: block; width: 100%; }
+  .bar-v-label { flex: 0 0 auto; color: var(--dim); font-size: 10px; text-align: center;
+                 padding-top: 4px; white-space: nowrap; }
+
+  /* The heatmap: weekday down, hour across. A grid, so the axis labels stay
+     real text at 11px whatever the viewport does to the cells. */
+  .heat { display: grid; grid-template-columns: 30px repeat(24, 15px); gap: 2px;
+          align-items: center; }
+  .heat-corner { height: 12px; }
+  .heat-hour { color: var(--dim); font-size: 10px; text-align: center; }
+  .heat-day { color: var(--dim); font-size: 11px; }
+  /* An empty cell is drawn, not omitted: the gaps are the finding. */
+  .heat-cell { height: 15px; background: #161b22; }
+
+  /* The donut and its legend. Every label is in the HTML, never in the SVG. */
+  .donut-row { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+  .donut { width: 120px; height: 120px; flex: 0 0 auto; }
+  .legend { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+  .legend-row { display: flex; align-items: center; gap: 8px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+  .legend-name { min-width: 90px; }
+  .legend-value { color: var(--dim); font-family: ui-monospace, monospace; }
+
+  /* One panel per named series, each with its own scale - a tempo and a
+     reaction time share a database column and nothing else. */
+  .series-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+                 gap: 16px; }
+  .series-panel { border: 1px solid var(--line); padding: 8px 10px; background: var(--panel); }
+  .series-head { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+  .series-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; }
+  .series-range { margin-left: auto; color: var(--dim); font-size: 11px;
+                  font-family: ui-monospace, monospace; white-space: nowrap; }
+  .series-plot { width: 100%; height: auto; display: block; margin: 6px 0 2px; }
+  .series-foot { display: flex; justify-content: space-between; color: var(--dim);
+                 font-size: 10px; }
+
+  /* Narrow: the label gutters are the only fixed widths here, so they are the
+     only thing to give back. Placed below the rules it overrides. */
+  @media (max-width: 640px) {
+    .bar-h-label { width: 84px; }
+    .bar-h-value { width: 58px; }
+    .legend-name { min-width: 70px; }
+  }
+
   .range-row { display: flex; align-items: center; gap: 10px; }
   .inp-range { flex: 1; min-width: 90px; padding: 0; height: 22px; cursor: pointer; }
   /* Fixed-width, like ramp-at and ladder-every - a typed number that resized
@@ -429,7 +754,6 @@
   .fld-label { color: var(--dim); font-size: 12px; }
   .fld-hint { color: var(--dim); font-size: 11px; }
   .fld-err { color: var(--red); font-size: 11px; min-height: 0; }
-  .inp { width: 100%; }
   .inp.mono { font: 13px/1.45 ui-monospace, monospace; }
   textarea.inp { resize: vertical; }
 </style>
@@ -441,11 +765,19 @@
     <div class="header-row">
       <h1>AI Button</h1>
       <span id="state" class="badge">…</span>
+      <!-- Shown only while the button is ringing (TODO 47's fix pass). An
+           alarm that has gone off is the one state this page could report and
+           not act on: the badge pulses red, the only presses live behind the
+           Test panel's toggle, and if the button is out of range or unplugged
+           there is nothing in the room to press either. Found by walking the
+           page as someone who does not know what a "trigger" is - with a real
+           alarm that had been ringing since 07:00. -->
+      <button type="button" id="dismiss" class="dismiss" hidden>Dismiss</button>
       <span id="meta"></span>
       <span id="clockbar" hidden></span>
       <div class="header-tools">
-        <!-- Sound is a per-browser view preference like Tips and the side
-             pane, not a button setting: `sounds_enabled` in config decides
+        <!-- Sound is a per-browser view preference like Tips, not a button
+             setting: `sounds_enabled` in config decides
              whether the *hardware* beeps, and this decides whether this tab
              does. Muting one must never mute the other. -->
         <button type="button" id="mute-toggle" class="help-toggle"
@@ -454,14 +786,24 @@
                class="volume" aria-label="Sound volume">
         <button type="button" id="help-toggle" class="help-toggle" aria-pressed="false">ⓘ Tips</button>
         <button type="button" id="pane-toggle" class="pane-toggle"
-                aria-expanded="true" aria-controls="side-pane">◧ Panel</button>
+                aria-expanded="false" aria-controls="dash-pop">◧ Test panel</button>
       </div>
     </div>
     <p id="last"></p>
-  </header>
+    <!-- What a press does *next*, not what the last one did (TODO 57). Same
+         data the nav's live dot already has (active_modes) - this just says
+         it out loud instead of making you hover. -->
+    <p id="now"></p>
 
-  <div class="app-body">
-    <aside class="side-pane scroll-fade" id="side-pane">
+    <!-- The bench: what the button is showing, a way to press it, its tones
+         and its clock. A popover rather than a column, because it is an
+         inspection surface - someone driving a real button opens it to check
+         something and closes it again, and as a permanent column it cost a
+         third of the screen (TODO 42, 45). Lives inside the header so it can
+         hang off it; hidden until the header's button asks for it. -->
+    <div class="dash-pop" id="dash-pop" hidden role="dialog"
+         aria-label="Test panel">
+
       <div id="virtual" class="side-block" hidden>
         <h2>Virtual device</h2>
         <div class="virtual-row">
@@ -514,22 +856,36 @@
         06:30 to try a 5-7am window mode, or 06:59 to watch a 07:00 alarm fire.
         Keeps ticking, never persists, doesn't change event timestamps.</p>
       </div>
+    </div>
+  </header>
+
+  <div class="app-body">
+    <!-- Navigation, and the mode list is most of it: what the button does is
+         the thing you come here to change, so it is the spine of the page
+         rather than a nav nested inside one tab of it. menu.js renders into
+         #mode-nav-mount (see its `mounts.nav`). -->
+    <aside class="side-pane scroll-fade" id="side-pane">
+      <nav class="shell-nav" role="tablist" aria-label="Sections">
+        <button type="button" class="shell-nav-item" data-tab="events" role="tab"
+                aria-selected="true">◦ Events</button>
+        <button type="button" class="shell-nav-item" data-tab="lights" role="tab"
+                aria-selected="false">◦ Lights</button>
+        <button type="button" class="shell-nav-item" data-tab="device" role="tab"
+                aria-selected="false">◦ Device</button>
+        <button type="button" class="shell-nav-item" data-tab="apps" role="tab"
+                aria-selected="false">◦ Apps</button>
+      </nav>
+      <div id="mode-nav-mount"></div>
     </aside>
 
     <main class="main-pane">
       <!-- Above the tabs on purpose: a scene spans modes, lights and device
            settings, so it is not a property of any one tab. -->
       <div class="scene-bar" id="scene-bar"></div>
-      <nav class="tab-bar" role="tablist">
-        <button type="button" class="tab-btn" data-tab="modes" role="tab" aria-selected="true">Modes</button>
-        <button type="button" class="tab-btn" data-tab="lights" role="tab" aria-selected="false">Lights</button>
-        <button type="button" class="tab-btn" data-tab="events" role="tab" aria-selected="false">Events</button>
-        <button type="button" class="tab-btn" data-tab="device" role="tab" aria-selected="false">Device</button>
-      </nav>
       <div class="tab-panels">
-        <section class="tab-panel scroll-fade" data-panel="modes" id="panel-modes">Loading…</section>
+        <section class="tab-panel scroll-fade" data-panel="modes" id="panel-modes" hidden>Loading…</section>
         <section class="tab-panel scroll-fade" data-panel="lights" id="panel-lights" hidden>Loading…</section>
-        <section class="tab-panel scroll-fade" data-panel="events" id="panel-events" hidden>
+        <section class="tab-panel scroll-fade" data-panel="events" id="panel-events">
           <div class="ev-filters">
             <input type="search" id="ev-name" class="inp" placeholder="Search name…">
             <select id="ev-kind" class="inp"><option value="">Any kind</option></select>
@@ -541,11 +897,19 @@
             <button type="button" class="mini" id="ev-csv">Export CSV</button>
             <button type="button" class="mini" id="ev-json">Export JSON</button>
           </div>
-          <p class="ev-note" data-help>Filters narrow the table and the export together
-            - what you download is what you are looking at.</p>
+          <p class="ev-note" data-help>Filters narrow the table, the charts and the
+            export together - what you see and what you download are the same rows.</p>
+          <!-- Sub-tabs, filled from eventCharts.js's EVENT_VIEWS so a new view
+               is a table entry rather than a hand-written button (TODO 53).
+               The filter bar sits *above* these deliberately: it applies to
+               every view, so putting it inside one would be a claim that it
+               does not. -->
+          <nav class="ev-views" id="ev-views" role="tablist" aria-label="Event views"></nav>
           <div id="events"></div>
+          <div id="ev-charts" hidden></div>
         </section>
         <section class="tab-panel scroll-fade" data-panel="device" id="panel-device" hidden>Loading…</section>
+        <section class="tab-panel scroll-fade" data-panel="apps" id="panel-apps" hidden>Loading…</section>
       </div>
       <div class="menu-bar" id="menu-bar"></div>
     </main>
@@ -553,16 +917,29 @@
 </div>
 
 <script>
-  // Tabs are page-level (they gate content menu.js renders into each panel),
-  // so this stays a plain inline script rather than living inside a module.
+  // Which panel is up. Page-level (it gates content menu.js renders into each
+  // panel), so this stays a plain inline script rather than living inside a
+  // module.
+  //
+  // The nav is the side panel: three fixed destinations plus the mode list
+  // underneath them, which menu.js owns. Selecting a mode has to bring its
+  // editor up, and menu.js must not reach into the shell to do that, so it
+  // asks with a `button:show-panel` event and this listens.
   (function () {
-    const tabs = document.querySelectorAll('.tab-btn');
+    const tabs = document.querySelectorAll('.shell-nav-item');
     const panels = document.querySelectorAll('.tab-panel');
+    const pane = document.getElementById('side-pane');
     function activate(name) {
       tabs.forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
       panels.forEach((p) => { p.hidden = p.dataset.panel !== name; });
+      // The mode list keeps its own selection - which mode the editor holds -
+      // and that is not the same as "this is the section you are looking at".
+      // Both lit at once claims two places at once, so the mode highlight
+      // dims to a memory while another section is up.
+      pane?.classList.toggle('on-modes', name === 'modes');
     }
     tabs.forEach((t) => t.addEventListener('click', () => activate(t.dataset.tab)));
+    document.addEventListener('button:show-panel', (e) => activate(e.detail));
   })();
 </script>
 
@@ -570,7 +947,7 @@
      before menu.js has anything to render. -->
 <script type="module" src="/static/help.js"></script>
 
-<!-- The side pane's fold. Served page only: the offline editor has no pane. -->
+<!-- The header's test panel. Served page only: the offline editor has none. -->
 <script type="module" src="/static/sidepane.js"></script>
 
 <!-- Config menu: structured editor, built from ES modules (no build step). -->
@@ -581,12 +958,20 @@
 import { paint } from '/static/ledPreview.js';
 import { readFlag, readNumber, writeFlag, writeNumber } from '/static/prefs.js';
 import { GESTURES } from '/static/schema.js';
+// Shared with an app's own readout (TODO 51). Two copies of "how long is 3661
+// seconds" would be a mirrored table with no test behind it, and the drift
+// would read as the same run being 1:01:01 here and 61:01 one panel away.
+import { fmtDuration, fmtValue, fmtWhen } from '/static/format.js';
+// The chart views (TODO 53). Imported here and nowhere else, which is what
+// keeps them out of the offline editor: that bundle's entry list is help.js
+// and menu.js, and an editor with no service behind it has no events to chart.
+import { EVENT_VIEWS, renderEventView } from '/static/eventCharts.js';
 
 const $ = s => document.querySelector(s);
 let soundSeq = null;
 
 // --- what this page sounds like -------------------------------------------
-// Per-browser, like Tips and the side pane, and stored through prefs.js for
+// Per-browser, like Tips, and stored through prefs.js for
 // its throw guards (localStorage raises in private browsing). Deliberately
 // *not* config: `sounds_enabled` decides whether the button's own buzzer
 // sounds, and this decides whether this tab does. One is the hardware, the
@@ -671,19 +1056,6 @@ function fmtUptime(s) {
   return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
 }
 
-function fmtDuration(s) {
-  s = Math.round(s);
-  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
-  return h ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
-           : `${m}:${String(sec).padStart(2,'0')}`;
-}
-
-// A whole number stays whole (a tally of 7, not "7.00"); anything else keeps
-// enough to be worth having without pretending to precision the source had.
-function fmtValue(v) {
-  return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
-}
-
 // The status line's names come from the same declared list the Press row is
 // built from, so a new gesture reads as words here too instead of falling
 // through to its raw key. Lowercased because it lands mid-sentence:
@@ -691,14 +1063,35 @@ function fmtValue(v) {
 const GESTURE_NAMES = Object.fromEntries(
   GESTURES.map((g) => [g.key, g.label.toLowerCase()]));
 
+// "Right now: short press → Coffee count" (TODO 57). `active_modes` is
+// exactly what the nav's live dot already reads - which mode would answer
+// each gesture from idle - said out loud instead of left for a hover.
+// Order follows GESTURES, same as everywhere else a gesture list is shown.
+function fmtRightNow(active) {
+  if (!active) return '';
+  const parts = GESTURES
+    .filter((g) => active[g.key])
+    .map((g) => `${GESTURE_NAMES[g.key]} → ${active[g.key]}`);
+  return parts.length ? `Right now: ${parts.join(' · ')}` : '';
+}
+
 async function refreshStatus() {
   try {
     const d = await api('/api/status');
     const badge = $('#state');
     badge.textContent = d.state;
     badge.className = 'badge ' + d.state;
+    // A ringing alarm exits on any press (schema.js's `exits`), so this is an
+    // ordinary short press rather than a new endpoint or a new device call.
+    // Deliberately ALARMING only: every other takeover is something you chose
+    // to open and can leave with a long press, and a page-wide "get me out of
+    // this app" button would be a second, competing way to do what the button
+    // itself does.
+    $('#dismiss').hidden = d.state !== 'ALARMING';
     $('#meta').textContent =
-      `${d.device_name} · v${d.version} · up ${fmtUptime(d.uptime_s)} · ${d.mode_count} mode${d.mode_count === 1 ? '' : 's'}` +
+      // No mode count here (TODO 55) - "11 modes" was the one number left
+      // using the vocabulary item 46 retired, and nobody could act on it.
+      `${d.device_name} · v${d.version} · up ${fmtUptime(d.uptime_s)}` +
       // With a real button, say whether it is actually on the air: the app
       // runs either way, so "nothing happens when I press it" needs an answer
       // in the UI rather than in the log.
@@ -708,9 +1101,13 @@ async function refreshStatus() {
       // describing something that isn't there. protocol_version 0 means the
       // firmware predates DEVICE_INFO, so say "assumed" rather than quoting
       // capabilities it never claimed.
+      // Absent capabilities too (TODO 68) - which ones are missing is the
+      // half that decides whether a developer's feature will work at all.
       (!d.mock && d.device_connected && d.device_info
         ? (d.device_info.protocol_version
             ? ` · fw ${d.device_info.firmware} · ${d.device_info.capabilities.join(' ')}`
+              + (d.device_info.capabilities_absent.length
+                ? ` (missing: ${d.device_info.capabilities_absent.join(' ')})` : '')
             : ' · fw unknown (pre-v1, capabilities assumed)')
         : '');
     // last_trigger is null for scheduler-fired alarms - still surface the
@@ -722,6 +1119,7 @@ async function refreshStatus() {
           : (d.last_mode || '')) +
         (d.last_message ? ` - ${d.last_ok ? '' : '⚠️ '}${d.last_message}` : '')
       : '';
+    $('#now').textContent = fmtRightNow(d.active_modes);
 
     // test clock chip
     const bar = $('#clockbar');
@@ -796,30 +1194,87 @@ async function refreshEventKinds() {
   } catch { /* server briefly away */ }
 }
 
+// --- the Events views: one table, three pages of charts (TODO 53) ----------
+
+// How many rows to ask for. **Not the endpoint's default of 50**, which is the
+// one thing item 53 named as a bug waiting to happen: a chart over the last
+// fifty rows renders, looks right, and is describing the wrong thing. The log
+// is a few hundred rows and the endpoint's own ceiling is 10,000.
+const EVENT_FETCH_ROWS = 5000;
+// How many of them the table draws. The charts want every row; a table does
+// not, and building thousands of <tr> on a 5-second poll would make the panel
+// stutter for rows nobody scrolls to. The count beside the filters says when
+// this has bitten.
+const EVENT_TABLE_ROWS = 200;
+
+let eventView = 'log';
+let lastRows = [];
+
+function renderEventTable(rows) {
+  const shown = rows.slice(0, EVENT_TABLE_ROWS);
+  $('#events').innerHTML = shown.length
+    ? `<table><tr><th>When</th><th>Kind</th><th>Name</th><th>Mode</th><th>Duration</th><th>Value</th></tr>` +
+      shown.map(r => `<tr>
+        <td>${fmtWhen(r.ts)}</td>
+        <td class="kind-${r.kind}">${r.kind.replace('_', ' ')}</td>
+        <td>${r.name}</td>
+        <td>${r.mode ?? ''}</td>
+        <td>${r.duration_s != null ? fmtDuration(r.duration_s) : ''}</td>
+        <td>${r.value != null ? fmtValue(r.value) : ''}</td>
+      </tr>`).join('') + '</table>'
+    // An empty log and an empty filter result are different problems and
+    // need different advice - "press the button" is unhelpful when the
+    // answer is "you asked about last Tuesday".
+    : eventsFiltered()
+      ? '<p class="empty">Nothing matches these filters.</p>'
+      : '<p class="empty">No events yet.'
+        + '<span data-help> Bind a press to Log/Timer in Modes, then press the button.</span></p>';
+}
+
+// Only the view you are looking at is drawn. The poll below runs whatever
+// happens, and redrawing eight charts every five seconds to keep three hidden
+// pages current would be work nobody asked for.
+function paintEventView() {
+  const onLog = eventView === 'log';
+  $('#events').hidden = !onLog;
+  $('#ev-charts').hidden = onLog;
+  if (onLog) renderEventTable(lastRows);
+  else renderEventView($('#ev-charts'), eventView, lastRows);
+  // Nothing to do about the [data-help] blurbs the charts carry: help.js
+  // observes the whole document for exactly this - subtrees rendered long
+  // after it ran - so a freshly drawn view picks up the current Tips state on
+  // its own.
+}
+
+for (const view of EVENT_VIEWS) {
+  const tab = document.createElement('button');
+  tab.type = 'button';
+  tab.className = 'ev-view';
+  tab.dataset.view = view.id;
+  tab.setAttribute('role', 'tab');
+  tab.setAttribute('aria-selected', String(view.id === eventView));
+  tab.textContent = view.label;
+  tab.addEventListener('click', () => {
+    eventView = view.id;
+    for (const other of document.querySelectorAll('.ev-view')) {
+      other.setAttribute('aria-selected', String(other.dataset.view === eventView));
+    }
+    paintEventView();
+  });
+  $('#ev-views').appendChild(tab);
+}
+
 async function refreshEvents() {
   try {
     const params = eventQuery();
-    params.set('limit', '200');
-    const rows = await api(`/api/events?${params}`);
-    $('#ev-count').textContent = rows.length
-      ? `${rows.length} row${rows.length === 1 ? '' : 's'}` : '';
-    $('#events').innerHTML = rows.length
-      ? `<table><tr><th>When</th><th>Kind</th><th>Name</th><th>Mode</th><th>Duration</th><th>Value</th></tr>` +
-        rows.map(r => `<tr>
-          <td>${new Date(r.ts).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</td>
-          <td class="kind-${r.kind}">${r.kind.replace('_', ' ')}</td>
-          <td>${r.name}</td>
-          <td>${r.mode ?? ''}</td>
-          <td>${r.duration_s != null ? fmtDuration(r.duration_s) : ''}</td>
-          <td>${r.value != null ? fmtValue(r.value) : ''}</td>
-        </tr>`).join('') + '</table>'
-      // An empty log and an empty filter result are different problems and
-      // need different advice - "press the button" is unhelpful when the
-      // answer is "you asked about last Tuesday".
-      : eventsFiltered()
-        ? '<p class="empty">Nothing matches these filters.</p>'
-        : '<p class="empty">No events yet.'
-          + '<span data-help> Bind a press to Log/Timer in Modes, then press the button.</span></p>';
+    params.set('limit', String(EVENT_FETCH_ROWS));
+    lastRows = await api(`/api/events?${params}`);
+    const total = lastRows.length;
+    const capped = eventView === 'log' && total > EVENT_TABLE_ROWS;
+    $('#ev-count').textContent = total
+      ? (capped ? `${EVENT_TABLE_ROWS} of ${total} rows` : `${total} row${total === 1 ? '' : 's'}`)
+      : '';
+    paintEventView();
   } catch { /* server briefly away; keep last view */ }
 }
 
@@ -840,6 +1295,13 @@ for (const [id, format] of [['#ev-csv', 'csv'], ['#ev-json', 'json']]) {
     window.location = `/api/events/export?${params}`;
   });
 }
+
+$('#dismiss').addEventListener('click', async () => {
+  try { await api('/api/trigger/short_press', { method: 'POST' }); }
+  catch (e) { console.warn(e); }
+  setTimeout(refreshStatus, 250);
+  setTimeout(refreshEvents, 2500);
+});
 
 $('#clock-set').addEventListener('click', async () => {
   const value = $('#clock-input').value;

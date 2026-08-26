@@ -408,6 +408,16 @@ or does it give the button an interface?*
 | Any display | **No** | Violates the spine |
 | An AI assistant | Smarter, *host-side* | Already possible via `webhook`. It stays an integration, never a model on the device |
 
+**Three rows of that table say "sensors as activations, same slot as
+geofencing", and there is no such slot.** An activation is a clock or a press;
+nothing in the system can be started by a fact about the world. TODO **70**
+builds that slot on the host — years before any of this hardware — and the
+sensor need not be on the button at all: a plant's moisture probe posting to
+the service is the same shape as an IMU that does not exist yet. **Every
+peripheral above lands cheaper if the slot is already there**, which is the
+argument for doing it in Stage 2 rather than waiting for Stage 6 to discover
+it.
+
 ---
 
 ## Cross-cutting decisions
@@ -427,6 +437,7 @@ back and undoing things" the brief is trying to avoid.
 | **D7** | The name | **Rename before public disclosure.** `aibutton` is descriptive and inaccurate | Stage 4/5 boundary | Repo, package, BLE name, app namespace, domain and marks all re-bake |
 | **D9** ✔ | Do apps own data, or only write history? | **Decided: a small bounded document per app instance, beside the log** — slots declared in the manifest, read like variables, written by a `Set` effect. See ARCHITECTURE.md "Apps own data"; build items are TODO **33**/**34** | — | — |
 | **D8** ✔ | How do hosts and devices stay compatible? | **Decided and shipped: capability negotiation via `DEVICE_INFO`** — never assume, always ask. Protocol v1 | — | — |
+| **D10** ✔ | Is a trigger a *field on a mode*, or an *object of its own*? | **Decided 2026-08-26: an object.** A *reflex* is a circumstance with an action attached, and it settles this because **most reflexes start no app at all** — "the DAW began recording, so change the light" enters no mode and has no mode to be a field on. A reflex's `then` is any action the button already has, so this adds a source of events and **no new vocabulary of consequences**. **Schedules are deliberately not migrated**: an activation says when an app may run, a reflex says what makes something happen. TODO **70**–**75**, **77**–**79** | — | — |
 
 **D4, D5 and D6 were one piece of work with D8 — and D8 went first, on
 purpose.** The reason to batch protocol changes is that each one costs a

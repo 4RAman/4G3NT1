@@ -99,6 +99,19 @@ _WEB = Path(__file__).parent / "web"
 _INDEX = _WEB / "index.html"
 _STATIC = _WEB / "static"
 
+# See the mount below: no build step means no cache-busting filenames, so the
+# only safe answer for this page's own assets is not to cache them.
+_NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
+
+
+class _NoStoreStatic(StaticFiles):
+    """StaticFiles that never lets a browser hold on to a module."""
+
+    def file_response(self, *args, **kwargs) -> Response:  # type: ignore[override]
+        response = super().file_response(*args, **kwargs)
+        response.headers.update(_NO_STORE)
+        return response
+
 
 @dataclass
 class WebContext:
@@ -250,7 +263,7 @@ def create_app(ctx: WebContext) -> FastAPI:
 
     @app.get("/")
     async def index() -> FileResponse:
-        return FileResponse(_INDEX)
+        return FileResponse(_INDEX, headers=_NO_STORE)
 
     @app.get("/api/status")
     async def status():
@@ -283,6 +296,7 @@ def create_app(ctx: WebContext) -> FastAPI:
                 "protocol_version": ctx.device.info.protocol_version,
                 "firmware": ctx.device.info.firmware,
                 "capabilities": ctx.device.info.names,
+                "capabilities_absent": ctx.device.info.names_absent,
             },
             # True when the event database could not be opened and history is
             # being kept in memory. The button still works, so the UI has to
@@ -695,7 +709,15 @@ def create_app(ctx: WebContext) -> FastAPI:
         return FileResponse(path, media_type="audio/wav")
 
     # The config-menu ES modules (web/static/*.js) - index.html imports them.
-    app.mount("/static", StaticFiles(directory=_STATIC), name="static")
+    #
+    # Served no-store, which for a page like this is the honest setting rather
+    # than a debugging convenience. There is no build step and no hashed
+    # filenames, so an edited module keeps its URL; a browser that caches it
+    # then runs *last* week's editor against this week's service, and an ES
+    # module graph is cached per URL - a reload will not shift it, which makes
+    # the failure look like the edit not having happened. The whole page is a
+    # few hundred KB off localhost, so there is nothing to win by caching it.
+    app.mount("/static", _NoStoreStatic(directory=_STATIC), name="static")
 
     return app
 
