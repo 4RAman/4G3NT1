@@ -21,6 +21,7 @@ Endpoints (a future phone app should use these same routes):
     GET  /api/events/export       the same rows, as a csv or json download
     GET  /api/midi/ports          MIDI ports this machine can reach (out/in)
     POST /api/trigger/{trigger}   simulate a button press
+    POST /api/reflex/{name}       fire a configured reflex (TODO 71)
     POST /api/dev/led             show one look now, saving nothing
 
 Submitted configs go through the exact parser the service uses
@@ -134,6 +135,11 @@ class WebContext:
     # schedule needs the cancellable task and the safety gate main owns, and a
     # second copy of either here is exactly the drift CLAUDE.md warns about.
     show_look: object = None
+    # Queues an inbound reflex for the run loop to dispatch - main.fire_reflex.
+    # None when nothing provided one (tests, and anything embedding the app),
+    # in which case the endpoint says it cannot oblige rather than accepting a
+    # circumstance nothing will ever act on.
+    fire_reflex: object = None
     # The config as it was when this process started, kept only to answer
     # "does switching to that scene need a restart?" - see _STARTUP_ONLY.
     startup_config: AppConfig | None = None
@@ -597,6 +603,40 @@ def create_app(ctx: WebContext) -> FastAPI:
             raise HTTPException(404, f"unknown trigger {trigger!r}")
         ctx.device.press(TriggerType(trigger))
         return {"queued": trigger}
+
+    @app.post("/api/reflex/{name}")
+    async def reflex(name: str, body: dict | None = Body(None)):
+        """Fire a configured reflex: the one hole every other source arrives
+        through (TODO 70/71).
+
+        Anything that can make a request can drive the button - a sensor, a
+        cron job, Home Assistant, an iPhone Shortcut, `curl` - which is why
+        this is the first source built and why MQTT is not a dependency.
+
+        Answering **404 for an unknown name** is most of what makes this
+        usable from a script: a typo says so at the moment it is made rather
+        than silently doing nothing. The queue is the run loop's, so this
+        returns as soon as the circumstance is *accepted*, never when it has
+        been acted on - the button may be busy, and a reflex that blocked the
+        thing reporting it would be worse than a late one.
+
+        **The body is carried, not read here** (TODO 72). A reflex may test one
+        field of it - `moisture < 30` - and that test is applied by the run
+        loop, in the one place `reflex_matches` is called, so this stays a
+        queue and a later source (MIDI in) cannot end up with a second answer.
+        The reply says the circumstance was *accepted*, never that it matched.
+        """
+        reflex = next(
+            (r for r in ctx.cm.config.reflexes if r.name == name), None
+        )
+        if reflex is None:
+            known = ", ".join(r.name for r in ctx.cm.config.reflexes) or "none"
+            raise HTTPException(404, f"unknown reflex {name!r} (configured: {known})")
+        if ctx.fire_reflex is None:
+            raise HTTPException(503, "this service cannot dispatch reflexes")
+        if not ctx.fire_reflex(name, body):
+            raise HTTPException(503, f"too many reflexes waiting - {name!r} dropped")
+        return {"queued": name}
 
     @app.post("/api/dev/clock")
     async def set_clock(body: dict = Body(...)):

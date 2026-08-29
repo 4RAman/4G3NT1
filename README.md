@@ -5,9 +5,10 @@ triple tap / four taps / five taps), routed through a **mode machine** — the
 button is always in exactly one mode, and the mode decides what each gesture
 means. An RGB LED and feedback sounds show device state.
 
-Modes come in two kinds. **Reflexes** answer a gesture and hand the button
+Modes come in two kinds. **Menus** answer a gesture and hand the button
 straight back — always live, fired without thinking (the everyday set, plus
-time-windowed overrides). **Apps** own the button until you leave — twelve of
+time-windowed overrides, launchers and control pages). **Apps** own the button
+until you leave — twelve of
 them: alarm,
 reminder, stopwatch, counter, intervals (Pomodoro, Tabata or HIIT — one
 template, three presets), metronome, countdown, two games (Hot/Cold and a
@@ -29,7 +30,7 @@ transition and its rationale are in [DESIGN-ESP32.md](DESIGN-ESP32.md).
 > and buzzer back. With no ESP32 attached the app runs on a `MockDevice`
 > instead, fully drivable from the web UI — no hardware needed to develop.
 
-Ambient modes resolve first-match-wins against eight action primitives:
+Menus resolve first-match-wins against eight action primitives:
 
 | Action | What it does |
 |---|---|
@@ -40,7 +41,13 @@ Ambient modes resolve first-match-wins against eight action primitives:
 | `osc` | fire an OSC message over UDP — Reaper, QLab, Resolume, TouchOSC |
 | `midi` | send a MIDI note or CC to a port — for a DAW that has no OSC |
 | `enter_mode` | launch an app — one of the eleven, or the launcher that lists them |
-| `standby` | put the reflexes to sleep; the same gesture wakes them |
+| `standby` | put the menus to sleep; the same gesture wakes them |
+
+And one thing no press starts: a **reflex** is a circumstance with an action
+attached. Name one, and anything that can make an HTTP request fires it —
+`POST /api/reflex/moisture_low` from a sensor, a cron job, a deploy script or
+an iPhone Shortcut — running any of the actions below, launching an app
+included. The button acts with nobody touching it.
 
 Example: between 05:00 and 07:00, a double tap logs `meds_taken`;
 any other time it falls through to **Home**, the always-on floor. See the
@@ -101,7 +108,9 @@ LED/sound feedback, and an embedded uvicorn server for the web UI + REST
 API — no second service, no IPC. They share one live `ConfigManager`,
 `EventStore`, and `ButtonDevice`.
 
-The pipeline per press is a one-way flow:
+The pipeline per press is a one-way flow (a *reflex* is the same flow with an
+HTTP request where the gesture would be — one queue over, dispatched by the
+same loop into the same actions):
 
 ```
 device.py ──gesture──▶ rules.py ──(mode, action)──▶ actions.py ──result──▶ main.py
@@ -181,8 +190,25 @@ no built-in way to hand MIDI from one application to another:
 choice. Install it, add one port, and put part of its name in the action's
 **MIDI port** field. Windows appends a number that changes between sessions,
 so a port you called `Button` may enumerate as `Button 2` — matching on part
-of the name is why that keeps working. Leave the field blank and it takes the
-first port there is.
+of the name is why that keeps working.
+
+**Two things that will cost you an evening otherwise**, both learned the hard
+way on 2026-08-27:
+
+1. **Name the port.** Leaving the field blank takes *the first output there
+   is*, which on a typical Windows machine is `Microsoft GS Wavetable Synth` —
+   so every note goes to the built-in software synth and the DAW never hears
+   it. There is no error, because nothing failed.
+2. **Tell the DAW it has a control surface.** MIDI arriving is not MIDI being
+   *understood*: add the port in the DAW as a **Mackie Control** device
+   (Studio One: Settings → External Devices → Add… → Mackie → Control, Receive
+   From = your port). Point a *keyboard* device at it instead and the notes
+   show up in the MIDI monitor, get recorded into tracks, and move nothing —
+   which looks exactly like a broken button. If the port is already listed
+   under a keyboard device, take it off that one first.
+
+With those two right, the transport buttons work unlearned: a DAW told it has
+a Mackie Control already knows that note 94 is Play.
 
 **On Linux and macOS** it needs `pip install python-rtmidi` instead, which is
 not in `requirements.txt` on purpose — it is a C extension with no wheel for

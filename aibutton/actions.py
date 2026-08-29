@@ -43,6 +43,7 @@ from .config import (
     LogAction,
     MidiAction,
     OscAction,
+    SequenceAction,
     TimerToggleAction,
     WebhookAction,
 )
@@ -196,6 +197,31 @@ async def execute(
 
     if isinstance(action, MidiAction):
         return _send_midi(action)
+
+    if isinstance(action, SequenceAction):
+        # **Every step runs, even after one fails.** A sequence is a script,
+        # not a transaction: if the webhook is down, the MIDI note that was
+        # going to follow it is still what the button was asked to send. The
+        # first failure is what the status line reports, because it is the one
+        # that explains the rest.
+        failure = None
+        for index, step in enumerate(action.steps, start=1):
+            if step.wait_s:
+                await asyncio.sleep(step.wait_s)
+            # Steps are resolved before they arrive here
+            # (`config.resolve_action`), so a step is always a primitive and
+            # this recursion is one deep by construction, not by luck.
+            result = await execute(
+                step.action, trigger=trigger, mode_name=mode_name, store=store,
+                webhook_transport=webhook_transport, session=session,
+            )
+            if not result.ok and failure is None:
+                failure = f"step {index}: {result.message}"
+        count = len(action.steps)
+        plural = "" if count == 1 else "s"
+        if failure is not None:
+            return ActionResult(False, f"{count} step{plural}, {failure}")
+        return ActionResult(True, f"Sent {count} step{plural}")
 
     if isinstance(action, KeysAction):
         return _press_keys(action)

@@ -213,6 +213,61 @@ class StandbyAction:
 
 
 @dataclass(frozen=True)
+class SequenceStep:
+    """One step of a `SequenceAction`: an action, and how long to wait *before*
+    running it.
+
+    Before rather than after, because what a sequence is usually for is a gap
+    *between* two messages - Mackie has no return-to-zero, so "stop and rewind"
+    is Stop, a beat, Stop - and a delay written on the second step is where a
+    reader looks for it.
+    """
+
+    action: Action
+    wait_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class SequenceAction:
+    """A flat list of actions with optional delays (TODO 33).
+
+    **Bounded by construction**: no loops, no conditionals, no nesting, a
+    capped step count and a capped total duration. That is not tidiness - it
+    is the difference between a thing the on-device runtime can eventually run
+    and a language it never can (ROADMAP D2). *If it ever grows an `if`, it is
+    host-only forever.*
+
+    **It holds the button.** The steps are awaited in order, so a sequence with
+    delays is exactly as long as its delays say, and presses made while it runs
+    are dropped by the same rule that drops presses during any other action.
+
+    A step may name a pooled action, and `resolve_action` unpacks that the way
+    it unpacks any other binding - which is also where the one-level guarantee
+    is made, since a pool entry may itself be a sequence.
+    """
+
+    steps: tuple[SequenceStep, ...]
+
+
+@dataclass(frozen=True)
+class SetPositionAction:
+    """Put the *running* app on one of its named positions (TODO 74).
+
+    The one action a takeover performs rather than `execute()` - the third of
+    its kind, after `enter_mode` (only the loop can start an app) and
+    `standby` (only the loop owns that flag). This one is narrower still:
+    only an app that *has* positions can do anything with it, so it is
+    delivered to whatever is running and fails clearly when nothing is.
+
+    It is what a reflex says to a running app: "the DAW is recording now".
+    Deliberately not offered to a gesture - a gesture at the ambient layer has
+    no app to say it to (`appOnly` in schema.js).
+    """
+
+    name: str
+
+
+@dataclass(frozen=True)
 class NamedAction:
     """A reference into `AppConfig.actions` - the pool - by name.
 
@@ -231,6 +286,7 @@ class NamedAction:
 Action = (
     LogAction | ReadoutAction | TimerToggleAction | WebhookAction | OscAction
     | MidiAction | KeysAction | EnterModeAction | NamedAction | StandbyAction
+    | SetPositionAction | SequenceAction
 )
 
 
@@ -989,10 +1045,144 @@ MODE_HOOKS: tuple[str, ...] = ("on_enter", "on_exit")
 # other binding, so a pool entry that happens to be one of those three fails at
 # dispatch the way a dangling name does - clearly, and only for that hook.
 # Mirrored as HOOK_ACTIONS in schema.js; test_schema_mirror.py fails on drift.
-HOOK_ACTIONS: tuple[type, ...] = (
+# The fire-and-forget primitives: everything that does its job and hands the
+# button straight back. Named once because three allow-lists are built from it
+# and they must not drift apart.
+FIRE_AND_FORGET_ACTIONS: tuple[type, ...] = (
     LogAction, TimerToggleAction, WebhookAction, OscAction, MidiAction,
     KeysAction,
 )
+
+# What a step of a `SequenceAction` may be (TODO 33): the primitives, and
+# **deliberately not a sequence**. This is where "no nesting" is a fact about
+# the data rather than a promise in a comment - see also `resolve_action`,
+# which enforces the same thing for a step that names a pooled sequence.
+SEQUENCE_ACTIONS: tuple[type, ...] = FIRE_AND_FORGET_ACTIONS
+
+# The two edges TODO 33 says to decide before writing any code, and they are
+# enforced by the **parser** rather than by the editor: a config is a file
+# people hand-edit, and a limit only the UI knows is not a limit. Both are
+# generous for what a sequence is for (a press/release pair, a Stop-Stop, a
+# webhook and the MIDI note that goes with it) and small enough that a
+# runaway one cannot hold the button for a minute.
+MAX_SEQUENCE_STEPS = 8
+MAX_SEQUENCE_S = 10.0
+
+HOOK_ACTIONS: tuple[type, ...] = (*FIRE_AND_FORGET_ACTIONS, SequenceAction)
+
+# What a reflex may fire (TODO 71): the hook set, plus `enter_mode`. That one
+# difference is the point - a hook fires *beside* the run loop, while a reflex
+# is dispatched *by* it, so starting an app is exactly what a reflex is for and
+# `enter_takeover` is right there to do it.
+#
+# `readout` and `standby` stay out for the reason they are out of HOOK_ACTIONS,
+# read one step further: each changes what the loop does with the *next
+# gesture*, and a circumstance arriving from the network is not a gesture and
+# has nobody standing at the button to see the answer.
+#
+# Mirrored as REFLEX_ACTIONS in schema.js; test_schema_mirror.py fails on drift.
+REFLEX_ACTIONS: tuple[type, ...] = (*HOOK_ACTIONS, EnterModeAction, SetPositionAction)
+
+
+# The operators a reflex's test may use, and the whole list on purpose (TODO
+# 72). **One field, one operator, one number** - the moment this grows an `if`
+# or an `and` it is a language, and a language is host-only forever (ROADMAP
+# D2: the on-device runtime has to be able to evaluate this, and an expression
+# parser is not something it will ever have).
+#
+# Written as functions rather than as a dispatch on the string at use time so
+# there is exactly one place a new operator could be added and one place it is
+# spelled. Mirrored as REFLEX_OPS in schema.js; test_schema_mirror.py fails on
+# drift.
+REFLEX_OPS = {
+    "<": lambda a, b: a < b,
+    "<=": lambda a, b: a <= b,
+    ">": lambda a, b: a > b,
+    ">=": lambda a, b: a >= b,
+    "==": lambda a, b: a == b,
+    "!=": lambda a, b: a != b,
+}
+
+
+@dataclass(frozen=True)
+class ReflexTest:
+    """`moisture < 30` - one field of the arriving body, one operator, one
+    number. Nothing else, and see `REFLEX_OPS` for why.
+
+    The field is read from the top level of the posted JSON object. Flat, not
+    a path: a dotted path is the first half of a query language, and anything
+    that can post can flatten what it sends.
+    """
+
+    field: str
+    op: str
+    value: float
+
+
+@dataclass(frozen=True)
+class MidiSource:
+    """A reflex fired by a MIDI message arriving on a port (TODO 73).
+
+    **This is a source, not a test.** It says which messages *reach* the
+    reflex - this port, this note or controller number, optionally this
+    channel - and the message's value is then handed to the ordinary
+    `when` test as a payload. That split is why 73 needed no new comparison
+    language: `note 95 velocity 127` is this source plus
+    `when: velocity == 127`, and the *same* note with velocity 0 is the same
+    source and the opposite test.
+
+    It is the reason item 25 stopped being a design problem: a Mackie Control
+    is two-way, so "the DAW is recording" arrives as a fact on note 95 rather
+    than being inferred from what the button last sent (**derived state beats
+    modelled state**).
+
+    `port` is a substring, matched the way every other port name here is -
+    Windows renames the port you created. Empty means the first input.
+    """
+
+    port: str = ""
+    # "note" or "cc". Note covers both note-on and note-off, because a lamp
+    # that goes dark can be spelled either way (see midi.decode).
+    kind: str = "note"
+    number: int = 0
+    # 1-16 as the DAW writes it, or None for "any channel", which is the
+    # sensible default: a control surface protocol pins the note number and
+    # leaves the channel to the DAW's own configuration.
+    channel: int | None = None
+
+
+@dataclass(frozen=True)
+class Reflex:
+    """A circumstance with an action attached - the button acting with nobody
+    pressing anything (TODO 70).
+
+    **A standalone object, not a field on a mode** (ROADMAP D10). Most reflexes
+    start no app at all - "when the DAW starts recording, pulse red" enters no
+    mode and has no mode to be a field on - and a field could only ever express
+    the one case that *is* an app starting.
+
+    The circumstance is, today, an HTTP POST naming this reflex: one hole that
+    anything able to make a request can drive, which is what makes a plant
+    sensor, a cron job and an iPhone Shortcut the same feature. Later sources
+    (MIDI in, OSC in, the media keys) arrive at the same dispatch and add no
+    new vocabulary of consequences.
+    """
+
+    name: str
+    # Inline, or a bare string naming one in the pool (`NamedAction`) - the
+    # fifth dispatch site CLAUDE.md says must call `resolve_action`.
+    then: Action
+    # Limits this reflex to while one named app is running. Optional and rare:
+    # a reflex is about the button and the world, not about one app. The JSON
+    # key is `while`, which is a Python keyword, hence the field name.
+    while_app: str | None = None
+    # A test on the value that arrived with it (TODO 72). None means "fire on
+    # arrival", which is what a reflex carrying no numbers can do.
+    when: ReflexTest | None = None
+    # Where it can arrive from, besides its own URL (TODO 73). None means HTTP
+    # only; a source *adds* a way in and never removes the endpoint, so a MIDI
+    # reflex is still testable with `curl`.
+    source: MidiSource | None = None
 
 
 @dataclass(frozen=True)
@@ -1600,6 +1790,216 @@ def _parse_action_pool(raw) -> dict[str, Action]:
     return pool
 
 
+def _parse_reflexes(
+    raw, actions: set[str], mode_names: set[str]
+) -> tuple[Reflex, ...]:
+    """The top-level `reflexes` list (TODO 71):
+
+        [{"name": "moisture_low", "then": {"action": "enter_mode", ...}},
+         {"name": "deploy_done",  "then": "celebrate", "while": "Focus"}]
+
+    Per-entry fallback like every other list here: one unusable reflex is
+    dropped with a complaint and the rest still load.
+
+    Two things are reported and *kept* rather than dropped, because both are
+    states a half-finished config passes through. A `then` naming a pool entry
+    that does not exist stays dangling, exactly as a gesture's does. A `while`
+    naming an app that does not exist stays too: the scope is honoured, so the
+    reflex simply never matches, which is the same clear failure a dangling
+    `enter_mode` target gives.
+    """
+    if "reflexes" not in raw:
+        return ()
+    entries = raw["reflexes"]
+    if not isinstance(entries, list):
+        log.error("config: 'reflexes' must be a list - ignored")
+        return ()
+    out: list[Reflex] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(entries):
+        where = f"reflexes[{index}]"
+        if not isinstance(entry, dict):
+            log.error("config: %s must be an object - ignored", where)
+            continue
+        name = entry.get("name")
+        if not (isinstance(name, str) and name.strip()):
+            log.error("config: %s has no usable name - ignored", where)
+            continue
+        name = name.strip()
+        if name in seen:
+            # The name is what a POST addresses, so two of them is not a style
+            # question: one of the pair could never be fired.
+            log.error(
+                "config: two reflexes are named %r - the second is ignored", name
+            )
+            continue
+        action = _parse_action(entry.get("then"), f"reflexes[{name}].then", actions)
+        if action is None:
+            log.error("config: reflex %r has no usable action - ignored", name)
+            continue
+        if not isinstance(action, (*REFLEX_ACTIONS, NamedAction)):
+            log.error(
+                "config: reflex %r cannot run a %s action - ignored", name,
+                type(action).__name__,
+            )
+            continue
+        test = _parse_reflex_test(entry.get("when"), f"reflexes[{name}].when")
+        origin = _parse_reflex_source(entry.get("from"), f"reflexes[{name}].from")
+        scope = entry.get("while")
+        if scope is not None and not (isinstance(scope, str) and scope.strip()):
+            log.error("config: %s.while must be an app name - ignored", where)
+            scope = None
+        elif isinstance(scope, str):
+            scope = scope.strip()
+            if scope not in mode_names:
+                log.warning(
+                    "config: reflex %r is limited to app %r, which no mode is "
+                    "named - it will never fire until one is", name, scope,
+                )
+        seen.add(name)
+        out.append(Reflex(
+            name=name, then=action, while_app=scope, when=test, source=origin,
+        ))
+    return tuple(out)
+
+
+def _parse_reflex_source(raw, where: str) -> MidiSource | None:
+    """`{"midi": {"port": "Button", "note": 95, "channel": 1}}`, or None.
+
+    Dropping the source keeps the reflex, exactly as a broken test does: the
+    URL still fires it, so what is lost is one way in rather than the whole
+    thing, and the warning says which.
+
+    `note` and `cc` are separate keys rather than a `kind` field because that
+    is how a DAW's own UI asks the question, and naming exactly one of them is
+    a shape a person can get right without reading anything.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        log.error("config: %s must be an object - ignored, the URL still fires it", where)
+        return None
+    unknown = set(raw) - {"midi"}
+    if unknown:
+        log.warning(
+            "config: %s has no source called %s - ignored",
+            where, ", ".join(sorted(repr(k) for k in unknown)),
+        )
+    spec = raw.get("midi")
+    if spec is None:
+        return None
+    if not isinstance(spec, dict):
+        log.error("config: %s.midi must be an object - ignored", where)
+        return None
+    has_note, has_cc = "note" in spec, "cc" in spec
+    if has_note == has_cc:
+        log.error(
+            "config: %s.midi needs exactly one of 'note' or 'cc' - ignored", where,
+        )
+        return None
+    kind = "note" if has_note else "cc"
+    number = spec.get("note" if has_note else "cc")
+    if isinstance(number, bool) or not isinstance(number, int) or not 0 <= number <= 127:
+        log.error("config: %s.midi %s must be 0-127 - ignored", where, kind)
+        return None
+    channel = spec.get("channel")
+    if channel is not None:
+        if isinstance(channel, bool) or not isinstance(channel, int) or not 1 <= channel <= 16:
+            log.error(
+                "config: %s.midi channel must be 1-16 - ignored, any channel "
+                "will do", where,
+            )
+            channel = None
+    port = spec.get("port", "")
+    if not isinstance(port, str):
+        log.error("config: %s.midi port must be a name - using the first input", where)
+        port = ""
+    return MidiSource(port=port, kind=kind, number=number, channel=channel)
+
+
+def _parse_reflex_test(raw, where: str) -> ReflexTest | None:
+    """`{"field": "moisture", "op": "<", "value": 30}`, or None.
+
+    Every failure here drops the *test* and keeps the reflex, which is the
+    one choice worth stating: a broken test that silenced its reflex would
+    make a typo look like a sensor that stopped reporting, and a reflex firing
+    unconditionally is at least visible. The warning says which it is.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        log.error("config: %s must be an object - ignored, the reflex always fires", where)
+        return None
+    field_name = raw.get("field")
+    if not (isinstance(field_name, str) and field_name.strip()):
+        log.error("config: %s needs a field name - ignored, the reflex always fires", where)
+        return None
+    op = raw.get("op")
+    if op not in REFLEX_OPS:
+        log.error(
+            "config: %s has operator %r, which is not one of %s - ignored, the "
+            "reflex always fires", where, op, " ".join(REFLEX_OPS),
+        )
+        return None
+    value = raw.get("value")
+    # bool is an int in Python and `moisture > true` is nonsense, so it is
+    # refused here rather than compared as 1.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        log.error(
+            "config: %s needs a number to compare against - ignored, the "
+            "reflex always fires", where,
+        )
+        return None
+    return ReflexTest(field=field_name.strip(), op=op, value=float(value))
+
+
+def reflex_hears(reflex: Reflex, kind: str, number: int, channel: int) -> bool:
+    """Does this reflex's source cover an arriving message?
+
+    The other half of `reflex_matches`, and pure for the same reason: which
+    messages *reach* a reflex is a question over data, asked from the run
+    loop's `_dispatch_midi` and answerable without a port, a driver or a DAW.
+
+    `kind` is "note" or "cc" - note-on and note-off are one family here,
+    because a lamp going dark can be spelled either way (`midi.decode`).
+    A source with no channel hears every channel.
+    """
+    source = reflex.source
+    if source is None:
+        return False
+    if source.kind != kind or source.number != number:
+        return False
+    return source.channel is None or source.channel == channel
+
+
+def reflex_matches(reflex: Reflex, payload) -> tuple[bool, float | None]:
+    """Does this reflex's test pass, and what number did it read?
+
+    Returns `(fires, value)`. `value` is what arrived in the tested field, or
+    None when there was no test or nothing usable in it - and it is returned
+    even when the test *fails*, because a reading that did not cross the
+    threshold is still a reading and the event log wants it (TODO 72).
+
+    Pure, and here rather than in the endpoint, because every later source of
+    circumstances (MIDI in, OSC in) has to apply the same test at its own edge
+    and a second implementation is a second answer.
+
+    A reflex with a test and no usable value **does not fire**. The alternative
+    - firing when the field is missing - turns a renamed sensor field into an
+    alarm that goes off constantly, which is the failure people throw the
+    device away over.
+    """
+    if reflex.when is None:
+        return True, None
+    if not isinstance(payload, dict):
+        return False, None
+    raw = payload.get(reflex.when.field)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return False, None
+    value = float(raw)
+    return REFLEX_OPS[reflex.when.op](value, reflex.when.value), value
+
+
 def _drive_warning(look, where: str, template: str) -> str | None:
     """Why `look`'s drive cannot be honoured under `template`, or None.
 
@@ -1727,6 +2127,11 @@ class AppConfig:
     # `resolve_action`). Naming is optional by design: this is for the action
     # used in three places, not for the one used once.
     actions: dict[str, Action] = field(default_factory=dict)
+    # Circumstances with an action attached, fired by something other than a
+    # finger (see `Reflex`). A list rather than a dict because order is how a
+    # person reads them and nothing looks one up by position; the name is the
+    # key over HTTP.
+    reflexes: tuple[Reflex, ...] = ()
     # A look the button's own states wear instead of their palette entry (see
     # `_parse_state_looks`). The palette stays underneath either way, as what a
     # host-less button shows.
@@ -1745,6 +2150,94 @@ class AppConfig:
 
 # --- parsing ------------------------------------------------------------
 
+def _parse_action_sequence(
+    raw: dict, where: str, known: set[str] | None,
+) -> SequenceAction | None:
+    """A flat list of actions with optional delays (TODO 33):
+
+        {"action": "sequence", "steps": [
+            {"action": "midi", "kind": "note_on", "number": 95, "value": 127},
+            {"action": "midi", "kind": "note_on", "number": 95, "value": 0,
+             "wait_s": 0.05}]}
+
+    A step is an ordinary action object, which may carry `wait_s`, or a bare
+    string naming a pooled one. **A named step has no delay** and that is not
+    an omission: a string has nowhere to put one, and inventing a wrapper
+    object for the case would be a second step shape to read and to write.
+
+    **The limits are enforced here, not in the editor** (`MAX_SEQUENCE_STEPS`,
+    `MAX_SEQUENCE_S`). A config is a file people hand-edit; a bound only the UI
+    knows is not a bound. Over either limit the list is *truncated* with a
+    warning rather than rejected, which is the same call every other list here
+    makes: what was written up to that point still does what it says.
+    """
+    steps_raw = raw.get("steps")
+    if not isinstance(steps_raw, list) or not steps_raw:
+        log.error("config: %s needs a non-empty 'steps' list - ignored", where)
+        return None
+    steps: list[SequenceStep] = []
+    budget = MAX_SEQUENCE_S
+    for index, entry in enumerate(steps_raw):
+        if len(steps) >= MAX_SEQUENCE_STEPS:
+            log.warning(
+                "config: %s has more than %d steps - the rest are dropped",
+                where, MAX_SEQUENCE_STEPS,
+            )
+            break
+        wait_s = 0.0
+        if isinstance(entry, dict):
+            # Refused by name before parsing, so the message says what is
+            # actually wrong rather than "unknown action". Nesting is the one
+            # thing that would turn this into something the device cannot run.
+            if entry.get("action") == "sequence":
+                log.error(
+                    "config: %s step %d is itself a sequence - dropped, "
+                    "sequences do not nest", where, index + 1,
+                )
+                continue
+            raw_wait = entry.get("wait_s", 0)
+            if isinstance(raw_wait, bool) or not isinstance(raw_wait, (int, float)):
+                log.error(
+                    "config: %s step %d wait_s must be a number - using 0",
+                    where, index + 1,
+                )
+            elif raw_wait < 0:
+                log.error(
+                    "config: %s step %d cannot wait for less than nothing - "
+                    "using 0", where, index + 1,
+                )
+            else:
+                wait_s = float(raw_wait)
+        action = _parse_action(entry, f"{where}.steps[{index}]", known)
+        if action is None:
+            continue  # _parse_action has already said why
+        if not isinstance(action, (*SEQUENCE_ACTIONS, NamedAction)):
+            log.error(
+                "config: %s step %d cannot be a %s - dropped; a step does its "
+                "job and hands the button back", where, index + 1,
+                type(action).__name__,
+            )
+            continue
+        if wait_s > budget:
+            log.warning(
+                "config: %s waits longer than the %.0fs a sequence may take - "
+                "step %d trimmed", where, MAX_SEQUENCE_S, index + 1,
+            )
+            wait_s = budget
+        budget -= wait_s
+        steps.append(SequenceStep(action=action, wait_s=wait_s))
+        if budget <= 0 and index < len(steps_raw) - 1:
+            log.warning(
+                "config: %s has spent its %.0fs - the steps after %d are "
+                "dropped", where, MAX_SEQUENCE_S, index + 1,
+            )
+            break
+    if not steps:
+        log.error("config: %s has no usable steps - ignored", where)
+        return None
+    return SequenceAction(steps=tuple(steps))
+
+
 def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | None:
     """One gesture's action: an inline object, or a bare string naming one in
     the pool (`AppConfig.actions`).
@@ -1761,8 +2254,8 @@ def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | No
             return None
         if known is not None and raw not in known:
             log.warning(
-                "config: %s names action %r, which is not in 'actions' - the "
-                "gesture does nothing until one exists", where, raw,
+                "config: %s names action %r, which is not in 'actions' - it "
+                "does nothing until one exists", where, raw,
             )
         return NamedAction(name=raw)
     if not isinstance(raw, dict):
@@ -1770,7 +2263,16 @@ def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | No
         return None
     # Legacy v0.1 command entries have no "action" key, just prompt/label.
     kind = raw.get("action", "prompt" if "prompt" in raw else None)
-    if kind == "log":
+    if kind == "sequence":
+        # `_parse_action_sequence`, not `_parse_sequence`: that name was taken
+        # by the *stop list* parser above, and a look and an action are two
+        # different things that both call themselves a sequence here.
+        return _parse_action_sequence(raw, where, known)
+    elif kind == "set_position":
+        target = raw.get("name")
+        if isinstance(target, str) and target.strip():
+            return SetPositionAction(name=target.strip())
+    elif kind == "log":
         event = raw.get("event")
         if isinstance(event, str) and event:
             return LogAction(event=event)
@@ -2739,7 +3241,7 @@ def parse_config(raw: dict) -> AppConfig:
         "ble_device_name", "sounds_enabled", "database_path",
         "web_enabled", "web_host", "web_port",
         "modes", "rules", "commands", "led_palette", "looks", "actions",
-        "state_looks", "scenes", "min_flash_period_s",
+        "reflexes", "state_looks", "scenes", "min_flash_period_s",
     }
     for key in raw:
         if key not in known:
@@ -2750,6 +3252,10 @@ def parse_config(raw: dict) -> AppConfig:
     # should have changed colour or the gesture should have done something.
     looks = _parse_looks(raw)
     action_pool = _parse_action_pool(raw)
+    # And the modes before the reflexes, for the third instance of the same
+    # rule: a reflex scoped to an app that is not there is worth saying at
+    # load, not at the moment nothing happened.
+    modes = _parse_modes(raw, looks, set(action_pool))
 
     return AppConfig(
         ble_device_name=_take(raw, "ble_device_name", str, defaults.ble_device_name),
@@ -2758,10 +3264,13 @@ def parse_config(raw: dict) -> AppConfig:
         web_enabled=_take(raw, "web_enabled", bool, defaults.web_enabled),
         web_host=_take(raw, "web_host", str, defaults.web_host),
         web_port=_take(raw, "web_port", int, defaults.web_port),
-        modes=_parse_modes(raw, looks, set(action_pool)),
+        modes=modes,
         led_palette=_parse_palette(raw),
         looks=looks,
         actions=action_pool,
+        reflexes=_parse_reflexes(
+            raw, set(action_pool), {mode.name for mode in modes}
+        ),
         state_looks=_parse_state_looks(raw, looks),
         scenes=scenes.parse_settings(raw.get("scenes")),
         min_flash_period_s=_parse_min_flash_period(raw),
@@ -2899,10 +3408,38 @@ def resolve_action(config: AppConfig, action: Action | None) -> Action | None:
 
     One level, by construction: `_parse_action_pool` refuses an entry that is
     itself a name, so there is no chain to walk here and no cycle to detect.
+
+    **A `SequenceAction` is resolved through here too** (TODO 33), step by
+    step, which is why every dispatch site got sequences for free rather than
+    growing a resolver of its own. It is also where the no-nesting rule is
+    enforced for the one shape the parser cannot see: a step naming a pool
+    entry that turns out to *be* a sequence. That step is dropped and the rest
+    of the sequence runs, the same call a dangling step gets.
     """
-    if not isinstance(action, NamedAction):
-        return action
-    return config.actions.get(action.name)
+    if isinstance(action, NamedAction):
+        action = config.actions.get(action.name)
+    if isinstance(action, SequenceAction):
+        steps = []
+        for index, step in enumerate(action.steps, start=1):
+            inner = step.action
+            if isinstance(inner, NamedAction):
+                inner = config.actions.get(inner.name)
+                if inner is None:
+                    log.warning(
+                        "sequence step %d names action %r, which is not in "
+                        "'actions' - skipped", index, step.action.name,
+                    )
+                    continue
+                if isinstance(inner, SequenceAction):
+                    log.warning(
+                        "sequence step %d names %r, which is itself a "
+                        "sequence - skipped, sequences do not nest",
+                        index, step.action.name,
+                    )
+                    continue
+            steps.append(replace(step, action=inner))
+        return replace(action, steps=tuple(steps)) if steps else None
+    return action
 
 
 @contextlib.contextmanager
@@ -3079,7 +3616,45 @@ def _action_to_dict(action: Action) -> dict | str:
         return {"action": "keys", "combo": action.combo, "click": action.click}
     if isinstance(action, EnterModeAction):
         return {"action": "enter_mode", "target": action.target}
+    if isinstance(action, SetPositionAction):
+        return {"action": "set_position", "name": action.name}
+    if isinstance(action, SequenceAction):
+        steps: list[dict | str] = []
+        for step in action.steps:
+            body = _action_to_dict(step.action)
+            # A named step is a bare string and never carries a wait, so there
+            # is nothing to merge into - which is what keeps the round-trip
+            # exact for both step shapes.
+            if isinstance(body, str):
+                steps.append(body)
+            elif step.wait_s:
+                steps.append({**body, "wait_s": step.wait_s})
+            else:
+                steps.append(body)
+        return {"action": "sequence", "steps": steps}
     raise TypeError(f"unknown action type {type(action).__name__}")
+
+
+def _reflex_to_dict(reflex: Reflex) -> dict:
+    """Round-trips: `then` comes back as the bare string it was written as when
+    it names a pool entry, and `while` is omitted when unset so every config
+    written before reflexes existed still round-trips byte for byte."""
+    entry: dict = {"name": reflex.name, "then": _action_to_dict(reflex.then)}
+    if reflex.when is not None:
+        entry["when"] = {
+            "field": reflex.when.field,
+            "op": reflex.when.op,
+            "value": reflex.when.value,
+        }
+    if reflex.source is not None:
+        midi_spec: dict = {"port": reflex.source.port}
+        midi_spec[reflex.source.kind] = reflex.source.number
+        if reflex.source.channel is not None:
+            midi_spec["channel"] = reflex.source.channel
+        entry["from"] = {"midi": midi_spec}
+    if reflex.while_app:
+        entry["while"] = reflex.while_app
+    return entry
 
 
 def _activation_to_dict(activation: Activation) -> dict:
@@ -3311,6 +3886,7 @@ def as_dict(cfg: AppConfig) -> dict:
         "actions": {
             name: _action_to_dict(action) for name, action in cfg.actions.items()
         },
+        "reflexes": [_reflex_to_dict(reflex) for reflex in cfg.reflexes],
         "state_looks": dict(cfg.state_looks),
     }
 

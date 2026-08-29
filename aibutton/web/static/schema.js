@@ -32,12 +32,38 @@ export const GESTURES = [
       + 'too, same wait.' },
 ];
 
-// Which actions a lifecycle hook may run - the fire-and-forget primitives.
-// Mirrors HOOK_ACTIONS in config.py, which explains why the other three are
-// missing: enter_mode, readout and standby each change what the mode *loop*
-// does next, and a hook fires beside the loop rather than inside it.
-// test_schema_mirror.py fails on drift.
-export const HOOK_ACTIONS = ['log', 'timer_toggle', 'webhook', 'osc', 'midi', 'keys'];
+// The fire-and-forget primitives, and therefore what a *step* of a sequence
+// may be - deliberately not a sequence, which is where "no nesting" stops
+// being a promise and becomes a fact about the data (config.py's
+// SEQUENCE_ACTIONS). The three that are missing from all of this - enter_mode,
+// readout and standby - each change what the mode *loop* does next, and none
+// of these run inside the loop. test_schema_mirror.py fails on drift.
+export const SEQUENCE_ACTIONS = ['log', 'timer_toggle', 'webhook', 'osc', 'midi', 'keys'];
+
+// The two edges of a sequence, mirrored from config.py so the editor stops you
+// at the same place the parser would - a limit the UI enforces and the parser
+// does not is a limit that a hand-edited file walks straight past, and one the
+// parser enforces and the UI does not is a save that silently loses steps.
+export const MAX_SEQUENCE_STEPS = 8;
+export const MAX_SEQUENCE_S = 10;
+
+// A hook may do several things in order (TODO 33), which is the one addition
+// to the fire-and-forget set: a sequence *is* fire-and-forget, it just takes
+// longer. Mirrors HOOK_ACTIONS in config.py.
+export const HOOK_ACTIONS = [...SEQUENCE_ACTIONS, 'sequence'];
+
+// Which actions a reflex may run: the hook set plus `enter_mode`. Mirrors
+// REFLEX_ACTIONS in config.py, where the one difference is explained - a hook
+// fires beside the run loop, a reflex is dispatched by it, so starting an app
+// is exactly what a reflex is for. test_schema_mirror.py fails on drift.
+export const REFLEX_ACTIONS = [...HOOK_ACTIONS, 'enter_mode', 'set_position'];
+
+// The operators a reflex's test may use - one field, one operator, one number,
+// and this is the whole list (TODO 72). Mirrors REFLEX_OPS in config.py;
+// test_schema_mirror.py fails on drift. Grown into an expression language it
+// would stop being evaluable on the device, which is the one thing it must
+// stay (ROADMAP D2).
+export const REFLEX_OPS = ['<', '<=', '>', '>=', '==', '!='];
 
 // The two lifecycle hooks (config.py's MODE_HOOKS). Shaped exactly like a
 // GESTURES entry, and rendered by the same sub-editor, because a hook *is* a
@@ -475,11 +501,19 @@ export const ACTIONS = [
       // The DAW-command preset above is the guided path; hand-tuning the raw
       // note/channel/port numbers is exactly the fringe surface Tinker is
       // for - a preset already fills all four correctly.
-      { key: 'port', label: 'MIDI port', kind: 'text', tier: 'tinker', suggest: 'midi_out',
+      // **Basic tier, not tinker** - this is the one field that decides
+      // whether anything happens at all. Hidden, it produced five bindings
+      // with no port, every note going to Microsoft GS Wavetable Synth (the
+      // first output on a typical Windows machine) while the DAW sat waiting,
+      // and no error anywhere because nothing had failed. A field that can
+      // silently send your MIDI to the wrong place is not an advanced option.
+      { key: 'port', label: 'MIDI port', kind: 'text', suggest: 'midi_out',
         placeholder: 'Button',
         hint: 'Partial name is enough - Windows appends a number that '
           + 'changes per session, so "Button" matches "Button 2". Windows '
-          + 'needs loopMIDI to create the port. Blank = first port found.' },
+          + 'needs loopMIDI to create the port. **Leave it blank and it takes '
+          + 'the first output on this machine**, which is usually the built-in '
+          + 'synth rather than your DAW.' },
       { key: 'kind', label: 'Message', kind: 'select', tier: 'tinker',
         hint: 'Note on is what a DAW learns fastest. Driving an instrument, '
           + 'not a control? Send note off too, or the note hangs.',
@@ -547,28 +581,77 @@ export const ACTIONS = [
     type: 'enter_mode',
     label: 'Launch an app',
     fields: [
-      // Dynamic <select>: the options are the takeover modes a gesture can
-      // actually start - every template whose descriptor says
-      // `startedBy: 'gesture'`, which excludes the schedule-started ones
-      // (alarm, reminders) that a clock owns instead. The widget
-      // calls this with a context object whose `getModes()` returns the
-      // sibling modes (injected by menu.js -> modeEditor -> createField), so
-      // the picker stays in sync as modes are added/renamed without this
-      // module knowing where the list lives (Dependency Inversion).
+      // Dynamic <select>: every takeover template `enter_takeover`'s own
+      // isinstance chain (main.py) actually dispatches - which is not the
+      // same set as `startedBy: 'gesture'` and used to be filtered on that
+      // by mistake (TODO "Smaller, worth doing": the launcher already offers
+      // Alarm as a manual target - `ring_alarm` is the same function either
+      // way it is entered - so excluding it here only made it reachable
+      // through one more click). Reminder stays excluded: it has no
+      // `enter_takeover` branch at all and would just fail with "not a
+      // takeover mode" if targeted. The widget calls this with a context
+      // object whose `getModes()` returns the sibling modes (injected by
+      // menu.js -> modeEditor -> createField), so the picker stays in sync as
+      // modes are added/renamed without this module knowing where the list
+      // lives (Dependency Inversion).
       { key: 'target', label: 'App to launch', kind: 'modeSelect', required: true,
-        hint: 'Which app this opens. Alarm/reminder are not listed - a '
-          + 'clock starts those, not a gesture.',
+        hint: 'Which app this opens. Reminder is not listed - it only ever '
+          + 'runs on its own schedule.',
         options: (ctx) => {
           const modes = (ctx && typeof ctx.getModes === 'function') ? ctx.getModes() : [];
           return (Array.isArray(modes) ? modes : [])
             .filter((m) => m && TAKEOVER_TEMPLATES.has(m.template)
-              && TEMPLATE_BY_TYPE[m.template]?.startedBy === 'gesture'
+              && m.template !== 'reminders'
               && typeof m.name === 'string' && m.name)
             .map((m) => ({ value: m.name, label: m.name }));
         } },
     ],
     defaults: () => ({ action: 'enter_mode', target: '' }),
     describe: (a) => `Launch “${a.target || '…'}”`,
+  },
+  {
+    type: 'sequence',
+    label: 'Do several things in order',
+    // The action that made item 25 buildable: Mackie has no return-to-zero, so
+    // "stop and rewind" is Stop, a beat, Stop - two messages one gesture has to
+    // send. It is also how a control surface sends a *press and a release*,
+    // which is what a DAW expecting a button rather than a trigger wants.
+    fields: [
+      { key: 'steps', label: 'Steps', kind: 'steps', required: true,
+        hint: 'Run in order, and the button is held until the last one is '
+          + 'done - so presses made during it are dropped, exactly as they '
+          + 'are during any other action. Each step can wait before it runs.' },
+    ],
+    defaults: () => ({ action: 'sequence', steps: [] }),
+    describe: (a) => {
+      const steps = Array.isArray(a.steps) ? a.steps : [];
+      if (!steps.length) return 'Nothing yet';
+      const shown = steps.slice(0, 3).map((step) => describeAction(step));
+      return shown.join(' → ') + (steps.length > 3 ? ` → +${steps.length - 3}` : '');
+    },
+  },
+  {
+    type: 'set_position',
+    label: 'Put an app on a position',
+    // **appOnly**: never offered to a gesture. A gesture is answered at the
+    // ambient layer, where no app is running to have a position - so the
+    // control that offers this is a reflex's, and a reflex reaches a running
+    // app only by naming it in "Only while" (TODO 74).
+    appOnly: true,
+    fields: [
+      // A free name rather than a picker: the positions belong to whichever
+      // app is running when this arrives, which is a thing only the config's
+      // "Only while" says and only at runtime. A name that matches nothing is
+      // reported by the app rather than guessed at.
+      { key: 'name', label: 'Position', kind: 'text', required: true,
+        placeholder: 'Recording',
+        hint: 'One of the positions of the app named in "Only while" - the '
+          + 'signal light’s states. The app shows it; it does not send '
+          + 'that position’s own message, because something out there '
+          + 'just told us this is where we are.' },
+    ],
+    defaults: () => ({ action: 'set_position', name: '' }),
+    describe: (a) => `Show position “${a.name || '…'}”`,
   },
   {
     type: 'standby',
@@ -578,7 +661,7 @@ export const ACTIONS = [
     // here to configure. Bind it to the five-tap and you have an off switch.
     fields: [],
     defaults: () => ({ action: 'standby' }),
-    describe: () => 'Sleep or wake the reflexes',
+    describe: () => 'Sleep or wake the menus',
   },
 ];
 
@@ -699,7 +782,7 @@ export function describeActivation(activation) {
 //
 // Takeover templates also carry the two things a user needs in order not to
 // feel trapped, as data rather than as branches in the editor:
-//   startedBy  'gesture' (a reflex's Launch an app) | 'schedule'
+//   startedBy  'gesture' (a menu's Launch an app) | 'schedule'
 //   exits(mode) one plain sentence: which press gets you back out
 // These mirror the takeover loops in main.py - run_alarm, run_stopwatch,
 // run_counter, run_pomodoro. Change a loop, change the sentence.
@@ -929,6 +1012,14 @@ export const TEMPLATES = [
       kind: 'timer_stop', nameField: 'log_as', measure: 'duration',
       noun: 'run', better: null,
     },
+    // TODO 66: what `on_exit` actually carries, for a webhook or OSC binding
+    // to read without opening main.py. `summary.clean` sorts by key name -
+    // that sorted order *is* the OSC argument order - so this list is written
+    // in that order rather than the order the code happens to build the dict.
+    summaryKeys: [
+      { key: 'elapsed_s', about: 'seconds run, at exit' },
+      { key: 'laps', about: 'lap count' },
+    ],
     // Named, like the countdown's and the metronome's: this field is
     // `required` and StopwatchBehavior now defaults to the same word, so a
     // stopwatch added here and one a scene file leaves out agree on what the
@@ -958,6 +1049,11 @@ export const TEMPLATES = [
       kind: 'log', nameField: 'event', measure: 'tally',
       noun: 'press', better: null,
     },
+    // TODO 66, sorted the way summary.clean will send it over OSC.
+    summaryKeys: [
+      { key: 'added', about: 'increments this session' },
+      { key: 'count', about: 'running total' },
+    ],
     // Named for the same reason the stopwatch's is: `event` is `required` and
     // run_counter uses it unguarded, so an empty default writes rows called ""
     // and sums every unnamed counter into one bucket.
@@ -1217,6 +1313,11 @@ TEMPLATES.push({
     kind: 'log', nameField: 'log_as', measure: 'tally',
     noun: 'block', better: null,
   },
+  // TODO 66, sorted the way summary.clean will send it over OSC.
+  summaryKeys: [
+    { key: 'blocks', about: 'work blocks completed' },
+    { key: 'focused_s', about: 'seconds spent working' },
+  ],
   defaults: () => ({
     work_s: 25 * 60, break_s: 5 * 60, long_break_s: 15 * 60,
     blocks_before_long_break: 4, extend_s: 10 * 60, advance: 'auto',
@@ -1281,6 +1382,12 @@ TEMPLATES.push({
     kind: 'log', nameField: 'log_as', measure: 'value',
     noun: 'guess', unit: '%', better: 'high',
   },
+  // TODO 66, sorted the way summary.clean will send it over OSC.
+  summaryKeys: [
+    { key: 'best_pct', about: 'closest guess, 0-100' },
+    { key: 'hits', about: 'guesses within tolerance' },
+    { key: 'played', about: 'rounds played' },
+  ],
   defaults: () => ({
     sweep_s: 4, rounds: 5, segments: 12, tolerance: 0.08, reveal_s: 1.5,
     log_as: 'hotcold',
@@ -1338,6 +1445,13 @@ TEMPLATES.push({
     kind: 'log', nameField: 'log_as', measure: 'value',
     noun: 'attempt', unit: 'ms', better: 'low',
   },
+  // TODO 66, sorted the way summary.clean will send it over OSC.
+  summaryKeys: [
+    { key: 'average_ms', about: 'mean reaction time, 0 if none played' },
+    { key: 'best_ms', about: 'fastest reaction, 0 if none played' },
+    { key: 'false_starts', about: 'presses before the light went out' },
+    { key: 'played', about: 'attempts, false starts included' },
+  ],
   defaults: () => ({
     min_delay_s: 2, max_delay_s: 6, rounds: 5, slowest_ms: 600, reveal_s: 1.2,
     log_as: 'reaction',
@@ -1440,7 +1554,7 @@ TEMPLATES.push({
       kind: 'checkbox', tier: 'tinker',
       hint: 'Bind a gesture to "Launch an app" and this becomes a menu page. '
         + 'On: leaving what it opened returns here, so long press always '
-        + 'travels one level. Off: drops straight back to your reflexes.' },
+        + 'travels one level. Off: drops straight back to your menus.' },
   ],
   // Optional, like the field: a control surface logs only if you ask it to.
   readout: {
@@ -1743,25 +1857,44 @@ export function describeTemplate(mode) {
 // these blurbs above each group, so the distinction is stated rather than
 // left to be inferred from which activations a template happens to allow.
 
+// Which templates are a *menu*: a gesture picks between things. The everyday
+// gesture map is the plain case, a launcher picks an app and a control surface
+// picks an action - one idea wearing three template names. UI-only grouping,
+// so it lives here beside the groups rather than becoming a mirrored token: a
+// launcher's `nature` is still 'takeover' and must stay that way (CLAUDE.md).
+export const MENU_TEMPLATES = ['actions', 'launcher', 'control'];
+
+// TODO 75: three groups, and the words only became true once reflexes existed
+// (TODO 71). "Reflexes" used to head the gesture maps - the most *voluntary*
+// thing on the page - under a word meaning involuntary. It now means what it
+// says, and what it displaced is a menu.
 export const MODE_GROUPS = [
   {
-    nature: 'ambient',
-    title: 'Reflexes',
-    blurb: 'Always live, and they fire without thinking. Read top to bottom: '
-      + "the first reflex that's awake now and sets this press, wins. Order "
-      + 'is priority - move one up to win. Unset gesture -> falls through to '
-      + 'the next. Below them sit the ones a clock sets off instead, where '
-      + 'position means nothing.',
+    key: 'menus',
+    title: 'Menus',
+    blurb: 'A press picks between things. The everyday map is read top to '
+      + "bottom and the first entry that's awake and sets this press wins, so "
+      + 'order is priority - move one up to win, leave a gesture unset and it '
+      + 'falls through. Launchers and control pages are the same idea with '
+      + 'the button to themselves.',
     emptyText: 'None yet.',
   },
   {
-    nature: 'takeover',
+    key: 'apps',
     title: 'Apps',
-    blurb: 'One at a time, and while it runs it owns the button - every '
-      + 'reflex is muted until you leave. An alarm launches itself at its '
-      + 'set time; the rest are launched by a reflex bound to “Launch an '
-      + 'app”.',
+    blurb: 'One at a time, and while it runs it owns the button - every menu '
+      + 'is muted until you leave. Most are launched by a press bound to '
+      + '“Launch an app”; an alarm launches itself at its set time.',
     emptyText: 'None yet.',
+  },
+  {
+    key: 'reflexes',
+    title: 'Reflexes',
+    blurb: 'The button acting with nobody pressing it. A reflex is fired by '
+      + 'something outside - a sensor, a script, a phone shortcut posting to '
+      + 'its address - and does any action the button has. Below them sit the '
+      + 'apps a clock starts instead. Position means nothing in either half.',
+    emptyText: 'Nothing happens on its own yet.',
   },
 ];
 
@@ -1772,10 +1905,15 @@ export function describeExit(mode) {
   return descriptor && descriptor.exits ? descriptor.exits(mode) : null;
 }
 
-/** Every gesture, in any other mode, that starts `mode` — the answer to "how
- *  do I get into this?". An empty list means nothing can start it, which is a
- *  mode you can configure but never reach. */
-export function findEntryPoints(mode, allModes) {
+/** Every way in to `mode` that can be named — a gesture in another mode, or a
+ *  reflex. An empty list means nothing can start it, which is a mode you can
+ *  configure but never reach.
+ *
+ *  Reflexes are listed here rather than left to the launcher fallback below
+ *  because "a script opens this" is the most surprising answer on the page,
+ *  and an app reachable *only* that way would otherwise read as reachable for
+ *  a reason that is not true. */
+export function findEntryPoints(mode, allModes, actions = {}, reflexes = []) {
   const entries = [];
   if (!mode || !mode.name) return entries;
   for (const other of allModes || []) {
@@ -1785,6 +1923,12 @@ export function findEntryPoints(mode, allModes) {
       if (action && action.action === 'enter_mode' && action.target === mode.name) {
         entries.push(`${gesture.label} → ${other.name || '(unnamed)'}`);
       }
+    }
+  }
+  for (const reflex of reflexes || []) {
+    const action = resolveBinding(reflex?.then, actions);
+    if (action && action.action === 'enter_mode' && action.target === mode.name) {
+      entries.push(`the reflex “${reflex.name || '(unnamed)'}”`);
     }
   }
   return entries;
@@ -1798,7 +1942,7 @@ export function findEntryPoints(mode, allModes) {
  * named look for it, falling back to that state's palette entry. Same answer
  * as the button gives, which is the whole point of showing it.
  *
- * Null for a template that owns no LED state (a reflex, a launcher, hot/cold,
+ * Null for a template that owns no LED state (a gesture map, a launcher, hot/cold,
  * a signal): those wear the button's own vocabulary or compute every frame, so
  * there is no one colour and inventing one would be worse than the gap.
  */
@@ -1857,18 +2001,41 @@ function exitsOf(mode, byName, actions, allModes) {
   return out;
 }
 
+/** One reflex in a sentence: what has to be true, what it does, and what it
+ *  is limited to. One formatter, because the row that edits it and the nav
+ *  that lists it must not describe the same object two ways. */
+export function describeReflex(reflex) {
+  const midi = reflex?.from?.midi;
+  // Source and test read as one clause - "MIDI note 95, velocity == 127" -
+  // because that is one circumstance said in two halves, and an arrow between
+  // them would suggest two steps.
+  const circumstance = [
+    midi ? `MIDI ${'cc' in midi ? `CC ${midi.cc}` : `note ${midi.note}`}` : null,
+    reflex?.when?.field
+      ? `${reflex.when.field} ${reflex.when.op || '<'} ${reflex.when.value ?? 0}`
+      : null,
+  ].filter(Boolean).join(', ');
+  const scope = reflex?.while ? ` (only while ${reflex.while})` : '';
+  const then = describeAction(reflex?.then);
+  return `${circumstance ? `${circumstance} → ` : ''}${then}${scope}`;
+}
+
 /**
  * The set of modes something can reach, given the whole config.
  *
  * **Roots are the things nobody has to start.** A gesture map is live by
- * definition, and a clock starts its own apps. Everything else is reachable
- * only by being pointed at - by a gesture bound to "Launch an app", or by
- * sitting in a launcher's list - and reachability is transitive, because a
- * launcher you cannot open cannot open anything either. That transitivity is
+ * definition, a clock starts its own apps, and - since TODO 71 - a reflex is
+ * fired by the world, so whatever it opens is a root too. Everything else is
+ * reachable only by being pointed at - by a gesture bound to "Launch an app",
+ * or by sitting in a launcher's list - and reachability is transitive, because
+ * a launcher you cannot open cannot open anything either. That transitivity is
  * the reason this is a walk rather than a filter, and the reason a per-mode
  * card could never answer the question on its own.
+ *
+ * *A new way to open an app is an edge in this walk, or the App page will call
+ * working configs broken.*
  */
-export function reachableModes(modes, actions = {}) {
+export function reachableModes(modes, actions = {}, reflexes = []) {
   const all = (modes || []).filter(Boolean);
   const byName = new Map(all.filter((m) => m.name).map((m) => [m.name, m]));
   const reached = new Set();
@@ -1888,6 +2055,15 @@ export function reachableModes(modes, actions = {}) {
       push(mode);
     }
   }
+  // A scoped reflex (`while`) is still a root: it opens its app when that app
+  // is running, and an app already running is reached by definition - so
+  // narrowing this by scope could only ever produce a false "unreachable".
+  for (const reflex of reflexes || []) {
+    const action = resolveBinding(reflex?.then, actions);
+    if (action && action.action === 'enter_mode' && action.target) {
+      push(byName.get(action.target));
+    }
+  }
   while (queue.length) {
     for (const target of exitsOf(queue.pop(), byName, actions, all)) push(target);
   }
@@ -1897,19 +2073,28 @@ export function reachableModes(modes, actions = {}) {
 /** Names an `enter_mode` points at that no mode answers to. Dangling on
  *  purpose (the parser warns, the editor says "(missing)"), so the page says
  *  it out loud rather than quietly repointing anything. */
-export function danglingTargets(modes, actions = {}) {
+export function danglingTargets(modes, actions = {}, reflexes = []) {
   const all = (modes || []).filter(Boolean);
   const names = new Set(all.map((m) => m.name).filter(Boolean));
-  const missing = new Map(); // target name -> [mode name that points at it]
+  const missing = new Map(); // target name -> [what points at it]
+  const note = (target, from) => {
+    const seen = missing.get(target) || [];
+    seen.push(from);
+    missing.set(target, seen);
+  };
   for (const mode of all) {
     for (const gesture of GESTURES) {
       const action = resolveBinding(mode[gesture.key], actions);
       if (!action || action.action !== 'enter_mode' || !action.target) continue;
       if (names.has(action.target)) continue;
-      const from = missing.get(action.target) || [];
-      from.push(`${gesture.label} on ${mode.name || '(unnamed)'}`);
-      missing.set(action.target, from);
+      note(action.target, `${gesture.label} on ${mode.name || '(unnamed)'}`);
     }
+  }
+  for (const reflex of reflexes || []) {
+    const action = resolveBinding(reflex?.then, actions);
+    if (!action || action.action !== 'enter_mode' || !action.target) continue;
+    if (names.has(action.target)) continue;
+    note(action.target, `the reflex “${reflex.name || '(unnamed)'}”`);
   }
   return missing;
 }

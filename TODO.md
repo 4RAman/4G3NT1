@@ -29,6 +29,29 @@ Two things that will otherwise cost you a session:
   bug** — judge new colour work on the *onboard* LED, which renders accurately,
   or against the numbers. Anything with a gradient will look warmer on the ring
   than in the web UI's preview, and the preview is the one that is correct.
+- **The MIDI does not come from the button.** A gesture travels over BLE to
+  the PC, and the *host* writes the note to a MIDI port - so reflashing can
+  change nothing about a DAW that is not responding, and an hour spent there
+  is an hour lost. (Whether it should stay that way is **80**.)
+
+## The DAW rig, as it is set up here
+
+Written down 2026-08-27, the day it first worked, because none of it is
+guessable and all of it is needed again for **77**'s test.
+
+- **loopMIDI port `4G3NT`** carries the button → DAW direction. Every binding
+  on the *DAW Control* surface names it; blank would mean *Microsoft GS
+  Wavetable Synth*, which is output 0 on this machine.
+- **Studio One has that port added as a Mackie Control device**
+  (Settings → External Devices → Add… → Mackie → Control, Receive From =
+  `4G3NT`). This is what makes note 94 mean Play. As a *keyboard* device the
+  notes arrive, appear in the MIDI monitor, record into tracks and move
+  nothing - which is exactly what a broken button looks like.
+- **The other direction does not exist yet**: **77**'s test needs a *second*
+  loopMIDI port with the same device's **Send To** pointed at it, and a reflex
+  listening on it. One cable per direction.
+- The bindings, all MCU notes on channel 1: short = Record (95), double =
+  Stop (93), triple = Play (94), four = Click (89), five = Loop (86).
 
 ## How to work this list
 
@@ -67,7 +90,7 @@ real button.
 | Single-instance guard | ✔ |
 | Verified power-cycle recovery | ✔ reconnected cleanly on a real replug |
 | A launcher | ✔ **0a** |
-| **10 apps** verified on hardware | **eleven built.** Ten verified; **Signal and the control surface have never met the button** |
+| **10 apps** verified on hardware | **eleven built.** The **control surface is verified against a real DAW** (2026-08-27, Studio One over loopMIDI, transport driven by the button). **Signal is the last one that has never met the button** |
 | **A naive-user run** | not started; unblocked since **14**, and **47** is the desk-bound rehearsal for it - three personas walked the shell, three dead ends fixed, fifteen improvements as **54-68** |
 | **24-hour soak** | not started. The service has now sat up for 12 h unattended and **an alarm rang for seven of them** with the button disconnected - not a soak, but the first evidence of what one would find |
 
@@ -86,9 +109,9 @@ what to do next. This is the other view.
 | **The light as a language** — ladder, stop list, one primitive | 19 ✔, **36** ✔, 41 ✔ | **Done.** 19c closed the last thread; nothing else has a fraction to ramp over until `GESTURE_HOLD` (**29**) |
 | **The gesture engine** — N taps, hold levels | 0b·2 ✔, 28 ✔ | Taps done. Hold levels need firmware — the cheap half of **29** |
 | **Composition** — hooks, session summaries | 23 ✔, **31** ✔, **32** ✔ | Done |
-| **Actions as a first-class idea** | 30a ✔, **33**, **34** | The pool shipped; the sequence and app documents are open |
+| **Actions as a first-class idea** | 30a ✔, 33 ✔, **34** | The pool and the sequence shipped; app documents (**34**) are what is left |
 | **Reach and hosting** — launcher, ten apps, remote UI | 0a ✔, 7 ✔, **8**, **40**, 42 ✔, **43** | The page works at phone width (42); reaching it is 8(d), an install not a feature. **40** and **43** are both "where does the host live", answered differently |
-| **Reaching other software** — OSC, MIDI out, clock in | 22 ✔, 24 ✔, **25** | Sending and listening work. **25** needs the DAW's Send To pointed back |
+| **Reaching other software** — OSC, MIDI out, clock in | 22 ✔, 24 ✔, **25** | **The outbound half is proven on real hardware** (2026-08-27): the button drives Studio One's transport. **25**'s remaining half is the DAW's Send To pointed back, which is **77**'s test |
 | **Saying a number** — ambient counting, count readout | 15 ✔, 17 ✔ | Only the human read test, on hardware |
 | **Play** — timing and guessing games | 16 ✔ | Done for forgiving games; tight rhythm needs Stage 3 |
 | **The light as a show** — a playlist app, and the ring itself | 52a ✔, **52b** | The show ships on today's wire and cost no wire code; per-pixel (52b) is still a proposal |
@@ -97,8 +120,8 @@ what to do next. This is the other view.
 | **The shell and its vocabulary** — what things are called, where they sit | 46 ✔, 45 ✔, 48c ✔, 53 ✔, 47 ✔ | **Done.** The Events page grew its charts and the read-back ran against the finished shell; what it found is **54-68** |
 | **The app paradigm** — an app installed once, holding many items | 48a ✔, 48c ✔, 49 ✔, 50 ✔, 51 ✔ | **Done.** The list groups by app, the page reports reachability, and an app's own page is now the app (51) rather than its settings. Nesting the *format* is parked as **48b**, with the measurement that put it there |
 
-| **Reflexes** — a circumstance, with an action attached | **70**, **71**, **72**, **73**, **74**, **75**, **79** | **New, 2026-08-26, and the biggest thing open.** ARCHITECTURE.md already lists `sensor` as an event kind and nothing produces one. **D10 is decided**: a reflex is an object, because most reflexes start no app at all. **71** (HTTP in) delivers most of it |
-| **The DAW, both ways** — the button hears what the transport is doing | 22 ✔, 24 ✔, **25**, **73**, **77**, **78** | **25 stops being a design problem** the moment 73 lands: MCU is two-way, so "recording" is a fact the DAW sends rather than a guess. **77** is the light, **78** is the state machine |
+| **Reflexes** — a circumstance, with an action attached | **70**, 71 ✔, 72 ✔, 73 ✔, 74 ✔, 75 ✔, **79** | **Done bar one source, 2026-08-27.** A `reflexes` list, `POST /api/reflex/{name}`, MIDI in, a one-field test on what arrives, dispatch beside the presses, and delivery into a running app. **79** (the media keys) is the only source left, and it is optional |
+| **The DAW, both ways** — the button hears what the transport is doing | 22 ✔, 24 ✔, **25**, 73 ✔, **77**, **78**, **80** | **25 stopped being a design problem when 73 landed**: MCU is two-way, so "recording" is a fact the DAW sends rather than a guess, and a signal light already follows it. **77** puts that on a control surface, **78** is the state machine, and **80** asks why a user has to install loopMIDI at all |
 | **Reading it back** — what fifteen minutes as someone else turns up | 42 ✔, 47 ✔, **54-68** | The walk is done and its dead ends are fixed; the improvements are fifteen separate items, none of them blocking |
 
 Outside the table: **0c** is hardware and gates nothing but its own
@@ -106,47 +129,91 @@ verification; **18** (Notion) is process and is parked.
 
 ## Start here next session
 
-Written 2026-08-26 at the end of the sprint below, so a cold session does not
-have to reconstruct it.
+Rewritten 2026-08-27 at the end of that session, so a cold one does not have
+to reconstruct it.
 
-**Nothing is blocked on a decision.** ROADMAP **D10** was the one open
+**Nothing is blocked on a decision.** ROADMAP **D10** was the last open
 question and it was answered on 2026-08-26: **a reflex is an object, not a
 field on a mode** — because most reflexes start no app at all, and a field
 cannot express "the DAW began recording, so change the light". Read **70**
-first; it is the umbrella and it explains why the rest are shaped as they are.
+first if reflexes are new to you; it is the umbrella and it explains why the
+rest are shaped as they are.
 
-**Start with 71.** A top-level `reflexes` list plus `POST /api/reflex/{name}`,
-dispatched through the action machinery that already exists. It makes the plant
-alarm real, it is the well-worn 4-to-6 file shape, and every later reflex
-source (**73** MIDI in, **79** media keys) plugs into the same dispatch. The
-one thing not to forget is that `reachableModes` gains a new root — miss it and
-the App page calls a working config broken.
+**Six items shipped 2026-08-27** — **71**, **72**, **73**, **74**, **75** and
+**33**. See Done for each. What they leave behind for
+everything below: `main`'s `inbound` queue and `wait_in_app`,
+`REFLEX_ACTIONS`, the pure `reflex_hears`/`reflex_matches` pair,
+`set_position`, `midi.decode`, and `SequenceAction`.
 
-**Then the DAW, which is the demo worth having**: **73** (MIDI in) → **74** (a
-reflex reaching a running app) → **77** (the light follows the transport). That
-chain turns item **25** from a design problem into a thin app, and it is the
-one sequence with a person waiting for it.
+**The DAW works, in one direction, on real hardware.** On 2026-08-27 the
+button drove Studio One's transport over loopMIDI — which closes the outbound
+half of **25** and puts the control surface through the 10-apps gate. Two
+findings, both now in [README.md](README.md) and [MANUAL.md](MANUAL.md)
+because they cost an evening between them:
 
-**The cheap-and-unblocked queue that was here is now empty.** **69, 76, 56**
-and **57** all shipped 2026-08-26, in a low-hanging-fruit pass done on Sonnet
-between sessions - see Done. What is left of the read-back is **54, 55** and
-**58-68**: thirteen items, still none of them blocking, still each an hour or
-less. **71** (below) remains the biggest thing open and the recommended next
-start; treat the read-back as filler for a session that stalls on it, same as
-before.
+- **An empty MIDI port means the first output on the machine**, which on
+  Windows is the built-in synth. The field is basic-tier now and says so.
+- **A DAW has to be told it has a Mackie Control.** Add the port as a
+  *keyboard* and the notes arrive, show in the monitor, record into tracks and
+  move nothing. This was the whole bug, and schema.js had warned about it in a
+  comment nobody reads while debugging.
 
-**Two things that are not code and block a Stage-2 gate:** a hardware sitting
-(**0c**, plus the Signal and control-surface walks and **26b**), and **14**'s
-naive-user run. Neither has moved in three sprints.
+### Start with 77b — the code half of item 77
 
-**Known live state you may trip over:** the service has been up ~12 h with the
-button **disconnected**, and an alarm fired at 07:00 and was still ringing.
-There is a **Dismiss** button in the header now. The `no-store` header on
-`/static` still needs a service restart to take effect — until then a browser
-will happily run a stale ES module graph, which looks exactly like your edit
-not having happened. Priming the HTTP cache with
-`fetch(url, {cache: 'reload'})` for each module before reloading is the
-workaround that got this session verified.
+*"77b" is this file's shorthand, not a numbered item: **77** is one item whose
+definition of done needs a real DAW, and this is the part of it that is code.*
+
+**It is small**, because the idea is already built:
+a signal light takes its position from the DAW over MIDI today (**74** +
+**73**). 77 is that on a *control surface* —
+
+- positions on the `control` template, each **naming a look** from the pool
+  (not carrying a colour: one control answers "what does this look like");
+- `run_control` adopting `wait_in_app`, so `set_position` reaches it exactly
+  as it reaches the signal light;
+- `resting()` painting the current position instead of a fixed LISTENING look
+  — *that is the whole rendering change*;
+- and the DoD's "says it is guessing": a surface with positions that **no
+  reflex can set** should say so on entry rather than showing position one as
+  if it were reported.
+
+**Then its test, which is the half code cannot do**: a second loopMIDI port,
+the DAW's Mackie Control **Send To** pointed at it, and a reflex pair on
+`note 95 velocity 127 / 0`. Arming record *by clicking in the DAW* should turn
+the light red. Everything on the button side of that is built and verified
+against a fake port.
+
+**Then 78** — one press meaning record-or-stop depending on the position. It
+is a state machine and should be recognised as one, and it says explicitly:
+do not start before 77 has run on real hardware. **33 removed its other
+blocker** (Stop, Stop is one sequence now).
+
+### The rest, in the order I would take it
+
+- **80** — *the button should be the MIDI port*. New, and the owner's own
+  question: why does a user have to install loopMIDI? Read it before promising
+  anyone anything; the Windows BLE-MIDI caveat is the crux.
+- **A hardware sitting** closes two Stage-2 gates at once: walk **Signal** (the
+  last app that has never met the button), **26b**'s colour-coding eyeball, and
+  **0c**'s re-solder, at the same desk.
+- **14**'s naive-user run and the **24-hour soak** — neither has moved in four
+  sprints, and no amount of code moves them.
+- **Filler if a session stalls**: **65** (see a webhook's payload without
+  standing up a receiver), **62** (per-field parser warnings — needs structured
+  warnings from the backend first, so not the hour it looks), **79** (media
+  keys as a reflex source, optional), and the empty-port *parse-time warning*
+  under "Smaller, worth doing".
+- **34** (app documents) is the last open half of **30**, and the biggest
+  design-shaped thing left after 80.
+
+**Known live state you may trip over:** the `no-store` header on `/static`
+needs a service restart to take effect — until then a browser will happily run
+a stale ES module graph, which looks exactly like your edit not having
+happened. Priming the HTTP cache with `fetch(url, {cache: 'reload'})` per
+module before reloading is the workaround. And **the offline editor renders
+from a snapshot**: after `tools/build_editor.py`, navigate to the file again
+rather than reloading, or you will test the previous build.
+
 
 ## Sprint
 
@@ -206,13 +273,13 @@ what stops a DAW reflex repainting the light in the middle of a Pomodoro.
 
 Ranked, and the ranking is the recommendation:
 
-1. **HTTP — `POST /api/reflex/{name}`.** Near-zero code, and it **subsumes
-   almost everything**: anything that can make a request can drive the button,
-   so the plant sensor, a cron job, Home Assistant, an iPhone Shortcut
-   (**39**) and any script arrive through one hole. Do this first and most of
-   the item is delivered.
-2. **MIDI in** (**73**). Half-built — `midi_io` already opens an input for the
-   metronome's clock listener. **This is what item 25 has been waiting for.**
+1. **HTTP — `POST /api/reflex/{name}`.** ✔ **71**, 2026-08-27. Near-zero code,
+   and it **subsumed almost everything**: anything that can make a request
+   drives the button, so the plant sensor, a cron job, Home Assistant, an
+   iPhone Shortcut (**39**) and any script arrive through one hole.
+2. **MIDI in** (**73**). ✔ 2026-08-27, and it is what item 25 had been waiting
+   for. `ClockListener` was reused rather than doubled: the backends hand over
+   all three bytes now and it reads the first.
 3. **OSC in**, the mirror of the `osc` action. Cheap.
 4. **OS media transport** (**79**) — possible, with caveats worth reading
    before promising it.
@@ -236,119 +303,7 @@ There is real overlap and it is accepted knowingly. *Do not add a clock source
 to reflexes until something wants one an alarm cannot do.*
 
 **Split into build items 71–74, plus 77–79. Do not build the umbrella.**
-
-### 71. A reflex fires an action, and HTTP is the first source
-
-**The cheap half of 70, and the one that delivers the plant alarm.** A
-top-level `reflexes` list, `POST /api/reflex/{name}`, and dispatch through the
-action machinery that already exists.
-
-The shape, following every other list-of-things in this config:
-
-```json
-"reflexes": [
-  { "name": "moisture_low", "then": { "action": "enter_mode", "target": "Water me" } },
-  { "name": "deploy_done",  "then": "celebrate" }
-]
-```
-
-The second one is a **bare string, which is a named-action reference** —
-`config.resolve_action`, exactly as a gesture binding does. CLAUDE.md is
-explicit that a fifth dispatch site calls the resolver or that surface silently
-cannot use the pool; this is that fifth site.
-
-**Parse-with-fallback applies as everywhere else**: a reflex naming an action
-that does not exist is warned about and left dangling, not quietly dropped.
-
-**The App page has to learn about it.** `reachableModes` starts from the things
-nobody has to start; a reflex firing `enter_mode` is a **new root** in that
-walk. Miss this and the page calls a working config broken — CLAUDE.md says so
-in as many words.
-
-**Definition of done.** A script posting to `/api/reflex/water_me` rings an
-alarm; the App page reports that alarm as reachable *because of the reflex*; a
-reflex nothing ever fires is visible rather than silent; and a `while` scope
-naming a missing app warns.
-
-### 72. A reflex can test the value it arrived with
-
-**The half that makes 70 powerful**, and the half most likely to turn into a
-language if nobody is watching. The body carries JSON; a test is **one field,
-one operator, one number**. `moisture < 30`, and nothing else.
-
-Bounded by construction, for **D2**'s reason: this must be evaluable by the
-on-device runtime eventually, and an expression parser is not. **The moment it
-grows an `if` or an `and`, it is a language and it is host-only forever.**
-
-**The value should land in the event log's `value` column**, which exists for
-exactly this kind of number — and CLAUDE.md's group-by-name rule then gives it
-a chart on the Events page for free.
-
-### 73. MIDI in as a reflex source — and what item 25 was waiting for
-
-A listened MIDI port turns note-on and CC into reflexes. **Read item 25
-first**: it establishes that a Mackie Control is *two-way*, that the DAW tells
-the surface what the transport is doing, and that **derived state beats
-modelled state**. 25's "point the DAW's Send To at a port the button listens
-on" is this item, and 25 stops being a design problem.
-
-**A `when` here needs three fields**: the port, the note (or CC) number, and
-**the velocity** — because MCU feedback uses velocity as the lamp: `127` means
-that button is lit, `0` means it is not. So "the DAW is now recording" is
-*note 95, velocity 127*, and "no longer recording" is *note 95, velocity 0*.
-**The same note number means both things**, which is exactly why 72's test
-exists and why a reflex ignoring velocity would fire on both.
-
-`ClockListener` already owns a MIDI input and a ctypes callback with a lifetime
-trap documented in CLAUDE.md — **reuse it, or read it before writing a second
-one.** A driver calling a collected callback kills the process outright: no
-traceback, no exception to catch.
-
-### 74. A reflex can change what a running app is doing
-
-**The invasive one, and what every interesting example needs.** Starting an app
-is a decision the mode machine already makes; reaching *into* a running
-takeover means the run loop accepting an event that is not a press. Every
-takeover awaits `device.events`, so there is nowhere for one to arrive.
-
-Options, in increasing order of honesty: inject a synthetic press (works today,
-lies about what happened, and a session summary would record a press nobody
-made); give the run loop a **second queue** it selects on alongside the
-device's; or wait for Stage 3, where `(state, event, now)` takes any event kind
-by construction and this costs nothing.
-
-**Recommend the second queue**, and recommend it now rather than at Stage 3,
-because two things want it and one is the reason this item exists: **77**'s
-transport lights, and 47's ringing-alarm dead end solved for a machine rather
-than a person.
-
-*Whatever arrives this way is an event with a kind, not a fake gesture.* An app
-that cannot tell a press from the world is an app that will lie in its log.
-
-### 75. What the mode list is called, now that reflexes are real
-
-**"Reflexes" stops being the wrong word the moment 70 exists**, which settles
-the complaint that started this. Today the group holds gesture maps — the most
-*voluntary* thing on the page — under a word meaning involuntary. After 70 it
-means what it says.
-
-The owner's proposal, and it is better than what is there:
-
-| Group | What it means | Holds |
-|---|---|---|
-| **Menus** | a gesture picks between things | the ambient map, launchers, control surfaces |
-| **Apps** | takeovers that do a job | the other ten |
-| **Reflexes** | the button acts with nobody pressing it | reflexes (**70**), and scheduled apps |
-
-**And it fixes 69's duplication for the new half by construction.** A reflex is
-its own object, so *"moisture_low → Water me"* is a row in Reflexes and the
-alarm is a row in Apps — two different things, listed once each. Only scheduled
-apps still double-list, because their schedule is still a field; that is the
-residue of **70**'s decision not to migrate them, and **69**'s collapsing is
-the answer to it.
-
-*Do not rename anything before 71 ships* — the words follow the concept, and a
-nav group called Reflexes with nothing in it is worse than the current one.
+(**71**, **72** and **74** are done; the rest still hold.)
 
 ### 77. The DAW tells the button what it is doing, and the light says so
 
@@ -357,8 +312,8 @@ owner's words: *one press to record; the DAW tells the button it's recording
 and the light turns bright, gently pulsing red; press again, the light turns
 dark blue for stopped; another press goes back to recording.*
 
-**Every piece of this is expressible once 73 and 74 exist, and none of it needs
-the button to guess.** MCU is two-way: the DAW lights the surface's own Record
+**Every piece of this is expressible now that 73 and 74 have shipped, and none
+of it needs the button to guess.** MCU is two-way: the DAW lights the surface's own Record
 lamp by sending note 95 back, so *"recording"* arrives as a fact rather than an
 inference. That is item 25's central finding and the reason it says **derived
 state beats modelled state** — a local toggle ("I sent Record, so we must be
@@ -375,8 +330,10 @@ it lacks is *more than one* resting look. So:
   **not a new concept**: it is the Signal light's `states`, which is exactly
   "the app is in one of N visible states", in a second template that needs the
   same thing.
-- A **reflex sets the current position** (needs **74**). `note 95 velocity 127
-  → "Recording"`; `note 95 velocity 0 → "Stopped"`.
+- A **reflex sets the current position** - built (**74**): `set_position` is
+  an action, and the signal light already takes one over HTTP. `note 95
+  velocity 127 → "Recording"`; `note 95 velocity 0 → "Stopped"` is that same
+  action with **73** in front of it, and the velocity is **72**'s test.
 - `resting()` paints the current position instead of a fixed LISTENING look.
   **That is the whole rendering change.**
 
@@ -394,6 +351,27 @@ listens on, arming record **by clicking in the DAW, not by pressing the
 button** turns the light red; disarming turns it blue; and with no feedback
 port configured the surface says it is guessing rather than pretending to know.
 
+#### What is already done, as of 2026-08-27
+
+Most of it. **The only code left is on the control surface**:
+
+- `set_position` exists and is delivered into a running app (**74**), and the
+  **signal light already renders a reported position** - shown, not announced,
+  because sending "record" back to the DAW that just told you it is recording
+  is a feedback loop.
+- **MIDI in works** (**73**): `note 95 velocity 127` and the same note at 0 are
+  one source and two opposite tests, verified against a fake port.
+- **The outbound half is verified on real hardware**: the button drives Studio
+  One's transport. What that run also established, and what this item's test
+  depends on, is that **the DAW must have the port added as a Mackie Control
+  device** - as a keyboard, every note arrives and nothing moves.
+
+So this item is: positions on the `control` template (each **naming a look**,
+never carrying a colour), `run_control` adopting `wait_in_app`, `resting()`
+painting the current position, and the "it is guessing" line when no reflex
+can set one. Then the test above, which needs **a second loopMIDI port** for
+the DAW's Send To - one cable per direction.
+
 ### 78. A control surface where the press depends on the position
 
 **The other half of 77, and the one that is a state machine.** Once a control
@@ -410,10 +388,9 @@ not.
 
 **It also answers item 25's last open question** without a `transport`
 template. 25 notes that MCU has no "return to zero" and that Studio One needs
-*Stop, Stop*, which `MidiAction` cannot express — so this either waits for
-**33** (`SequenceAction`) or lets a position fire two actions in order.
-**Prefer 33**: a flat list of actions with delays is wanted in several places,
-and a per-position pair is that idea with a worse name.
+*Stop, Stop*, which `MidiAction` cannot express — **33 shipped 2026-08-27 and
+is that**, so a position fires one action that happens to be two messages, and
+this item needs no per-position pair of its own.
 
 **Do not start this before 77 is running on real hardware.** The whole design
 rests on MCU feedback actually arriving, and that has never been tested here.
@@ -456,36 +433,111 @@ the same argument that parks MQTT in **70**. Revisit if a real use appears that
 a script genuinely cannot serve.
 
 
+### 80. The button should *be* the MIDI port — getting off loopMIDI
+
+**Asked by the owner 2026-08-27, at the desk, with a DAW that could see our
+notes and would not act on them:** *"would it be at all possible to build our
+own path, rather than using loopMIDI? I don't want users to have to depend on
+third party software. How do MIDI controller devs do it?"*
+
+**The answer to the second question settles the first: they don't have this
+problem, because the controller *is* a MIDI port.** A Launchpad needs no
+virtual cable - it enumerates over USB as a class-compliant MIDI device, and
+Windows, macOS, Linux and iOS all show it in the DAW's port list with nothing
+installed. Wireless controllers do the same over **BLE-MIDI**, a published
+GATT service that those four operating systems pair natively.
+
+**Why we need loopMIDI today and they do not.** Our MIDI comes out of a *PC
+application* that is pretending to be a controller, and **Windows has no API
+for an application to create a MIDI port.** WinMM and WinRT MIDI can only open
+ports the system already enumerates. Creating one means shipping a kernel
+driver - which is exactly what loopMIDI is a front end for (teVirtualMIDI,
+commercially licensed) - with the code signing and installer burden that
+implies. That is not a road this project should go down for one action.
+
+So the real fix is not a better cable. **It is to stop being a PC app in the
+MIDI path**, which is the direction [ARCHITECTURE.md](ARCHITECTURE.md) is
+already travelling.
+
+#### The two paths that remove the dependency
+
+- **(a) USB-MIDI when it is plugged in — and on Windows this is the one that
+  actually works.** The S3 has native USB and micropython-lib ships a
+  `usb-device-midi` class on top of `machine.USBDevice`. A class-compliant USB
+  MIDI device needs no driver anywhere, and - the part that matters here - it
+  enumerates as an *ordinary* MIDI port, so every DAW sees it however old its
+  MIDI plumbing is.
+  **The risk to test first:** this board's MicroPython uses the USB-Serial/JTAG
+  peripheral (see the sticky-download-mode gotcha in CLAUDE.md), and a TinyUSB
+  device build may be a different firmware - which would also change how the
+  board is flashed and talked to. Verify before promising it.
+
+- **(b) BLE-MIDI from the ESP32 — free on macOS and iOS, and the Windows
+  caveat is the whole story.** The button already speaks BLE, and BLE-MIDI is a
+  standard GATT service that macOS and iOS pair as a MIDI port with nothing
+  installed. **Windows is the problem**: its BLE-MIDI support arrived with the
+  WinRT/UWP MIDI API, and ports that appear there are not visible to the WinMM
+  enumeration most Windows DAWs still use - which is precisely why Windows
+  users of BLE controllers end up installing a bridge *and loopMIDI*. So on the
+  platform this project runs on, (b) may swap one third-party dependency for
+  another.
+  **Verify that before building it** - it is a single question with a decisive
+  answer (does Studio One list a paired BLE-MIDI device on Windows?), and it
+  decides whether (b) is a Windows answer or only a Mac/iOS one.
+  There is a second risk either way: the host already holds a BLE connection to
+  the same peripheral, and whether the OS MIDI stack and `bleak` can share one
+  device is unknown here.
+
+#### What not to do
+
+- **Do not write a Windows virtual MIDI driver.** Kernel mode, EV signing,
+  WHQL, an installer, and a support burden per Windows release - for one
+  feature that (a) and (b) deliver as a side effect of hardware doing its job.
+- **Do not bundle loopMIDI.** teVirtualMIDI's SDK is licensed, and shipping
+  someone else's driver is a dependency with a lawyer attached rather than a
+  download.
+- **Windows MIDI Services** (Microsoft's new open-source MIDI stack) offers
+  app-created virtual endpoints *and* a modern route to BLE-MIDI, which would
+  remove this problem on Windows for free and would also un-block (b). It is
+  not everywhere yet, so it is a thing to watch rather than a plan to build on
+  - but it is the reason not to invest in a driver of our own.
+
+#### What this changes if it lands
+
+**The DAW link stops being a host feature and becomes a device one.** Item
+**25**, **77** and **78** are all written around the host sending MCU notes and
+listening for MCU feedback (**73**); if the button is the port, the feedback
+arrives *at the button*. On (a) that is fine - the device already talks to the
+host - but the reflex would come in over the button's own link rather than
+through `midi_io`, and `MidiSource` would gain a second source kind rather than
+being replaced. **Nothing built so far is wasted**: the actions, the reflexes,
+the tests on the value and the transport app are all above the transport layer.
+
+**Do not start this before 77 has run once on real hardware over loopMIDI.**
+The point of that test is to prove the *protocol* conversation works - which
+notes, which velocities, which device type - and it is much cheaper to debug
+with a cable that already exists than through a new one being written.
+
 ### 54-68. What the three-POV read-back found
 
 **Raised 2026-08-26 by item 47** (see Done), which walked the finished shell as
 three fixed personas. The bugs and dead ends it turned up were fixed in the
 same pass; these were fifteen further improvements, five per point of view,
 deliberately *not* one item - each stands alone and several are an hour.
-**54, 55, 56, 57, 59, 61, 63, 64 and 68 shipped 2026-08-26** - see Done. Six
-remain open: 58, 60, 62, 65, 66, 67.
+**54, 55, 56, 57, 58, 59, 60, 61, 63, 64, 66, 67 and 68 shipped 2026-08-26** -
+see Done. Two remain open: 62, 65.
 
 Nothing here is a bug. The page works; these are the places where it makes the
 reader do the work.
 
-#### (a) The household user - never opens a config file
-
-- **58. The only way to press the button is behind a toggle labelled "Test".**
-  That is right when the button is in your hand and wrong in the case that
-  actually sends people to this page: the button is across the room, flat, or
-  out of range. **The ringing-alarm half of this was fixed** (see Done); the
-  general case is still that a disconnected button leaves the page with no
-  visible controls at all.
-
 #### (b) The tinkerer - edits JSON when annoyed
 
-- **60. A validation error names the field and not where it is.**
-  `_collectErrors` produces "Wake up: Give up after must be a number" and the
-  Save bar prints it. Nothing scrolls to the control or marks it. With eleven
-  modes and one editor on screen, finding it is the work.
 - **62. Parser warnings appear once, on load, in the Save bar.** They are
   per-key and they know which key. A dangling look or a bad ladder rung should
   mark its own field, not print into a `<pre>` that the next Save overwrites.
+  **Harder than it reads**: `parse_config`'s warnings are plain log strings
+  (`record.getMessage()`), not `{mode, key}` pairs, so marking the right field
+  needs the backend to emit structured warnings first - not a client-side fix.
 
 #### (c) The developer - wiring the button into other software
 
@@ -493,17 +545,6 @@ reader do the work.
   "Show on the button"; a webhook has no equivalent. An app's summary keys are
   merged flat into the payload, and there is no way to see the result without
   standing up a receiver.
-- **66. Which keys an app reports on exit is discoverable only in `main.py`.**
-  `summary.clean` merges them flat into a webhook and appends them
-  *positionally* to an OSC message - so for OSC the **argument order is the
-  contract**, and CLAUDE.md already says an app reports the same keys every
-  time or none. The editor should list them per app. This is the one that makes
-  `on_exit` usable by someone who did not write the app.
-- **67. A MIDI or OSC action reports its result only in the global status
-  line.** `last_message` carries "MIDI note on 94 vel 127 ch1 -> Microsoft GS
-  Wavetable Synth", which is exactly right and is overwritten by the next
-  action anywhere. Wiring a DAW means watching the header and guessing which
-  press you are looking at.
 
 ### 52b. Per-pixel ring patterns *(a protocol proposal, not a decision)*
 
@@ -994,17 +1035,6 @@ time-of-day patterns — a dashboard over `EventStore`), (b) *device* telemetry
 (BLE reconnect frequency, gesture-to-feedback latency, dropped presses), or
 (c) *hosting* metrics once item 8 exists. **Ask which.**
 
-### 33. `SequenceAction` — a flat list with delays
-
-**Split out of 30b (D9 decided — see ROADMAP 3d).** A flat list of actions
-with optional per-step delays. TODO **25** needs it (Mackie has no
-return-to-zero, so "stop and rewind" is *Stop, Stop*). **Bounded by
-construction — no loops, no conditionals, no nesting**, or it is a language
-the device runtime cannot run. Decide the two edges before code: a sequence
-with delays *holds the button* (presses during it follow the existing
-drop-while-busy rule, and the editor hint says so), and the parser enforces a
-maximum length and total duration rather than trusting the editor to.
-
 ### 34. App documents, and app-bound actions
 
 **Split out of 30c (D9 decided — ARCHITECTURE.md "Apps own data" is the
@@ -1024,9 +1054,9 @@ view.
 
 **D9 is decided (2026-08-19)** — ARCHITECTURE.md "Apps own data" is the
 design, ROADMAP 3d the taxonomy (System / Custom / App-bound). The build
-halves are numbered: **(a) the named action pool shipped 2026-08-20 — see
-Done**; (b) the `SequenceAction` is item **33**; (c) app documents and
-app-bound actions are item **34**.
+halves are numbered: **(a) the named action pool shipped 2026-08-20 and (b)
+the `SequenceAction` on 2026-08-27 — see Done**; (c) app documents and
+app-bound actions are item **34**, the last one open.
 
 Nothing is left open under this number itself.
 
@@ -1050,10 +1080,17 @@ is all someone wants, this item is not needed. **Only the record cycle needs
 state**, because "start recording" and "stop and rewind" are different messages
 that share a gesture.
 
-**Superseded in part by item 73.** "A port the button listens on" is now its
-own item, under the umbrella of **70** - so this stops being a design problem
-and becomes a thin app on top of a general inbound-signal source. **Read 70
-before starting this.**
+**Mostly answered, 2026-08-27.** The outbound half is **verified on real
+hardware**: a control surface drives Studio One's transport over loopMIDI, and
+the two things that stopped it working are written down in
+[README.md](README.md) and [MANUAL.md](MANUAL.md) - name the port, and add it
+to the DAW as a *Mackie Control* device rather than a keyboard. The inbound
+half is a `from` on any reflex (**73**), so "a port the button listens on" is
+no longer a design problem either.
+
+What is left of this item is the *transport app*: **77** for the light,
+**78** for the press that depends on it - and **80** for the question of why a
+user has to install loopMIDI to have any of it. **Read 70 before starting.**
 
 **The important finding: the state does not have to be guessed.** A Mackie
 Control is a *two-way* protocol - the DAW sends note-on back to the surface to
@@ -1284,14 +1321,22 @@ denominator along with the deadline.
 
 ## Smaller, worth doing
 
-- **The launcher offers Alarm modes and `enter_mode` does not.**
-  `launcher_targets` filters on `TAKEOVER_BEHAVIORS`, which includes
-  `AlarmBehavior`, so a scheduled alarm shows up in the launcher menu and can be
-  started by hand; the `enter_mode` target picker in schema.js filters on
-  `startedBy: 'gesture'` and excludes it. `ReminderBehavior` is in neither,
-  being absent from `TAKEOVER_BEHAVIORS` entirely. Either one of the two filters
-  is wrong or the difference is deliberate and wants writing down — it is
-  currently neither. Found 2026-08-22.
+- **An empty MIDI port still means "the first output", and now it says so.**
+  Found 2026-08-27, the hard way: a DAW Control surface with five MCU bindings
+  had `"port": ""` on every one, so every note went to *Microsoft GS Wavetable
+  Synth* - output 0 on this machine - while the DAW sat waiting on a loopMIDI
+  port. The field was `tier: 'tinker'`, so the setup path that produced it
+  never showed the field at all.
+
+  **Fixed the same day**: the port is a basic-tier field now, and its hint
+  says what blank does. The rule it stands for is in
+  [CLAUDE.md](CLAUDE.md) - a field that decides whether an action does
+  anything at all is not an advanced option.
+
+  **Still open, and worth doing when the parser is next touched**: warn at
+  load when a `midi` action has an empty port *and* the machine has more than
+  one output. That is the fallback-with-a-warning pattern used everywhere else
+  here, and it is the half that reaches a hand-edited file.
 
 - **Presses dropped while busy.** The loop runs one action at a time and
   discards presses during the 2 s SUCCESS display. Deliberate, but it makes
@@ -1389,6 +1434,277 @@ denominator along with the deadline.
 Compressed to the decisions that still bind. Where a rule governs future code
 it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
 
+- ~~**33. `SequenceAction` — a flat list with delays**~~ - 2026-08-27. The
+  action item **25** has wanted since it was written: Mackie has no
+  return-to-zero, so "stop and rewind" is *Stop, a beat, Stop* - two messages
+  one gesture has to send.
+
+  ```json
+  { "action": "sequence", "steps": [
+      { "action": "midi", "port": "4G3NT", "kind": "note_on", "number": 93, "value": 127 },
+      { "action": "midi", "port": "4G3NT", "kind": "note_on", "number": 93, "value": 0, "wait_s": 0.05 } ] }
+  ```
+
+  The rules that bind are in [CLAUDE.md](CLAUDE.md) — *flat, bounded, and its
+  limits live in the parser*, and *a new action shape is resolved in
+  `resolve_action`, not at each dispatch site*. The decisions worth keeping:
+
+  - **The two edges the item said to decide first.** It **holds the button**
+    (presses during it are dropped by the existing rule, and the editor hint
+    says so), and the parser — not the editor — enforces
+    `MAX_SEQUENCE_STEPS = 8` and `MAX_SEQUENCE_S = 10`, truncating with a
+    warning rather than rejecting. Both numbers are mirrored into schema.js so
+    the editor stops you where the parser would.
+  - **`wait_s` is written on the step it delays**, not after the previous one:
+    "wait, then do this" is the order a person reads, and a sequence's whole
+    job is the gap *between* two messages.
+  - **A step may name a pooled action; a named step has no delay.** A bare
+    string has nowhere to put one, and inventing a wrapper object for that case
+    would be a second step shape to read and write.
+  - **Nesting is refused twice.** Inline, by the parser; by name, by
+    `resolve_action` - the shape the parser cannot see, since a pool entry may
+    itself be a sequence. Both drop the step and keep the rest.
+  - **Every step runs even after one fails**, and the first failure is what the
+    status line reports. A sequence is a script, not a transaction: if the
+    webhook is down, the MIDI note that was going to follow it is still what
+    the button was asked to send.
+  - **The editor got one new widget, not one new page** (`kind: 'steps'` in
+    [widgets.js](aibutton/web/static/widgets.js)): numbered rows with the
+    action's own fields, a wait box, reorder arrows and a remove. It lives with
+    the field system rather than with one page because a sequence binds
+    anywhere an action binds.
+
+  **What this unblocks:** **78** (a control surface where the press depends on
+  the position) wanted this for the Stop-Stop case and can now have it, and a
+  DAW that expects a *press and a release* rather than a bare trigger is one
+  two-step sequence away.
+
+- ~~**73. MIDI in as a reflex source — and what item 25 was waiting for**~~ -
+  2026-08-27. A listened port turns notes and CCs into reflexes, which is the
+  half of item **25** that was never a design problem so much as a missing
+  input.
+
+  ```json
+  { "name": "rec_on",
+    "from": { "midi": { "port": "Button", "note": 95 } },
+    "when": { "field": "velocity", "op": "==", "value": 127 },
+    "while": "Transport",
+    "then": { "action": "set_position", "name": "Recording" } }
+  ```
+
+  The rules that bind are in [CLAUDE.md](CLAUDE.md) — *a source says which
+  messages reach a reflex; the test says whether they fire it*, and *a driver
+  callback hands three bytes to the loop and does nothing else*. What is worth
+  keeping here:
+
+  - **It needed no new comparison language.** The message becomes a payload
+    (`{note, velocity, value, channel}`) and **72**'s one-field test does the
+    rest, which is what makes *note 95 velocity 127* and *the same note at 0*
+    one source and two opposite tests — the exact ambiguity item 73 was
+    written to point at.
+  - **A note-off reads as value 0** (`midi.decode`). The only thing that sends
+    notes *to* a button is a control-surface protocol using them as lamps, and
+    a DAW that spells the dark half as a note-off means the same thing. One
+    test catches both spellings.
+  - **`listen` now hands over all three bytes**, both backends. `ClockListener`
+    reads the status byte and defaults the rest, so the single-byte clock
+    messages it exists for are unchanged.
+  - **One listener per port, opened on the tick.** The wanted set is derived
+    from the config, so a reflex added in the editor starts listening without a
+    restart, and a port that only exists once loopMIDI or the DAW is running is
+    retried on a slow timer (`_MIDI_RETRY_S`), warning only when the reason
+    changes.
+  - **`from` is additive.** A MIDI reflex keeps its URL, so it is testable with
+    `curl` while the DAW is closed — which is how most of this was verified.
+
+  **Verified end to end against a fake backend**: the service opened the port,
+  a CC fired a top-level reflex, note 95 velocity 127 moved a *running* signal
+  light to Recording and velocity 0 moved it back (**74** + **77**'s light half
+  in one line), readings were attributed to the app while it ran and to nothing
+  before it, a note nobody named and a clock byte did nothing, and the listener
+  closed on shutdown. **Not yet run against a real DAW** — that is **77**'s
+  definition of done and needs the Send To pointed at a loopMIDI port.
+
+- ~~**74. A reflex can change what a running app is doing**~~ - 2026-08-27.
+  The invasive one, and it went in as the recommended **second queue** rather
+  than as a synthetic press.
+
+  ```json
+  { "name": "rec_on", "while": "Transport",
+    "when": { "field": "velocity", "op": "==", "value": 127 },
+    "then": { "action": "set_position", "name": "Recording" } }
+  ```
+
+  The rules are in [CLAUDE.md](CLAUDE.md) - *a reflex reaches a running app
+  only by naming it*, and *what the world reports is shown, not announced*.
+  The four decisions:
+
+  - **`wait_in_app` is the takeover's `_wait_for_trigger`.** Same contract
+    (press, or None on shutdown/timeout) plus one more answer: a
+    `SetPositionAction`. Anything else the reflex carries it runs itself, so an
+    app never grows a second `execute()` path and the app's light is left
+    alone. **An app opts in by calling it**; one that does not keeps
+    `_wait_for_trigger` and reflexes wait for it, exactly as under **71**.
+  - **The timeout is a deadline, not a fresh clock per arrival.** A ringing
+    alarm's grace period must not be extended by traffic nobody asked for -
+    the bug you only find at 3 a.m.
+  - **A reflex for somebody else is held, not requeued.** Requeueing
+    immediately spins (take, put back, take); acting on it now would let the
+    world interrupt an app it was not addressed to. It goes back on the queue
+    when the app hands the button over, in arrival order, which is exactly the
+    "waits its turn" behaviour 71 shipped.
+  - **`set_position` is the third loop-owned action**, after `enter_mode` and
+    `standby`, and the narrowest: only a *running* app can perform it. Marked
+    `appOnly` in schema.js so a gesture is never offered it - a gesture is
+    answered at the ambient layer, where there is no app to have a position -
+    and `handle` says so plainly if a hand-written config binds one anyway.
+
+  **The consumer today is the signal light**, which already had named states:
+  a reflex moves it between them, paints it, and logs the position the same
+  way a press does - so a day's chart mixes reported and pressed changes
+  without lying about either. It does **not** fire that position's own action,
+  the rule entering already followed, and with a DAW that is the difference
+  between a light and a feedback loop. **This is 77's design prototyped on the
+  template that already had positions**; what 77 adds is the same on a control
+  surface, fed by MIDI (**73**) instead of by HTTP.
+
+  Verified end to end over HTTP against a throwaway service: a press opened
+  the app, then `rec_on`/`rec_off` moved the light with nobody touching the
+  button, a velocity failing its test left the position alone but still logged
+  the reading, an unknown position was reported rather than guessed, and an
+  unscoped reflex sat waiting until the app was left and then fired.
+
+- ~~**72. A reflex can test the value it arrived with**~~ - 2026-08-27, the
+  same day as **71**, because a reflex that cannot look at what it was told is
+  a doorbell rather than a sensor.
+
+  ```json
+  { "name": "moisture_low", "when": { "field": "moisture", "op": "<", "value": 30 },
+    "then": { "action": "enter_mode", "target": "Water me" } }
+  ```
+
+  ```bash
+  curl -X POST localhost:8080/api/reflex/moisture_low -d '{"moisture": 12}' -H 'content-type: application/json'
+  ```
+
+  The rules that bind are in [CLAUDE.md](CLAUDE.md) - *one field, one
+  operator, one number*, and *a number that arrived is logged whether or not
+  it fired*. What is worth keeping here:
+
+  - **`REFLEX_OPS` is the whole language**, six comparisons, mirrored in
+    schema.js and pinned by [test_schema_mirror.py](tests/test_schema_mirror.py).
+    There is deliberately no "add another condition" in the editor: two
+    conditions is an expression parser, and an expression parser never moves
+    onto the device (**D2**).
+  - **The loop evaluates, the endpoint carries.** `reflex_matches` is pure and
+    has one call site, so **73**'s MIDI source applies the same test instead of
+    growing its own. The HTTP reply still says *accepted*, never *matched* -
+    it is a queue, and the button may be busy.
+  - **A missing field does not fire.** The alternative - firing when the field
+    is absent - turns a renamed sensor key into an alarm nobody can stop,
+    which is the failure people unplug the device over.
+  - **A broken `when` is dropped and the reflex is kept**, firing
+    unconditionally and warning. A silenced reflex is indistinguishable from a
+    sensor that stopped reporting; a noisy one is at least visible.
+  - **The reading is logged on arrival, under the reflex's name**, so 88 and 12
+    both land in `value` and the Events page charts the sensor for free. The
+    action's own rows are separate and unchanged.
+
+  Verified end to end over real HTTP against a throwaway service (MockDevice,
+  its own port and database): 12 fired and logged, 88 logged only, a wrong
+  field did neither, a pooled action fired by name, a typo answered 404 naming
+  the reflexes that exist, and `enter_mode` put the button in the app.
+
+- ~~**75. What the mode list is called, now that reflexes are real**~~ -
+  2026-08-27, straight after **71**, because the word collided the moment a
+  real reflex existed. Three groups, the owner's own table:
+
+  | Group | What it means | Holds |
+  |---|---|---|
+  | **Menus** | a press picks between things | the everyday gesture map, launchers, control pages |
+  | **Apps** | takeovers that do a job | the other ten |
+  | **Reflexes** | the button acts with nobody pressing it | reflexes (**71**), and the apps a clock starts |
+
+  The vocabulary rule is in [CLAUDE.md](CLAUDE.md) - three words, and the
+  tokens still do not move. What is worth keeping here:
+
+  - **`MENU_TEMPLATES` is UI-only grouping** (`actions`, `launcher`,
+    `control`), beside `MODE_GROUPS` in schema.js. A launcher's `nature` is
+    still `'takeover'`, because that mirrors `TAKEOVER_BEHAVIORS`; what
+    changed is which *heading* it is listed under, and that was never a
+    mirrored fact.
+  - **A group is keyed by `key`, not by `nature`** - there are three groups
+    and two natures now, which is exactly why the old code could not express
+    this.
+  - **The Reflexes group lists things that are not modes**, so it does not go
+    through `_navRow`: a reflex has no look to swatch and can never be the
+    running thing. Selecting one scrolls its row in the Reflexes section into
+    view and marks it (`_jumpToReflex`, the move TODO 60 built) rather than
+    filling the detail pane - **two editors for one object is how a page
+    starts lying**.
+  - **The duplication 69 complained about is fixed for the new half by
+    construction**: a reflex is its own object, so *"moisture_low → Water me"*
+    is a row in Reflexes and the alarm is a row in Apps - two things, listed
+    once each. Only a *scheduled* app still appears twice, which is **70**'s
+    decision not to migrate schedules; folding (**69**) is the mitigation that
+    already shipped for it.
+
+- ~~**71. A reflex fires an action, and HTTP is the first source**~~ -
+  2026-08-27. The cheap half of **70**, and the one that makes the plant alarm
+  real: a top-level `reflexes` list, `POST /api/reflex/{name}`, and dispatch
+  through the action machinery that already existed.
+
+  ```json
+  "reflexes": [
+    { "name": "moisture_low", "then": { "action": "enter_mode", "target": "Water me" } },
+    { "name": "deploy_done",  "then": "celebrate", "while": "Focus" }
+  ]
+  ```
+
+  What still binds is in [CLAUDE.md](CLAUDE.md) — *a reflex adds a source of
+  events and no new vocabulary of consequences*, and *a circumstance is not a
+  press and never travels as one*. The four decisions behind them:
+
+  - **`then` is any action, from a list.** `REFLEX_ACTIONS` is the hook set
+    plus `enter_mode` — mirrored in schema.js, tested in
+    [test_schema_mirror.py](tests/test_schema_mirror.py). `readout` and
+    `standby` stay out: both change what the loop does with the *next gesture*,
+    and nobody is standing at the button to see the answer. A bare string is a
+    pool reference, so `handle_reflex` is the fifth `resolve_action` site
+    CLAUDE.md predicted.
+  - **A second queue, not a synthetic press.** `_wait_for_press_or_reflex`
+    selects on the device's queue and `inbound`; a press wins a tie and
+    whichever getter also fired is put back rather than dropped. `run()` takes
+    the queue as an argument the way it takes the device, which is how the
+    tests post a circumstance with no web server up.
+  - **Presses made while busy are dropped; reflexes are not.** A press whose
+    moment passed is noise; a plant that has gone dry still means it. Bounded
+    at `_INBOUND_MAX = 16` so a script in a loop cannot queue an hour of them,
+    and the endpoint answers 503 rather than waiting.
+  - **`while` was enforced from the first version and could not match yet.**
+    A takeover is awaited inside `handle`, so nothing drained `inbound` while
+    an app ran. Enforced anyway so the field would never mean one thing and
+    later another - and **74**, later the same day, made it fire.
+
+  **The App page learned about it** (`reachableModes`, `findEntryPoints`,
+  `danglingTargets` all take reflexes): an app opened only by a reflex now
+  reads *"the reflex “moisture_low”"* rather than "unreachable", and a reflex
+  pointing at no mode is named in the same warning a gesture gets. Verified in
+  the offline editor.
+
+  **Where you edit one**: the Modes tab, above the named-action pool, each row
+  carrying the URL that fires it — a reflex has no press to watch for, so the
+  config is the only place it can be seen at all.
+
+  **Standby does not mute a reflex** - standby puts the *ambient layer* to
+  sleep, and a plant that has gone dry has not stopped meaning it because
+  nobody is at the desk. Said in a comment at the one place it is decided.
+
+  **Not built, on purpose**: no event row per fire (that arrives with **72**'s
+  value, which is what the `value` column is for) and no clock source (**70**
+  says not until something wants one an alarm cannot do). The endpoint accepts
+  a JSON body and ignores it, so a script written today survives **72**.
+
 - ~~**A named look built from a preset arrived empty**~~ - 2026-08-26.
   Reported as "it always defaults to selecting single colour, which removes the
   other colours in a sequence, and they don't come back".
@@ -1431,14 +1747,15 @@ it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
   side panel ran longer than the screen, and the group you were not working in
   was pure scrolling. Each group's title in
   [menu.js](aibutton/web/static/menu.js) is a button now; a click folds that
-  group's body, remembered per browser via `nav-fold:<nature>` in
+  group's body, remembered per browser via `nav-fold:<group>` in
   [prefs.js](aibutton/web/static/prefs.js) - a view preference, so it costs
   `config.json` nothing and does not survive to a scene.
 
   **The item's second complaint - Alarm and its kind listed twice - is
   deliberately untouched.** That is **48a** working as designed, and the real
-  fix is **75**'s taxonomy; folding was named as the cheap mitigation for it
-  and nothing more, so 75 keeps whatever it still has to say.
+  fix was **75**'s taxonomy, which has since landed: a reflex is its own
+  object and is listed once, and only a *scheduled* app still appears twice -
+  **69** is still the answer to that half.
 
 - ~~**56. The App page led with a warning a novice could not act on**~~ -
   2026-08-26. "4 installed apps have nothing that can reach them" sat above
@@ -1484,6 +1801,61 @@ it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
     second list to drift. `/api/status` carries it as `capabilities_absent`
     and the header shows `(missing: …)` when non-empty - the half that
     decides whether a developer's feature will work, previously invisible.
+
+- ~~**58, 60, 66, 67 - four more read-back fixes**~~ - 2026-08-26, another
+  low-hanging-fruit pass done on Sonnet between sessions.
+
+  - **58.** The header's pane toggle (`index.html`) relabels itself "◧ Press
+    the button" and picks itself out in amber whenever the real button is
+    connected but not `mock` and not `device_connected` - exactly the case
+    that sends someone here. Not opened automatically - `sidepane.js`'s
+    "only appears when asked" still holds - just made obvious that asking is
+    the way in.
+  - **60.** A failed Check/Save (`menu.js`) now switches to the first error's
+    panel and mode, re-validates the freshly selected mode so its `.fld-err`
+    spans populate, and scrolls the bad field into view with a brief `.fld-jump`
+    outline. `_collectErrors` returns `{text, panel, mode}` per error instead
+    of a bare string; the Save bar's text is unchanged.
+  - **66.** Each app that reports something on exit now carries
+    `summaryKeys` on its template descriptor (`schema.js`) - key names sorted
+    the way `summary.clean` will actually send them over OSC, not the order
+    the Python happens to build the dict in - shown as a hint under "Around
+    the session" (`modeEditor.js`). Covers the five apps that report anything:
+    Stopwatch, Counter, Intervals, Hot/Cold, Reaction. **Not yet mirror-tested**
+    against `main.py`'s real `tally()`/summary dicts the way `readout` is
+    (`test_app_readout.py`) - a manual read of the source as of 2026-08-26,
+    and CLAUDE.md's own rule says that should not stay true for long.
+  - **67.** A short client-side history (`index.html`, `#press-log`, 5 deep)
+    keeps the last few `last_message`s in the Test panel's Press section
+    instead of only the header's one line, which the next action overwrote
+    before a DAW-wiring session could read it. No backend change - polls the
+    same `/api/status` and appends on every value change.
+
+  **Found in passing, not fixed**: testing 60 against the live config turned
+  up three pre-existing validation failures already sitting in the saved
+  file - Pomodoro's ramp colour and both Alarm/Work Alarm's "Give up after" -
+  none related to this session's edits and none saved over. Worth a look next
+  time that page is open; `Check` on the Modes tab will jump straight there.
+
+- ~~**The launcher offered Alarm modes and `enter_mode` did not**~~ -
+  2026-08-26. Found 2026-08-22, resolved the same low-hanging-fruit pass.
+  `main.py`'s `enter_takeover` dispatches `AlarmBehavior` through the same
+  `ring_alarm` either way a mode is entered - by its schedule or by hand - and
+  `launcher_targets` (filtering on `TAKEOVER_BEHAVIORS`) already offered Alarm
+  as a manual target on that basis. The `enter_mode` action's own target
+  picker (`schema.js`) was the odd one out: it filtered on
+  `startedBy: 'gesture'`, a field describing a mode's *default* activation,
+  not whether a gesture can enter it - which happened to exclude Alarm too.
+
+  **Fixed by widening the picker to match what `enter_takeover` actually
+  dispatches**, not by narrowing the launcher: `enter_mode`'s options are now
+  every `TAKEOVER_TEMPLATES` entry except `reminders`, the one template with
+  no `enter_takeover` branch at all (it would fail clean with "not a takeover
+  mode" if targeted, which is why it stays excluded rather than the
+  inconsistency going the other way). Verified live: Alarm and Work Alarm now
+  appear in a gesture's "App to launch" picker; Reminder still does not.
+  No backend change - `enter_mode`'s dispatch already accepted an Alarm
+  target, the UI just never offered it.
 
 - ~~**54. The Lights tab opened five colour editors at once**~~ - 2026-08-26.
   The named-look pool got a collapsed row years ago for exactly this reason;

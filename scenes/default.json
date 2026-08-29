@@ -55,6 +55,12 @@
       "advance": "break_only",
       "log_as": "pomodoro",
       "waiting_style": "solid",
+      "ramp": [
+        {
+          "color": "#ffffff",
+          "at": 0
+        }
+      ],
       "short_press": "toggle",
       "long_press": "exit",
       "double_tap": "extend"
@@ -102,10 +108,10 @@
       "activation": {
         "type": "manual"
       },
-      "event": "Habit",
       "looks": {
         "COUNTING": "Got It"
-      }
+      },
+      "event": "Habit"
     },
     {
       "name": "Alarm",
@@ -126,7 +132,8 @@
       "message": "Wake up",
       "label": "",
       "snooze_minutes": 10,
-      "dismiss_event": "woke_up"
+      "dismiss_event": "woke_up",
+      "grace_minutes": 0
     },
     {
       "name": "Countdown 60s",
@@ -187,101 +194,14 @@
       }
     },
     {
-      "name": "Test Reminder",
-      "template": "reminders",
-      "activation": {
-        "type": "schedule",
-        "at": "12:45",
-        "days": [
-          "mon",
-          "tue",
-          "wed",
-          "thu",
-          "fri",
-          "sat",
-          "sun"
-        ]
-      },
-      "looks": {
-        "ALERT": "Cops"
-      },
-      "message": "Testing testing 123",
-      "label": "test",
-      "chime": true,
-      "cleared_event": "done test",
-      "timeout_minutes": 1
-    },
-    {
-      "name": "Reaction",
-      "template": "reaction",
-      "activation": {
-        "type": "manual"
-      },
-      "min_delay_s": 2,
-      "max_delay_s": 6,
-      "rounds": 5,
-      "slowest_ms": 600,
-      "reveal_s": 1.2,
-      "log_as": "reaction",
-      "ramp": [
-        {
-          "color": "#ff0000",
-          "at": 0
-        },
-        {
-          "color": "#ff8800",
-          "at": 0.3333333333333333
-        },
-        {
-          "color": "#ffff00",
-          "at": 0.6666666666666666
-        },
-        {
-          "color": "#00ff00",
-          "at": 1
-        }
-      ]
-    },
-    {
-      "name": "Work Alarm",
-      "template": "alarm",
-      "activation": {
-        "type": "schedule",
-        "at": "07:00",
-        "days": [
-          "mon",
-          "tue",
-          "wed",
-          "thu",
-          "fri"
-        ]
-      },
-      "looks": {
-        "ALERT": "Cops"
-      },
-      "message": "Go to work!",
-      "label": "",
-      "snooze_minutes": 5,
-      "dismiss_event": ""
-    },
-    {
       "name": "Actions",
       "template": "actions",
       "activation": {
         "type": "always"
       },
       "short_press": {
-        "action": "midi",
-        "port": "",
-        "kind": "note_on",
-        "channel": 1,
-        "number": 94,
-        "value": 127,
-        "daw_command": "play"
-      },
-      "long_press": {
         "action": "enter_mode",
-        "target": "Launcher"
+        "target": "DAW Control"
       },
       "double_tap": {
         "action": "enter_mode",
@@ -303,52 +223,47 @@
         "type": "manual"
       },
       "looks": {
-        "LISTENING": "Ponder"
+        "LISTENING": "look"
       },
       "short_press": {
         "action": "midi",
-        "port": "",
+        "port": "4G3NT",
         "channel": 1,
         "kind": "note_on",
         "number": 95,
-        "value": 127,
-        "daw_command": "record"
+        "value": 127
       },
       "double_tap": {
         "action": "midi",
-        "port": "",
+        "port": "4G3NT",
         "channel": 1,
         "kind": "note_on",
         "number": 93,
-        "value": 127,
-        "daw_command": "stop"
+        "value": 127
       },
       "triple_tap": {
         "action": "midi",
-        "port": "",
+        "port": "4G3NT",
         "channel": 1,
         "kind": "note_on",
         "number": 94,
-        "value": 127,
-        "daw_command": "play"
+        "value": 127
       },
       "tap_4": {
         "action": "midi",
-        "port": "",
+        "port": "4G3NT",
         "channel": 1,
         "kind": "note_on",
         "number": 89,
-        "value": 127,
-        "daw_command": "click"
+        "value": 127
       },
       "tap_5": {
         "action": "midi",
-        "port": "",
+        "port": "4G3NT",
         "channel": 1,
         "kind": "note_on",
         "number": 86,
-        "value": 127,
-        "daw_command": "loop"
+        "value": 127
       },
       "log_as": "",
       "return_after": true
@@ -356,14 +271,14 @@
   ],
   "led_palette": {
     "IDLE": {
-      "style": "solid",
-      "color": "#071f00",
-      "color2": "#001e1f",
-      "period_s": 5.86
+      "style": "rainbow",
+      "color": "#383838",
+      "color2": "#a3a3a3",
+      "period_s": 6
     },
     "LISTENING": {
-      "style": "breathe",
-      "color": "#515138",
+      "style": "solid",
+      "color": "#59ff00",
       "color2": "#000000",
       "period_s": 3
     },
@@ -476,26 +391,14 @@
         {
           "color": "#02030a",
           "hold_s": 1,
-          "fade_s": 1,
-          "curve": "exponential"
-        },
-        {
-          "color": "#1a2a5a",
-          "hold_s": 1,
           "fade_s": 2,
           "curve": "ease_in"
         },
         {
-          "color": "#c8d8ff",
+          "color": "#7d7d7d",
           "hold_s": 1,
           "fade_s": 2,
-          "curve": "ease_out"
-        },
-        {
-          "color": "#1a2a5a",
-          "hold_s": 1,
-          "fade_s": 2,
-          "curve": "linear"
+          "curve": "ease_in"
         }
       ],
       "repeat": true,
@@ -521,7 +424,6 @@
     }
   },
   "actions": {},
-  "state_looks": {
-    "IDLE": "blip"
-  }
+  "reflexes": [],
+  "state_looks": {}
 }

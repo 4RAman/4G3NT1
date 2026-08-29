@@ -171,7 +171,12 @@ class _WinMM:
         )
 
     def listen(self, index: int, on_message):
-        """Open input `index` and call `on_message(status_byte)` per message.
+        """Open input `index` and call `on_message(status, data1, data2)`.
+
+        All three bytes, because a note or a CC is only meaningful as a triple
+        - the number says which control and the value says what it did. A
+        one-byte system message (clock, active sensing) carries zeros, which
+        is what a listener that only cares about the status byte ignores.
 
         Returns a closer. The callback runs on a **driver thread**, not the
         event loop - see ClockListener for what that means for anything done
@@ -179,7 +184,11 @@ class _WinMM:
         """
         def trampoline(_handle, message, _instance, param1, _param2):
             if message == _MIM_DATA:
-                on_message((param1 or 0) & 0xFF)
+                # winmm packs the message into one dword, lowest byte first.
+                packed = param1 or 0
+                on_message(
+                    packed & 0xFF, (packed >> 8) & 0x7F, (packed >> 16) & 0x7F,
+                )
 
         proc = _MIDI_IN_PROC(trampoline)
         handle = ctypes.c_void_p()
@@ -265,7 +274,13 @@ class _RtMidi:
         # 0xF8 pulses this exists to receive, so without this line the listener
         # opens successfully, reports no errors and hears nothing at all.
         port.ignore_types(sysex=True, timing=False, active_sense=True)
-        port.set_callback(lambda message, _delta: on_message(message[0][0]))
+        def forward(message, _delta):
+            # A message is as long as its kind: one byte for clock, three for
+            # a note. Padded rather than indexed defensively at each use.
+            data = (list(message[0]) + [0, 0])[:3]
+            on_message(data[0], data[1] & 0x7F, data[2] & 0x7F)
+
+        port.set_callback(forward)
 
         def close():
             port.cancel_callback()
@@ -360,7 +375,10 @@ class ClockListener:
         self._rolling = False
         self.port_name = ""
 
-    def _on_message(self, status: int) -> None:
+    def _on_message(self, status: int, _data1: int = 0, _data2: int = 0) -> None:
+        # Only the status byte matters here: every transport and clock message
+        # is one byte. The data bytes are defaulted so a caller with nothing to
+        # say about them - a test, a system message - needs no placeholder.
         if status == midi_clock.CLOCK:
             self._pulses.append(time.perf_counter())
         elif status in (midi_clock.START, midi_clock.CONTINUE):
@@ -399,6 +417,61 @@ class ClockListener:
 
     def stale(self, bpm: float | None = None) -> bool:
         return midi_clock.is_stale(self._pulses, time.perf_counter(), bpm=bpm)
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *_exc):
+        self.stop()
+        return False
+
+
+class MessageListener:
+    """Hands every message arriving on an input port to a callback (TODO 73).
+
+    `ClockListener`'s sibling: same port, same backend, same driver thread,
+    different question. That one asks *how fast* and keeps a ring of
+    timestamps; this one asks *what happened* and keeps nothing at all.
+
+    **The thread rule is stricter here than there.** The callback runs on a
+    driver thread, and what wants these messages is an asyncio queue -
+    `Queue.put_nowait` is **not** thread-safe, and neither is reading the live
+    config. So `on_message` must do nothing but hand the three bytes to the
+    event loop through `loop.call_soon_threadsafe`; deciding which reflex they
+    match happens there. main.py's `_on_midi` is that hop, and it is the whole
+    body of the callback for exactly this reason.
+
+    **A MIDI input opens exclusively on Windows.** Two listeners cannot hold
+    one port, so a metronome following the clock on the same port a reflex
+    listens to will fail to open it and fall back to tap-only, saying so. That
+    is reported rather than prevented: two ports is the answer, and loopMIDI
+    makes them free.
+    """
+
+    def __init__(self, port: str, on_message):
+        self._port = port
+        self._on_message = on_message
+        self._close = None
+        self.port_name = ""
+
+    def start(self) -> str:
+        names = in_ports()
+        index = match_port(names, self._port)
+        if index is None:
+            available = ", ".join(names) if names else "none"
+            raise PortNotFound(
+                f"MIDI input {self._port!r} not found (available: {available})"
+            )
+        self._close = _BACKEND.listen(index, self._on_message)
+        self.port_name = names[index]
+        return self.port_name
+
+    def stop(self) -> None:
+        if self._close is not None:
+            with contextlib.suppress(Exception):
+                self._close()
+            self._close = None
 
     def __enter__(self):
         self.start()

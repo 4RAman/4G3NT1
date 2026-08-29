@@ -102,6 +102,19 @@ _CLOCK_BPM_EPSILON = 0.5
 # cheap scheduler scan per second. It also paces the loop's fault backoff.
 _SCHEDULER_TICK_S = 1.0
 
+# How many inbound reflexes may be waiting at once (TODO 71). Bounded because
+# the thing filling this queue is an HTTP handler that must never block on the
+# run loop, and because a reflex arriving while an app owns the button waits
+# for it - a script in a loop could otherwise queue an hour of them. Full means
+# the newest is dropped and said so, which is the same answer the radio gives.
+_INBOUND_MAX = 16
+
+# How long before a MIDI input port that would not open is tried again. The
+# ports here are virtual cables owned by other software, so "not there" is a
+# normal state that ends when a DAW or loopMIDI starts - but a retry per tick
+# would be a warning a second, so this paces it.
+_MIDI_RETRY_S = 15.0
+
 # The flash floor (device.SAFE_MIN_PERIOD_S, ~3 Hz per WCAG 2.3.1) is the
 # *default* for config.min_flash_period_s rather than a law - one button on one
 # desk, and its owner may decide it can go faster. Everything here reads the
@@ -186,6 +199,44 @@ async def _wait_for_trigger(
     if get_task in done:
         return get_task.result()
     get_task.cancel()
+    return None
+
+
+async def _wait_for_press_or_reflex(
+    presses: asyncio.Queue, inbound: asyncio.Queue, stop: asyncio.Event,
+    timeout: float | None = None,
+):
+    """The main loop's wait: the next press, the next inbound reflex, a tick,
+    or shutdown.
+
+    **Two queues rather than one**, and a reflex is never injected into the
+    press queue: an app that cannot tell a press from the world is an app that
+    will lie in its log (TODO 71). `wait_in_app` is the same wait made from
+    inside a takeover (TODO 74), which is how a reflex reaches a running app.
+
+    Returns `("press", TriggerType)`, `("reflex", name)`, or None for a tick or
+    a shutdown, which the caller tells apart via `stop.is_set()` - the same
+    contract `_wait_for_trigger` has.
+    """
+    press = asyncio.create_task(presses.get())
+    reflex = asyncio.create_task(inbound.get())
+    stop_task = asyncio.create_task(stop.wait())
+    done, pending = await asyncio.wait(
+        {press, reflex, stop_task}, timeout=timeout,
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for task in pending:
+        task.cancel()
+    # A press wins a tie, because someone is standing there. Whichever getter
+    # also finished has already taken its item off its queue, so it is put back
+    # rather than dropped - cancelling a task that is already done does not
+    # undo the get.
+    if press in done:
+        if reflex in done:
+            inbound.put_nowait(reflex.result())  # room: we just took one out
+        return "press", press.result()
+    if reflex in done:
+        return "reflex", reflex.result()
     return None
 
 
@@ -286,11 +337,19 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> None:
+async def run(
+    args: argparse.Namespace,
+    device: ButtonDevice | None = None,
+    inbound: asyncio.Queue | None = None,
+) -> None:
     """Drive the button until `stop` fires. `device` is the hardware seam:
     --ble picks the real ESP32, otherwise the in-memory MockDevice, and
-    tests inject their own. Nothing past this point knows the difference."""
-    from . import midi_io
+    tests inject their own. Nothing past this point knows the difference.
+
+    `inbound` is the same seam for circumstances rather than presses (TODO
+    71): the web endpoint fills the one made here, and a test hands in its own
+    so it can post a reflex without standing up a web server."""
+    from . import midi, midi_io
     from .actions import ActionResult, _fmt_elapsed, execute
     from .audio import ToneLibrary
     from .config import (
@@ -306,6 +365,7 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         LedEffect,
         LightShowBehavior,
         MetronomeBehavior,
+        SetPositionAction,
         PomodoroBehavior,
         ReactionBehavior,
         ReadoutAction,
@@ -316,6 +376,8 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         bound_triggers,
         flash_safe,
         look_for,
+        reflex_hears,
+        reflex_matches,
         resolve_action,
         sequence_safe,
     )
@@ -634,6 +696,130 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
     # event the signal handlers below set - one shutdown path, three ways in.
     stop = asyncio.Event()
 
+    # Inbound circumstances waiting to be dispatched (TODO 71). Filled by
+    # anything that can reach the service - today `POST /api/reflex/{name}` -
+    # and drained by the run loop beside the device's presses.
+    if inbound is None:
+        inbound = asyncio.Queue(maxsize=_INBOUND_MAX)
+
+    def fire_reflex(name: str, payload=None) -> bool:
+        """Queue a reflex for the run loop; False if there was no room.
+
+        Synchronous and non-blocking, for the reason `set_led` is: the caller
+        is a web handler on this same loop, and a circumstance that waits on
+        the button is a circumstance that can hang the thing reporting it.
+
+        `payload` is whatever arrived with it - the posted JSON body - carried
+        untouched so the *loop* decides whether it matches (TODO 72). The
+        endpoint queues; one place evaluates.
+        """
+        try:
+            inbound.put_nowait((name, payload))
+        except asyncio.QueueFull:
+            log.warning(
+                "reflex %r dropped: %d already waiting", name, inbound.qsize()
+            )
+            return False
+        return True
+
+    # MIDI in, the second source of circumstances (TODO 73). One listener per
+    # distinct port any reflex names; the set is re-checked on the tick, so a
+    # port that only exists once loopMIDI or the DAW has started is picked up
+    # without a restart, and a port that stops being named is closed.
+    midi_listeners: dict[str, object] = {}
+    midi_failed: dict[str, str] = {}
+    midi_retry_at = 0.0
+
+    def _on_midi(port: str, status: int, data1: int, data2: int) -> None:
+        """One MIDI message, **on the driver's thread**.
+
+        The only safe thing to do here is hand it to the event loop:
+        `asyncio.Queue.put_nowait` is not thread-safe and neither is reading
+        the live config, so the whole body is the hop. Everything that decides
+        anything happens in `_dispatch_midi`, which runs on the loop.
+        """
+        loop.call_soon_threadsafe(_dispatch_midi, port, status, data1, data2)
+
+    def _dispatch_midi(port: str, status: int, data1: int, data2: int) -> None:
+        """What an arriving message means, on the event loop.
+
+        The message becomes a **payload**, and from there a MIDI reflex is an
+        ordinary one: the source decided it reached this reflex, and `when`
+        decides whether it fires. That is why 73 needed no second comparison
+        language - `note 95 velocity 127` is a source plus a test, and note 95
+        velocity 0 is the same source and the opposite test (TODO 72).
+
+        `velocity` and `value` are the same number under two names, because a
+        DAW's own UI says velocity for a note and value for a CC, and a config
+        should be able to say whichever it means.
+        """
+        decoded = midi.decode(status, data1, data2)
+        if decoded is None:
+            return  # clock, sysex, active sensing - not ours
+        kind, number, value, channel = decoded
+        family = "cc" if kind == midi.CONTROL_CHANGE else "note"
+        for reflex in cm.config.reflexes:
+            # The port is this listener's own (one per port), so what is left
+            # to ask is whether the message itself is one this reflex hears -
+            # a pure question, asked in config.py where it can be tested.
+            if reflex.source is None or reflex.source.port != port:
+                continue
+            if not reflex_hears(reflex, family, number, channel):
+                continue
+            payload = {family: number, "value": value, "channel": channel}
+            if family == "note":
+                payload["velocity"] = value
+            log.info(
+                "MIDI %s -> reflex %r", midi.describe(kind, channel, number, value),
+                reflex.name,
+            )
+            fire_reflex(reflex.name, payload)
+
+    def sync_midi_listeners(now: float) -> None:
+        """Open a listener for every port a reflex names, and close the rest.
+
+        Called on the tick as well as at startup, because the ports here are
+        virtual cables that come and go with the software at the other end. A
+        failure is retried on a slow timer and **logged only when the reason
+        changes**, so a port that never appears costs one warning rather than
+        one a second.
+        """
+        nonlocal midi_retry_at
+        wanted = {
+            reflex.source.port for reflex in cm.config.reflexes
+            if reflex.source is not None
+        }
+        for port in list(midi_listeners):
+            if port not in wanted:
+                midi_listeners.pop(port).stop()
+                midi_failed.pop(port, None)
+                log.info("stopped listening for MIDI reflexes on %r", port)
+        missing = wanted - set(midi_listeners)
+        if not missing or now < midi_retry_at:
+            return
+        midi_retry_at = now + _MIDI_RETRY_S
+        for port in sorted(missing):
+            # `p=port` binds the loop variable, so each listener reports the
+            # port it was configured with rather than the last one round.
+            listener = midi_io.MessageListener(
+                port, lambda status, d1, d2, p=port: _on_midi(p, status, d1, d2),
+            )
+            try:
+                where = listener.start()
+            except Exception as exc:  # noqa: BLE001 - any failure means no MIDI in
+                message = str(exc)
+                if midi_failed.get(port) != message:
+                    log.warning(
+                        "no MIDI input for reflexes on %r (%s) - retrying",
+                        port or "the first input", message,
+                    )
+                    midi_failed[port] = message
+                continue
+            midi_failed.pop(port, None)
+            midi_listeners[port] = listener
+            log.info("listening for MIDI reflexes on %s", where)
+
+
     web_server = None
     web_task = None
     if not args.no_web and cm.config.web_enabled:
@@ -654,6 +840,10 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 # a callable so webui never imports main (dependency
                 # inversion) and never becomes a second flash-floor gate.
                 show_look=show_look,
+                # The one way in for a circumstance nobody pressed. Handed
+                # over the same way and for the same reason: the endpoint
+                # queues, the loop decides.
+                fire_reflex=fire_reflex,
                 # Frozen here so the scene endpoints can say which changes are
                 # waiting on a restart: the store, the lock, the web bind and
                 # the BLE name were all decided above.
@@ -2113,9 +2303,38 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             return ActionResult(True, f"signal (demo: on {current.name})")
 
         while True:
-            trigger = await _wait_for_trigger(device.events, stop)
+            trigger = await wait_in_app(mode_name)
             if trigger is None:
                 return ActionResult(True, f"signal left on {states[index].name} (shutdown)")
+            if isinstance(trigger, SetPositionAction):
+                # The world says where we are (TODO 74/77). **Shown, not
+                # announced**: this position's own action is not fired, for the
+                # reason entering does not fire one either - and here it is
+                # stronger than politeness, because sending "record" back to
+                # the DAW that just told us it is recording is a loop.
+                match = next(
+                    (i for i, s in enumerate(states) if s.name == trigger.name), None
+                )
+                if match is None:
+                    log.warning(
+                        "signal %r: no position named %r", mode_name, trigger.name
+                    )
+                    status.last_message = f"no position named {trigger.name!r}"
+                    continue
+                index = match
+                state = states[index]
+                set_led(LEDState.LISTENING, LedEffect(style=state.style, color=state.color))
+                # Logged exactly as a pressed change is: the light was at that
+                # position, and how it got there does not change what the log
+                # is for. `value` is the index, the same number, so a chart of
+                # the day mixes reported and pressed changes without lying
+                # about either.
+                if behavior.log_as:
+                    store.log_event(behavior.log_as, mode=mode_name, value=index)
+                status.last_message = f"{state.name} ({index + 1}/{len(states)}, reported)"
+                status.last_ok = True
+                log.info("signal %r <- %s (reported)", mode_name, state.name)
+                continue
             if trigger is TriggerType.LONG_PRESS:
                 return ActionResult(True, f"signal left on {states[index].name}")
             if trigger is TriggerType.DOUBLE_TAP:
@@ -2411,6 +2630,16 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 result = ActionResult(False, f"internal error: {exc}")
                 chosen = None
             store.log_mode_exit(mode.name, entered_at)
+            # What the app held aside goes back in the order it arrived (TODO
+            # 74). Dropped rather than blocking if the queue has filled while
+            # the app ran - the same answer the endpoint gives.
+            while deferred:
+                held = deferred.pop(0)
+                try:
+                    inbound.put_nowait(held)
+                except asyncio.QueueFull:
+                    log.warning("reflex %r dropped: the queue filled while %r ran",
+                                held[0], mode.name)
             # After the session row is closed and before the handoff below, so
             # a launcher's chain fires each app's exit hook before the next
             # app's enter hook, in the order they actually happened. The app's
@@ -2480,6 +2709,14 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
             set_led(LEDState.IDLE)
             set_status("STANDBY" if standby else "IDLE")
             return
+        elif isinstance(action, SetPositionAction):
+            # Reachable only from a config that bound this to a gesture, which
+            # the editor does not offer (`appOnly`): a gesture is answered here,
+            # at the ambient layer, where by definition no app is running to
+            # have a position. Said plainly rather than left to execute()'s
+            # "unknown action type", which it is not.
+            status.last_mode = resolved[0].name
+            await fail(f"set_position {action.name!r}: no app is running")
         elif isinstance(action, EnterModeAction):
             # A gesture starting a takeover: look the target up by name and
             # hand off to enter_takeover, which owns the LED/sound/status and
@@ -2545,6 +2782,180 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         set_led(LEDState.IDLE)
         set_status("IDLE")
 
+    async def handle_reflex(name: str, payload=None) -> None:
+        """One inbound circumstance, dispatched through the action machinery
+        that already exists (TODO 71).
+
+        **Deliberately not `handle()`.** Nothing was pressed: there is no
+        ambient rule to resolve, no ack tone and no LISTENING flash, because a
+        button that lights up as if it were touched is a button lying about
+        what happened. What *is* shared is the tail - `enter_mode` goes to
+        `enter_takeover` and everything else to `execute()`, the same split
+        `run_control` makes, because a mode is not a thing an action primitive
+        knows about.
+        """
+        # **Standby does not mute this**, deliberately: standby puts the
+        # *ambient layer* to sleep - it is about presses being answered - and a
+        # plant that has gone dry has not stopped meaning it because nobody is
+        # at the desk. Revisit only if something asks for a whole-button off.
+        reflex = next((r for r in cm.config.reflexes if r.name == name), None)
+        if reflex is None:
+            # Edited away between the POST and this tick; the endpoint already
+            # refuses a name that was never there.
+            log.warning("reflex %r is not in the config any more - ignored", name)
+            return
+        fires, value = reflex_matches(reflex, payload)
+        if value is not None:
+            # **Logged on arrival, not on firing** (TODO 72): a reading that
+            # did not cross the threshold is still a reading, and this column
+            # is what turns a moisture sensor into a chart on the Events page.
+            # Named after the reflex, because `value` is one untyped slot and
+            # everything that reads it groups by name (CLAUDE.md) - one reflex
+            # reports one kind of number.
+            store.log_event(name, value=value)
+        if not fires:
+            log.info(
+                "reflex %r did not match (%s %s %s, got %s)", name,
+                reflex.when.field, reflex.when.op, reflex.when.value,
+                "nothing" if value is None else value,
+            )
+            status.last_message = (
+                f"reflex {name}: {reflex.when.field} "
+                f"{'is missing' if value is None else value} - no match"
+            )
+            return
+        if reflex.while_app is not None:
+            # Scoped to one app, and reaching this line means none is running:
+            # while one is, `wait_in_app` takes its own reflexes off the queue
+            # before this ever sees them (TODO 74). So a scoped reflex arriving
+            # here has missed its app, which is not an error - it is the scope
+            # doing exactly what it says.
+            running = active_mode.name if active_mode is not None else None
+            if running != reflex.while_app:
+                log.info(
+                    "reflex %r skipped: %r is not the running app",
+                    name, reflex.while_app,
+                )
+                status.last_message = f"reflex {name}: {reflex.while_app} is not running"
+                return
+        # A reflex holds an action or names one, exactly like a gesture - the
+        # fifth dispatch site, and the one CLAUDE.md says must call this or the
+        # surface silently cannot use the pool.
+        action = resolve_action(cm.config, reflex.then)
+        status.last_trigger = None
+        status.last_mode = None
+        log.info(
+            "reflex %s -> %s", name,
+            type(action).__name__ if action is not None else "nothing",
+        )
+        if action is None:
+            await fail(f"reflex {name!r}: no action named {reflex.then.name!r}")
+        elif isinstance(action, SetPositionAction):
+            # Only a running app has positions, and reaching this branch means
+            # none is running - `wait_in_app` intercepts it when one is. A
+            # reflex meant for an app that is not open has simply missed it.
+            await fail(
+                f"set_position {action.name!r}: no app is running to set it on"
+            )
+        elif isinstance(action, EnterModeAction):
+            target = next(
+                (m for m in cm.config.modes if m.name == action.target), None
+            )
+            if target is not None and isinstance(target.behavior, TAKEOVER_BEHAVIORS):
+                # Owns the light and the drop back to IDLE itself, which is why
+                # this returns rather than falling into the tail below.
+                await enter_takeover(target)
+                return
+            await fail(f"enter_mode: no takeover mode named {action.target!r}")
+        else:
+            set_led(LEDState.THINKING)
+            try:
+                result = await execute(
+                    action, trigger=f"reflex:{name}", mode_name=None, store=store
+                )
+            except Exception as exc:  # a primitive bug must never kill the loop
+                log.exception("reflex action crashed")
+                result = ActionResult(False, f"internal error: {exc}")
+            if result.ok:
+                status.last_ok = True
+                status.last_message = result.message
+                set_led(LEDState.SUCCESS)
+                play_sound(Sound.SUCCESS)
+                set_status("SUCCESS")
+                await asyncio.sleep(_SUCCESS_DISPLAY_S)
+            else:
+                await fail(result.message)
+        set_led(LEDState.IDLE)
+        set_status("IDLE")
+
+    # Reflexes that arrived while an app owned the button and were not
+    # addressed to it. Held rather than acted on (a takeover owns the button)
+    # and rather than put straight back (which would spin: take, requeue,
+    # take), then returned to the queue when the app hands the button back -
+    # so an unscoped reflex still fires, just after its turn, exactly as it
+    # did before TODO 74.
+    deferred: list = []
+
+    async def wait_in_app(mode_name: str, timeout: float | None = None):
+        """The wait a takeover makes when it can also receive a reflex (74).
+
+        Returns what `_wait_for_trigger` returns - a `TriggerType`, or None on
+        shutdown or timeout - plus one more kind of answer: a `SetPositionAction`,
+        when a reflex addressed to *this* app says where it should now be.
+
+        **A reflex reaches a running app only if it names it** (`while`).
+        Everything else is a circumstance about the button and the world, and
+        the app it interrupted is not the right thing to hand it to.
+
+        Anything else the delivered reflex carries - a webhook, a log - is run
+        here rather than handed to the app: it is an ordinary consequence, the
+        app has no opinion about it, and running it here keeps the app's light
+        alone (no SUCCESS flash over a screen the app owns).
+
+        The timeout is a deadline, not a fresh clock per arrival: a ringing
+        alarm's grace period must not be extended by traffic nobody asked for.
+        """
+        deadline = None if timeout is None else loop.time() + timeout
+        while True:
+            left = None if deadline is None else max(0.0, deadline - loop.time())
+            event = await _wait_for_press_or_reflex(
+                device.events, inbound, stop, timeout=left
+            )
+            if event is None:
+                return None
+            kind, item = event
+            if kind == "press":
+                return item
+            name, payload = item
+            reflex = next((r for r in cm.config.reflexes if r.name == name), None)
+            if reflex is None or reflex.while_app != mode_name:
+                deferred.append(item)
+                continue
+            fires, value = reflex_matches(reflex, payload)
+            if value is not None:
+                # Attributed to the app this time, unlike the top-level row -
+                # the reading arrived while that app was running, and the log
+                # is the only place that can still say so.
+                store.log_event(name, mode=mode_name, value=value)
+            if not fires:
+                log.info("reflex %r reached %r and did not match", name, mode_name)
+                continue
+            action = resolve_action(cm.config, reflex.then)
+            if isinstance(action, SetPositionAction):
+                return action
+            if action is None:
+                log.warning("reflex %r: no action named %r", name, reflex.then.name)
+                continue
+            try:
+                result = await execute(
+                    action, trigger=f"reflex:{name}", mode_name=mode_name, store=store
+                )
+            except Exception as exc:  # a primitive bug must never close the app
+                log.exception("reflex action crashed inside %r", mode_name)
+                result = ActionResult(False, f"internal error: {exc}")
+            log.info("reflex %s in %r -> %s", name, mode_name, result.message)
+
+
     # Occurrence keys already rung today, so an alarm fires once per minute.
     fired: set[str] = set()
     # The palette last sent to the device. Editing colours in the web UI (or a
@@ -2581,13 +2992,13 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
         log.info("AI Button ready (config: %s, %d mode(s))", cm.path, len(cm.config.modes))
         while not stop.is_set():
             try:
-                trigger = await _wait_for_trigger(
-                    device.events, stop, timeout=_SCHEDULER_TICK_S
+                event = await _wait_for_press_or_reflex(
+                    device.events, inbound, stop, timeout=_SCHEDULER_TICK_S
                 )
                 if stop.is_set():
                     break
-                if trigger is not None:
-                    await handle(trigger)
+                if event is not None and event[0] == "press":
+                    await handle(event[1])
                     # Single in-flight action: drop presses made while busy.
                     discarded = 0
                     while not device.events.empty():
@@ -2595,6 +3006,13 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                         discarded += 1
                     if discarded:
                         log.info("discarded %d press(es) made while busy", discarded)
+                elif event is not None:
+                    # Reflexes are *not* dropped the way presses above are. A
+                    # press made while the button was busy is a press whose
+                    # moment has passed; a plant reporting that it is dry still
+                    # means it, so it waits its turn - bounded by _INBOUND_MAX
+                    # so a script in a loop cannot queue an hour of them.
+                    await handle_reflex(*event[1])
                 if cm.config.led_palette != pushed_palette:
                     pushed_palette = cm.config.led_palette
                     push_palette(pushed_palette)
@@ -2613,6 +3031,11 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                 if (max_taps := wanted_max_taps()) != device.max_taps:
                     device.set_gesture_config(max_taps)
                     log.info("gestures changed - device now counts %d taps", max_taps)
+                # A reflex may be fired by MIDI as well as by its URL (TODO
+                # 73), and which ports that needs is config the same way the
+                # palette is - so it is re-checked here rather than only at
+                # startup.
+                sync_midi_listeners(loop.time())
                 # After every wait (press or tick), ring whatever is due now;
                 # an alarm preempts the ambient layer. `fired` is pruned to
                 # today's keys so it never grows without bound across days,
@@ -2648,6 +3071,12 @@ async def run(args: argparse.Namespace, device: ButtonDevice | None = None) -> N
                     await asyncio.wait_for(stop.wait(), timeout=_SCHEDULER_TICK_S)
         log.info("shutting down")
     finally:
+        # Before anything else that can raise: each of these holds a ctypes
+        # callback the driver still has the address of, and a callback freed
+        # while winmm can still reach it takes the process with it (CLAUDE.md).
+        for listener in midi_listeners.values():
+            listener.stop()
+        midi_listeners.clear()
         if sequence_task is not None:
             # Not another `set_led` - shutting down never repaints the light,
             # it just stops walking whatever sequence was mid-flight so the

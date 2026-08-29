@@ -409,3 +409,36 @@ async def test_a_driver_that_throws_fails_the_press_without_raising(stub_send):
     )
     assert not result.ok
     assert "MIDI failed" in result.message
+
+
+# --- what arrives (TODO 73) ------------------------------------------------
+# The other direction, and the vectors are hand-written for the same reason:
+# feeding `message()`'s output back into `decode()` would only prove the module
+# agrees with itself.
+
+
+@pytest.mark.parametrize("wire,expected", [
+    ((0x90, 95, 127), ("note_on", 95, 127, 1)),      # MCU: Record lamp lit
+    ((0x90, 95, 0), ("note_on", 95, 0, 1)),          # ...and dark
+    ((0x9F, 95, 127), ("note_on", 95, 127, 16)),     # channel 16, not 15
+    ((0xB2, 7, 100), ("cc", 7, 100, 3)),             # CC on channel 3
+    ((0x80, 95, 64), ("note_off", 95, 0, 1)),        # release velocity dropped
+])
+def test_a_channel_voice_message_decodes_to_what_a_daw_would_call_it(wire, expected):
+    assert midi.decode(*wire) == expected
+
+
+@pytest.mark.parametrize("status", [0xF8, 0xFA, 0xFC, 0xFE, 0xF0, 0xE0, 0xA0])
+def test_anything_that_is_not_a_note_or_a_cc_is_not_ours(status):
+    """Clock, transport, active sensing, sysex, pitch bend and aftertouch all
+    arrive on the same port. A listener that treated them as notes would fire
+    reflexes on the DAW's heartbeat."""
+    assert midi.decode(status, 0, 0) is None
+
+
+def test_a_note_off_and_a_note_on_at_zero_read_the_same_way():
+    """One test - `velocity == 0` - has to catch both spellings of a lamp
+    going dark, or a config needs two reflexes for one fact."""
+    _, _, note_off_value, _ = midi.decode(0x80, 95, 64)
+    _, _, note_on_zero, _ = midi.decode(0x90, 95, 0)
+    assert note_off_value == note_on_zero == 0

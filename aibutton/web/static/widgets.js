@@ -11,7 +11,10 @@ import { clear, el } from './dom.js';
 // needs it too (a rainbow's summary quotes the percentage), and two copies of
 // that conversion is exactly the drift this file's descriptors exist to avoid.
 // The import is one-way - schema.js is DOM-free data and never reaches back.
-import { describeEffect, describeTemplate, levelHex, levelPercent, modeLook } from './schema.js';
+import {
+  ACTIONS, ACTION_BY_TYPE, MAX_SEQUENCE_S, MAX_SEQUENCE_STEPS, SEQUENCE_ACTIONS,
+  describeEffect, describeTemplate, levelHex, levelPercent, modeLook,
+} from './schema.js';
 // The same painter the nav and the App page use, so a look previews once and
 // identically wherever it is shown.
 import { paint as applySwatch, unpaint } from './ledPreview.js';
@@ -423,6 +426,163 @@ const WIDGETS = {
    * Keyboard: the options are real buttons, so Tab and Enter work without a
    * listbox implementation; Escape closes and hands focus back.
    */
+  // A `SequenceAction`'s step list (TODO 33). The one widget that edits a list
+  // of *actions*, which is why it is here rather than in menu.js beside the
+  // action pool: a sequence can be bound anywhere an action can, so its editor
+  // has to travel with the field system rather than with one page.
+  //
+  // **Order is the whole point**, hence the arrows. **Nesting is not offered**
+  // at all - `SEQUENCE_ACTIONS` has no `sequence` in it - so the control
+  // cannot express the thing the parser would refuse.
+  //
+  // A step that names a pooled action stays a bare string here and is edited
+  // with a picker, because a config written by hand may hold one and an editor
+  // that quietly rewrote it into an inline copy would be the same data loss
+  // the named-action pool exists to prevent.
+  steps(spec, obj, onInput, ctx) {
+    const NAMED = '__named__';
+    const offered = ACTIONS.filter((a) => SEQUENCE_ACTIONS.includes(a.type));
+    const list = () => (Array.isArray(obj[spec.key]) ? obj[spec.key] : (obj[spec.key] = []));
+    const rows = el('div', { className: 'steps' });
+    const err = errLine();
+    const validators = [];
+
+    const changed = () => { render(); onInput(); };
+
+    const move = (from, to) => {
+      const steps = list();
+      if (to < 0 || to >= steps.length) return;
+      [steps[from], steps[to]] = [steps[to], steps[from]];
+      changed();
+    };
+
+    const render = () => {
+      clear(rows);
+      validators.length = 0;
+      const steps = list();
+      if (!steps.length) {
+        rows.append(el('p', { className: 'menu-hint', textContent: 'No steps yet.' }));
+      }
+      steps.forEach((step, index) => rows.append(row(step, index, steps)));
+      const add = el('button', {
+        type: 'button', className: 'mini', textContent: '+ Add a step',
+        disabled: steps.length >= MAX_SEQUENCE_STEPS,
+        onclick: () => {
+          steps.push(ACTION_BY_TYPE.midi.defaults());
+          changed();
+        },
+      });
+      rows.append(el('div', { className: 'add-row' }, [
+        add,
+        steps.length >= MAX_SEQUENCE_STEPS
+          ? el('span', { className: 'fld-hint', textContent:
+              `${MAX_SEQUENCE_STEPS} steps is the limit - a sequence holds the button while it runs.` })
+          : null,
+      ]));
+    };
+
+    const row = (step, index, steps) => {
+      const named = typeof step === 'string';
+      const fields = el('div', { className: 'gesture-fields' });
+
+      const kind = el('select', {
+        className: 'inp',
+        onchange: () => {
+          steps[index] = kind.value === NAMED ? '' : ACTION_BY_TYPE[kind.value].defaults();
+          changed();
+        },
+      }, [
+        ...offered.map((a) => el('option', { value: a.type, textContent: a.label })),
+        el('option', { value: NAMED, textContent: 'Use a named action' }),
+      ]);
+      kind.value = named ? NAMED : (step.action || 'midi');
+
+      // Written on the step it delays, because "wait, then do this" is the
+      // order a person reads it in - and it is where the parser looks too.
+      const wait = el('input', {
+        type: 'number', className: 'inp step-wait', min: 0, max: MAX_SEQUENCE_S,
+        step: 0.05, value: named ? '' : (step.wait_s ?? 0),
+        disabled: named,
+        title: named
+          ? 'A named step runs straight away - a name has nowhere to put a delay.'
+          : 'Seconds to wait before this step',
+        oninput: () => {
+          const value = Number(wait.value);
+          if (!wait.value || value <= 0) delete step.wait_s;
+          else step.wait_s = value;
+          onInput();
+        },
+      });
+
+      if (named) {
+        const names = Object.keys((ctx && ctx.getActions && ctx.getActions()) || {}).sort();
+        const options = [el('option', { value: '', textContent: '- pick one -' })];
+        if (step && !names.includes(step)) {
+          options.push(el('option', { value: step, textContent: `${step} (missing)` }));
+        }
+        options.push(...names.map((n) => el('option', { value: n, textContent: n })));
+        const pick = el('select', {
+          className: 'inp',
+          onchange: () => { steps[index] = pick.value; onInput(); },
+        }, options);
+        pick.value = step || '';
+        fields.append(el('label', { className: 'fld' }, [
+          el('span', { className: 'fld-label', textContent: 'Named action' }),
+          pick,
+        ]));
+        validators.push(() => (pick.value ? null : `step ${index + 1}: pick a named action`));
+      } else {
+        const descriptor = offered.find((a) => a.type === step.action);
+        for (const field of (descriptor ? descriptor.fields : [])) {
+          const built = createField(field, step, onInput, ctx);
+          fields.append(built.el);
+          validators.push(() => {
+            const message = built.validate();
+            return message ? `step ${index + 1}: ${message}` : null;
+          });
+        }
+      }
+
+      const button = (text, title, onclick, disabled = false) => el('button', {
+        type: 'button', className: 'mini', textContent: text, title, onclick, disabled,
+      });
+      return el('div', { className: 'gesture-row' }, [
+        el('div', { className: 'gesture-head' }, [
+          el('span', { className: 'step-no', textContent: `${index + 1}.` }),
+          kind,
+          el('label', { className: 'step-wait-lbl' }, [
+            el('span', { textContent: 'wait' }), wait, el('span', { textContent: 's' }),
+          ]),
+          button('↑', 'Move earlier', () => move(index, index - 1), index === 0),
+          button('↓', 'Move later', () => move(index, index + 1), index === steps.length - 1),
+          button('✕', 'Remove this step', () => { steps.splice(index, 1); changed(); }),
+        ]),
+        fields,
+      ]);
+    };
+
+    render();
+    return {
+      el: wrap(spec, rows, err),
+      validate() {
+        const steps = list();
+        if (spec.required && !steps.length) {
+          err.textContent = 'Add at least one step';
+          return `${spec.label} needs at least one step`;
+        }
+        for (const validate of validators) {
+          const message = validate();
+          if (message) {
+            err.textContent = message;
+            return message;
+          }
+        }
+        err.textContent = '';
+        return null;
+      },
+    };
+  },
+
   modeSelect(spec, obj, onInput, ctx) {
     const options = typeof spec.options === 'function' ? (spec.options(ctx) || []) : (spec.options || []);
     const modes = (ctx && typeof ctx.getModes === 'function') ? (ctx.getModes() || []) : [];

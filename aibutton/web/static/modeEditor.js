@@ -355,6 +355,15 @@ export class ModeEditor {
     const wrap = el('div', { className: 'gestures hooks-row', 'data-tier': 'tinker' }, [
       el('span', { className: 'fld-label', textContent: 'Around the session' }),
     ]);
+    // TODO 66: what on_exit actually hands a webhook or OSC binding, read
+    // here rather than in main.py. In the order summary.clean will send it -
+    // key-sorted, which is also OSC's argument order.
+    if (descriptor.summaryKeys?.length) {
+      const list = descriptor.summaryKeys
+        .map((k) => `${k.key} (${k.about})`).join(', ');
+      wrap.append(el('span', { className: 'fld-hint', 'data-help': true,
+        textContent: `Reports on exit: ${list}.` }));
+    }
     for (const hook of MODE_HOOKS) wrap.append(this._gesture(hook));
     return wrap;
   }
@@ -412,13 +421,14 @@ export class ModeEditor {
 
   /** What this page is editing, in the app paradigm's own words: an app's
    *  page is one *item* of that app - one of your alarms, one of your
-   *  countdowns - and a reflex's page is a reflex. The nav groups by app and
-   *  the App page lists the copies; this was the one screen still calling
-   *  everything a mode (TODO 48c). */
+   *  countdowns - and a gesture map's page is a menu. The nav groups by app
+   *  and the App page lists the copies; this was the one screen still calling
+   *  everything a mode (TODO 48c). "Menu" rather than "reflex" since TODO 75,
+   *  where that word went to the thing that fires with nobody pressing. */
   _noun() {
     const descriptor = TEMPLATE_BY_TYPE[this.mode.template];
     if (!descriptor) return { kind: 'mode', label: '' };
-    if (descriptor.nature !== 'takeover') return { kind: 'reflex', label: '' };
+    if (descriptor.nature !== 'takeover') return { kind: 'menu', label: '' };
     return { kind: 'item', label: descriptor.label };
   }
 
@@ -429,7 +439,7 @@ export class ModeEditor {
       value: this.mode.name || '',
       // Named for what it is: two alarms are two alarms, and "Mode name" was
       // the last place that called one of them a mode.
-      placeholder: noun.kind === 'item' ? `${noun.label} name` : 'Reflex name',
+      placeholder: noun.kind === 'item' ? `${noun.label} name` : 'Menu name',
       oninput: () => { this.mode.name = name.value; this._changed(); },
     });
 
@@ -458,14 +468,14 @@ export class ModeEditor {
       // field lost that context.
       noun.kind === 'item'
         ? el('span', { className: 'mode-edit-app', textContent: noun.label })
-        : el('span', { className: 'fld-label', textContent: 'Reflex' }),
+        : el('span', { className: 'fld-label', textContent: 'Menu' }),
       name,
       this.activeEl,
       ...reorder,
       btn(
         '✕',
         lastFloor
-          ? "Can't delete - this is the only reflex that's always on, and the button needs one to fall back to."
+          ? "Can't delete - this is the only menu that's always on, and the button needs one to fall back to."
           : `Delete “${this.mode.name || 'this one'}”`,
         'danger',
         () => this.handlers.onRemove?.(),
@@ -577,8 +587,8 @@ export class ModeEditor {
     // as deleting it would be, when nothing else is holding the floor up.
     if (this._isOnlyAmbientAlways()) {
       select.disabled = true;
-      select.title = "Can't change - this is the only reflex that's always on. "
-        + 'Give another reflex an Always activation first.';
+      select.title = "Can't change - this is the only menu that's always on. "
+        + 'Give another menu an Always activation first.';
     }
 
     this.activationBody = el('div', { className: 'act-body' });
@@ -710,9 +720,12 @@ export class ModeEditor {
     // does not). Offering an action the parser will drop is the failure this
     // list exists to prevent, and filtering here keeps it one rule rather than
     // a second sub-editor.
+    // `appOnly` actions are never offered here: they are performed *by* a
+    // running app (a position), and a gesture is answered at the ambient
+    // layer where no app is running to perform one (TODO 74).
     const offered = gesture.actions
       ? ACTIONS.filter((a) => gesture.actions.includes(a.type))
-      : ACTIONS;
+      : ACTIONS.filter((a) => !a.appOnly);
     const select = el('select', {
       className: 'inp',
       onchange: () => {

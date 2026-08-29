@@ -72,6 +72,33 @@ def message(kind: str, channel: int, number: int, value: int) -> bytes:
     ))
 
 
+def decode(status: int, data1: int, data2: int) -> tuple[str, int, int, int] | None:
+    """What an arriving message says: `(kind, number, value, channel)`.
+
+    The mirror of `message()`, and pure for the same reason - this is the half
+    worth testing against a table. None for anything that is not a note or a
+    CC: clock, sysex and active sensing all arrive on the same port and are
+    [midi_clock.py](midi_clock.py)'s business or nobody's.
+
+    **A note-off reads as value 0** rather than as its release velocity. The
+    only thing that sends notes *to* a button is a control-surface protocol
+    using them as lamps - Mackie Control lights its Record button with note-on
+    velocity 127 and darkens it with velocity 0 - and a DAW that spells the
+    dark half as a note-off means exactly the same thing. Release velocity is
+    real and means nothing here, so one test (`velocity == 0`) catches both
+    spellings instead of two reflexes for one fact.
+
+    Channel comes back **1-16**, because that is the boundary this module
+    already owns: everything outside it speaks the DAW's numbering.
+    """
+    kind = {0x80: NOTE_OFF, 0x90: NOTE_ON, 0xB0: CONTROL_CHANGE}.get(status & 0xF0)
+    if kind is None:
+        return None
+    channel = (status & 0x0F) + 1
+    value = 0 if kind == NOTE_OFF else data2 & 0x7F
+    return kind, data1 & 0x7F, value, channel
+
+
 def describe(kind: str, channel: int, number: int, value: int) -> str:
     """A human-readable one-liner, for the action result and the logs.
 

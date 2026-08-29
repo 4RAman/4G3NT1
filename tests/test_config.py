@@ -1328,3 +1328,31 @@ def test_hooks_round_trip_through_the_editor():
     assert as_dict(once)["modes"] == as_dict(twice)["modes"]
     # And a named hook stays the bare string it was written as.
     assert as_dict(once)["modes"][0]["on_exit"] == "desk-lamp"
+
+
+def test_no_two_top_level_definitions_share_a_name():
+    """A second `def` of the same name silently replaces the first, and Python
+    says nothing.
+
+    This is not hypothetical: `_parse_sequence` was the *stop list* parser
+    here, and adding an action called a sequence (TODO 33) quietly took the
+    name - so every named look parsed to None, and the web API answered 500 on
+    a config that had been fine a minute earlier. Nothing in the type system,
+    the linter or the test suite noticed; the only symptom was a broken page.
+
+    Every module, not just this one, because the failure is a property of the
+    language rather than of any file.
+    """
+    import ast
+    import pathlib
+
+    for path in sorted(pathlib.Path("aibutton").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        seen: set[str] = set()
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                assert node.name not in seen, (
+                    f"{path}:{node.lineno} redefines {node.name!r}, which "
+                    "silently replaces the earlier one"
+                )
+                seen.add(node.name)

@@ -10,9 +10,11 @@ import { readFlag, writeFlag } from './prefs.js';
 import { ConfigApi } from './api.js';
 import {
   ACTIONS, ACTION_BY_TYPE, BUILTIN_MODES, GESTURES, LED_STATE_BY_KEY,
-  SYSTEM_LED_STATES, MODE_GROUPS, SETTINGS_GROUPS, TEMPLATES, TEMPLATE_BY_TYPE,
-  danglingTargets, describeAction, describeActivation, describeEffect,
-  describeTemplate, findEntryPoints, modeLook, reachableModes,
+  SYSTEM_LED_STATES, MENU_TEMPLATES, MODE_GROUPS, REFLEX_ACTIONS, REFLEX_OPS,
+  SETTINGS_GROUPS, TEMPLATES,
+  TEMPLATE_BY_TYPE, danglingTargets, describeAction, describeActivation,
+  describeEffect, describeReflex, describeTemplate, findEntryPoints, modeLook,
+  reachableModes,
 } from './schema.js';
 import { ModeEditor } from './modeEditor.js';
 import { SceneBar } from './scenes.js';
@@ -56,6 +58,7 @@ export class ConfigMenu {
       const data = await this.api.get();
       this.model = structuredClone(data.effective);
       if (!Array.isArray(this.model.modes)) this.model.modes = [];
+      if (!Array.isArray(this.model.reflexes)) this.model.reflexes = [];
       this.dirty = false;
       this._render(data.warnings || []);
     } catch (err) {
@@ -98,7 +101,8 @@ export class ConfigMenu {
     if (this.selectedMode && !this.model.modes.includes(this.selectedMode)) this.selectedMode = null;
 
     this.mounts.modes.append(
-      this._renderPrimer(), this._renderModesLayout(), this._renderActionPoolSection(),
+      this._renderPrimer(), this._renderModesLayout(),
+      this._renderReflexSection(), this._renderActionPoolSection(),
     );
     if (this.mounts.apps) this.mounts.apps.append(this._renderAppsSection());
     this.mounts.lights.append(this._renderPaletteSection());
@@ -128,8 +132,8 @@ export class ConfigMenu {
     return el('div', { className: 'primer', 'data-help': true }, [
       el('p', { className: 'primer-lead', textContent: 'How this button decides what a press does' }),
       el('ol', { className: 'primer-list' }, [
-        line('A reflex: what one press (short, long, double) does while the button is just sitting there.'),
-        line("Nothing to pick from a list - the button scans your reflexes top-down and fires the first one that's awake and has that press set."),
+        line('A menu: what one press (short, long, double) does while the button is just sitting there.'),
+        line("Nothing to pick from a list - the button scans your menus top-down and fires the first one that's awake and has that press set."),
         line('An app is the other half: launch one and it owns every press until you leave. Listed separately below, with how to start and exit each.'),
       ]),
     ]);
@@ -159,7 +163,7 @@ export class ConfigMenu {
   // A sensible default new mode: an actions/always mode with one gesture.
   _defaultMode() {
     return {
-      name: 'New reflex',
+      name: 'New menu',
       template: 'actions',
       activation: { type: 'always' },
       ...TEMPLATE_BY_TYPE.actions.defaults(),
@@ -183,12 +187,13 @@ export class ConfigMenu {
     this.modeNavEl = el('div', { className: 'mode-nav scroll-fade' });
     this.modeDetailEl = el('div', { className: 'mode-detail' });
     // Two verbs, because there are two things to add and they are not the
-    // same act. A reflex is a gesture map you write here and now; installing
-    // an app is a choice between twelve of them, with ready-made versions of
+    // same act. A menu is a gesture map you write here and now; installing an
+    // app is a choice between twelve of them, with ready-made versions of
     // several, and that belongs on a page rather than under a dropdown at the
-    // bottom of a list (TODO 49).
-    const addReflex = el('button', {
-      type: 'button', className: 'add-mode', textContent: '+ Add reflex',
+    // bottom of a list (TODO 49). A *reflex* is a third thing and is added in
+    // its own section - nothing about it is a press.
+    const addMenu = el('button', {
+      type: 'button', className: 'add-mode', textContent: '+ Add menu',
       onclick: () => this._addMode(this._defaultMode()),
     });
     const manage = el('button', {
@@ -198,7 +203,7 @@ export class ConfigMenu {
     });
     const navCol = el('div', { className: 'mode-nav-col' }, [
       this.modeNavEl,
-      el('div', { className: 'add-row' }, [addReflex, manage]),
+      el('div', { className: 'add-row' }, [addMenu, manage]),
     ]);
 
     this._renderModes();
@@ -251,13 +256,13 @@ export class ConfigMenu {
 
   _renderAppsSection() {
     const wrap = el('div', { className: 'apps-page' });
-    const reached = reachableModes(this.model.modes, this.model.actions);
-    const dangling = danglingTargets(this.model.modes, this.model.actions);
+    const reached = reachableModes(this.model.modes, this.model.actions, this.model.reflexes);
+    const dangling = danglingTargets(this.model.modes, this.model.actions, this.model.reflexes);
 
     const installed = [];
     const available = [];
     for (const descriptor of TEMPLATES) {
-      if (descriptor.nature !== 'takeover') continue;  // a reflex is not an app
+      if (descriptor.nature !== 'takeover') continue;  // a gesture map is not an app
       const copies = this.model.modes.filter((m) => m && m.template === descriptor.type);
       (copies.length ? installed : available).push({ descriptor, copies });
     }
@@ -274,7 +279,7 @@ export class ConfigMenu {
     for (const [target, from] of dangling) {
       wrap.append(el('p', { className: 'apps-warn', textContent:
         `${from.join(', ')} opens “${target}”, and no mode has that name. `
-        + 'Install it below, or point that gesture somewhere else.' }));
+        + 'Install it below, or point it somewhere else.' }));
     }
 
     wrap.append(this._appsGroup('Installed', installed, reached, true));
@@ -348,7 +353,9 @@ export class ConfigMenu {
   _howReached(mode, ok) {
     if (!ok) return 'nothing opens it - bind a gesture to "Launch an app", or add a launcher';
     if (this._isScheduled(mode)) return describeActivation(mode.activation);
-    const entries = findEntryPoints(mode, this.model.modes);
+    const entries = findEntryPoints(
+      mode, this.model.modes, this.model.actions, this.model.reflexes,
+    );
     if (entries.length) return entries.join(', or ');
     const launcher = this.model.modes.find((m) => m && m.template === 'launcher');
     return launcher ? `offered by ${launcher.name || 'the launcher'}` : 'reachable';
@@ -391,25 +398,26 @@ export class ConfigMenu {
 
   /** Which modes a nav group lists.
    *
-   * **A mode may be listed twice, and that is the point** (TODO 48a). The two
-   * groups stopped being two boxes a mode falls into and became two
-   * questions: *what wakes the button up* and *what can it run*. An alarm
-   * answers both - a clock starts it without anyone asking, and it is an app
-   * while it runs - so it appears under both, the way LISTENING is a state
-   * two layers own.
+   * **A mode may be listed twice, and that is the point** (TODO 48a). The
+   * groups are not boxes a mode falls into, they are questions: *what does a
+   * press pick between*, *what can the button run*, and *what happens with
+   * nobody pressing anything*. An alarm answers two of them - a clock starts
+   * it without anyone asking, and it is an app while it runs - so it appears
+   * under both, the way LISTENING is a state two layers own.
    *
-   * `startedBy: 'schedule'` is the test rather than a list of templates,
-   * because it is already the descriptor's answer to "does a person start
-   * this?" - and a new template that a clock starts joins the Reflexes list
-   * with no edit here.
+   * `startedBy: 'schedule'` is the test for the third rather than a list of
+   * templates, because it is already the descriptor's answer to "does a
+   * person start this?" - and a new template a clock starts joins the
+   * Reflexes list with no edit here.
    */
   _membersOf(group) {
-    if (group.nature === 'ambient') {
-      return this.model.modes.filter(
-        (m) => this._natureOf(m) === 'ambient' || this._isScheduled(m),
-      );
-    }
-    return this.model.modes.filter((m) => this._natureOf(m) === group.nature);
+    const isMenu = (m) => MENU_TEMPLATES.includes(m?.template)
+      || this._natureOf(m) === 'ambient';  // an unknown template answers presses
+    if (group.key === 'menus') return this.model.modes.filter(isMenu);
+    if (group.key === 'reflexes') return this.model.modes.filter((m) => this._isScheduled(m));
+    return this.model.modes.filter(
+      (m) => this._natureOf(m) === 'takeover' && !isMenu(m),
+    );
   }
 
   _isScheduled(mode) {
@@ -431,18 +439,25 @@ export class ConfigMenu {
 
     for (const group of MODE_GROUPS) {
       const members = this._membersOf(group);
-      const foldKey = `nav-fold:${group.nature}`;
+      // Reflexes are the one group whose count is not a mode count: the
+      // reflexes themselves are not modes, and the modes in it are there
+      // because a clock starts them.
+      const loose = group.key === 'reflexes' ? (this.model.reflexes || []) : [];
+      const total = members.length + loose.length;
+      const foldKey = `nav-fold:${group.key}`;
       let folded = readFlag(foldKey, false);
 
       const body = el('div', { className: 'mode-nav-group-body' }, [
         el('p', { className: 'mode-nav-group-hint', 'data-help': true, textContent: group.blurb }),
       ]);
-      if (!members.length) {
+      if (!total) {
         body.append(el('p', { className: 'empty mode-nav-empty', textContent: group.emptyText }));
-      } else if (group.nature === 'takeover') {
+      } else if (group.key === 'apps') {
         this._appendApps(body, members);
+      } else if (group.key === 'reflexes') {
+        this._appendReflexList(body, members, loose);
       } else {
-        this._appendReflexes(body, members);
+        for (const mode of members) body.append(this._navRow(mode, describeTemplate));
       }
       body.hidden = folded;
 
@@ -456,26 +471,23 @@ export class ConfigMenu {
           title.setAttribute('aria-expanded', String(!folded));
           writeFlag(foldKey, folded);
         },
-      }, [chevron, `${group.title} (${members.length})`]);
+      }, [chevron, `${group.title} (${total})`]);
 
       this.modeNavEl.append(el('div', { className: 'mode-nav-group' }, [title, body]));
     }
   }
 
-  /** The Reflexes list, in two parts, because only one of them is a queue.
+  /** The Reflexes list, in two parts, because they are set off by two
+   *  different kinds of thing.
    *
-   * A gesture map is read **top to bottom and the first match wins**, so its
-   * order is a setting and the group blurb says so. A scheduled app is in this
-   * list for a different reason - a clock starts it - and its position means
-   * **nothing**. Run together they would read as one priority list, and
-   * someone would reasonably drag an alarm up the page expecting it to matter.
-   * So the gesture maps keep the top of the list unlabelled (they are what the
-   * blurb describes) and anything a clock owns sits below its own label.
+   * A reflex proper is fired from outside and its position means nothing. A
+   * scheduled app is here for a related but separate reason - a clock starts
+   * it - and lives under its own label so the list never reads as one queue.
+   * (Before TODO 75 this group held the gesture maps, which *are* a queue;
+   * that is now Menus, and the priority blurb went with them.)
    */
-  _appendReflexes(groupEl, members) {
-    const pressed = members.filter((m) => !this._isScheduled(m));
-    const scheduled = members.filter((m) => this._isScheduled(m));
-    for (const mode of pressed) groupEl.append(this._navRow(mode, describeTemplate));
+  _appendReflexList(groupEl, scheduled, reflexes) {
+    for (const reflex of reflexes) groupEl.append(this._navReflexRow(reflex));
     if (!scheduled.length) return;
     groupEl.append(el('div', { className: 'mode-nav-app' }, [
       el('span', { className: 'mode-nav-app-name', textContent: 'On a schedule' }),
@@ -484,6 +496,37 @@ export class ConfigMenu {
     const nest = el('div', { className: 'mode-nav-nest' });
     for (const mode of scheduled) nest.append(this._navRow(mode, (m) => this._reflexLine(m)));
     groupEl.append(nest);
+  }
+
+  /** One reflex in the nav. Not a `_navRow`: a reflex is not a mode, has no
+   *  look to swatch and can never be the *running* thing, so it registers
+   *  nothing with the live-dot ticker. Selecting it scrolls its editor into
+   *  view rather than filling the detail pane - the reflex list is one
+   *  section, and two editors for one object is how a page starts lying. */
+  _navReflexRow(reflex) {
+    return el('button', {
+      type: 'button', className: 'mode-nav-item',
+      onclick: () => this._jumpToReflex(reflex),
+    }, [
+      el('span', { className: 'mode-nav-swatch empty' }),
+      el('span', { className: 'mode-nav-name', textContent: reflex.name || '(unnamed)' }),
+      el('span', { className: 'mode-nav-summary', textContent: describeReflex(reflex) }),
+    ]);
+  }
+
+  /** Show the Modes panel and put one reflex's row on screen, marked - the
+   *  same move a failed Save makes for a bad field (TODO 60). */
+  _jumpToReflex(reflex) {
+    this._showModesPanel();
+    requestAnimationFrame(() => {
+      const row = this.reflexWrap?.querySelector(
+        `[data-reflex="${CSS.escape(reflex.name || '')}"]`,
+      );
+      if (!row) return;
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      row.classList.add('fld-jump');
+      setTimeout(() => row.classList.remove('fld-jump'), 1600);
+    });
   }
 
   /** What a mode says on its *Reflex* line: the thing that sets it off.
@@ -592,7 +635,7 @@ export class ConfigMenu {
     if (!mode) {
       this.modeDetailEl.append(el('p', {
         className: 'mode-detail-empty',
-        textContent: 'Pick a reflex or an app from the list, or install one from Apps.',
+        textContent: 'Pick a menu or an app from the list, or install one from Apps.',
       }));
       return;
     }
@@ -1007,6 +1050,394 @@ export class ConfigMenu {
     return name;
   }
 
+  // --- reflexes (TODO 71) ------------------------------------------------
+  // A circumstance with an action attached, fired by something that is not a
+  // finger. It sits on this tab rather than a tab of its own for the reason
+  // the action pool does - concept count is the enemy - and above the pool
+  // because a reflex is a thing you *want* and a named action is plumbing.
+  //
+  // Listed even when nothing has ever fired one: a reflex is invisible by
+  // nature - there is no press to watch for - so the config is the only place
+  // it can be seen at all, and each row carries the URL that fires it.
+
+  /** A new reflex, named uniquely, with the likeliest action pre-chosen.
+   *  `enter_mode` rather than the pool's `log`: what people ask reflexes for
+   *  is "when X happens, start this". */
+  _addReflex() {
+    if (!Array.isArray(this.model.reflexes)) this.model.reflexes = [];
+    const taken = new Set(this.model.reflexes.map((r) => r && r.name));
+    let name = 'reflex';
+    for (let n = 2; taken.has(name); n += 1) name = `reflex ${n}`;
+    this.model.reflexes.push({ name, then: ACTION_BY_TYPE.enter_mode.defaults() });
+    this._renderReflexes();
+    this._markDirty();
+    return name;
+  }
+
+  _renderReflexSection() {
+    this.reflexWrap = el('div', { className: 'palette-wrap' });
+    this._renderReflexes();
+    const add = el('button', {
+      type: 'button', textContent: '+ Add a reflex',
+      onclick: () => this._addReflex(),
+    });
+    return el('div', { className: 'action-pool', 'data-tier': 'tinker' }, [
+      el('h3', { className: 'palette-group', textContent: 'Reflexes' }),
+      el('p', { className: 'menu-hint', 'data-help': true, textContent:
+        'The button acting with nobody pressing it. Each one has a name and an '
+        + 'action, and anything that can make an HTTP request fires it - a '
+        + 'sensor, a script, a cron job, a phone shortcut - so a plant that has '
+        + 'gone dry can ring an alarm. Nothing fires these on its own: the '
+        + 'address under each one is the whole interface.' }),
+      this.reflexWrap,
+      el('div', { className: 'add-row' }, [add]),
+    ]);
+  }
+
+  _renderReflexes() {
+    clear(this.reflexWrap);
+    // The nav lists these too (TODO 75), so it is rebuilt from here rather
+    // than left to go stale - a reflex renamed in the panel and still under
+    // its old name in the list is two answers to one question.
+    if (this.modeNavEl) this._renderModeNav();
+    const list = this.model.reflexes || [];
+    if (!list.length) {
+      this.reflexWrap.append(el('p', { className: 'menu-hint', textContent: 'No reflexes yet.' }));
+      return;
+    }
+    list.forEach((reflex, index) => {
+      this.reflexWrap.append(this._renderReflexRow(reflex, index));
+    });
+  }
+
+  /** One reflex: its name, what it does, and what it can be limited to. */
+  _renderReflexRow(reflex, index) {
+    // A sentinel, not an action type - the same one the gesture sub-editor
+    // uses, and for the same reason: naming a pooled action is a different way
+    // of *holding* one, not a kind of one.
+    const NAMED = '__named__';
+    const offered = ACTIONS.filter((a) => REFLEX_ACTIONS.includes(a.type));
+
+    // Built first so the handlers below can reach it: the name is what the nav
+    // finds this row by, so it has to follow the input rather than the render.
+    const row = el('div', { className: 'gesture-row', 'data-reflex': reflex.name || '' });
+
+    // Renaming rewrites nothing, and that is not an oversight: what points at
+    // a reflex is a URL in something outside this config, which the editor
+    // cannot reach. So the address is shown instead, and follows the name.
+    const url = el('code', { className: 'menu-hint' });
+    const nameInput = el('input', {
+      type: 'text', className: 'inp', value: reflex.name || '',
+      oninput: () => {
+        reflex.name = nameInput.value.trim();
+        url.textContent = this._reflexUrl(reflex);
+        row.setAttribute('data-reflex', reflex.name);
+        restate();
+        this._markDirty();
+      },
+    });
+    url.textContent = this._reflexUrl(reflex);
+
+    const summary = el('span', { className: 'menu-hint', textContent: describeReflex(reflex) });
+    // One sentence for the whole reflex, restated by every control on the row
+    // - the test, the action and the scope all change what it says. The nav
+    // lists the same sentence (TODO 75), so it is rebuilt here rather than
+    // left to go stale: two descriptions of one object is how a page lies.
+    const restate = () => {
+      summary.textContent = describeReflex(reflex);
+      if (this.modeNavEl) this._renderModeNav();
+    };
+    const fields = el('div', { className: 'gesture-fields' });
+
+    const buildFields = () => {
+      clear(fields);
+      const named = typeof reflex.then === 'string';
+      if (named) {
+        fields.append(this._reflexNamedField(reflex, restate));
+        return;
+      }
+      const descriptor = reflex.then && ACTION_BY_TYPE[reflex.then.action];
+      if (!descriptor) return;
+      for (const spec of descriptor.fields) {
+        const ctx = {
+          getModes: () => this.model.modes, api: this.api, rebuild: buildFields,
+          // A sequence step may name a pooled action, so the pool travels
+          // with every context that can build one.
+          getActions: () => this.model.actions || {},
+        };
+        const field = createField(spec, reflex.then, () => {
+          restate();
+          this._markDirty();
+        }, ctx);
+        fields.append(field.el);
+      }
+    };
+
+    const kind = el('select', {
+      className: 'inp',
+      onchange: () => {
+        // An empty name rather than a guessed one, exactly as a gesture does:
+        // picking the pool's first entry would point this at something nobody
+        // chose.
+        reflex.then = kind.value === NAMED ? '' : ACTION_BY_TYPE[kind.value].defaults();
+        buildFields();
+        restate();
+        this._markDirty();
+      },
+    }, [
+      ...offered.map((a) => el('option', { value: a.type, textContent: a.label })),
+      el('option', { value: NAMED, textContent: 'Use a named action' }),
+    ]);
+    kind.value = typeof reflex.then === 'string'
+      ? NAMED : (reflex.then?.action || 'enter_mode');
+
+    const remove = el('button', {
+      type: 'button', textContent: 'Delete',
+      onclick: () => {
+        this.model.reflexes.splice(index, 1);
+        this._renderReflexes();
+        this._refreshApps();
+        this._markDirty();
+      },
+    });
+
+    buildFields();
+    row.append(
+      el('div', { className: 'gesture-head' }, [nameInput, kind, remove]),
+      summary,
+      url,
+      fields,
+      this._reflexFrom(reflex, restate),
+      this._reflexWhen(reflex, restate),
+      this._reflexScope(reflex, restate),
+    );
+    return row;
+  }
+
+  /** The address that fires it. Shown rather than explained: the only thing
+   *  between a reflex and the script that fires it is knowing where to post,
+   *  and this page is served by the host that answers. */
+  _reflexUrl(reflex) {
+    const name = reflex.name || '…';
+    const origin = typeof location !== 'undefined' && location.origin && location.origin !== 'null'
+      ? location.origin : '';
+    return `POST ${origin}/api/reflex/${encodeURIComponent(name)}`;
+  }
+
+  /** A picker over the named-action pool - the reflex half of the gesture
+   *  editor's `_namedActionField`, same dangling rules, same "Make one". */
+  _reflexNamedField(reflex, onChanged) {
+    const names = Object.keys(this.model.actions || {}).sort();
+    const options = [el('option', { value: '', textContent: '- pick one -' })];
+    // A deleted pool entry stays listed and stays selected, marked: silently
+    // repointing this is exactly what a dangling name exists to prevent.
+    if (reflex.then && !names.includes(reflex.then)) {
+      options.push(el('option', { value: reflex.then, textContent: `${reflex.then} (missing)` }));
+    }
+    options.push(...names.map((n) => el('option', { value: n, textContent: n })));
+    const pick = el('select', {
+      className: 'inp',
+      onchange: () => { reflex.then = pick.value; onChanged(); this._markDirty(); },
+    }, options);
+    pick.value = reflex.then || '';
+    const make = el('button', {
+      type: 'button', className: 'mini', textContent: 'Make one',
+      onclick: () => {
+        const name = this._addAction();
+        pick.append(el('option', { value: name, textContent: name }));
+        pick.value = name;
+        reflex.then = name;
+        onChanged();
+      },
+    });
+    return el('label', { className: 'fld' }, [
+      el('span', { className: 'fld-label', textContent: 'Named action' }),
+      pick, make,
+    ]);
+  }
+
+  /** `from`: what fires this besides its own URL (TODO 73).
+   *
+   *  A **source**, not a test - it says which messages reach the reflex, and
+   *  `Only when` above decides whether they fire it. That is the whole reason
+   *  MIDI needed no comparison language of its own: *note 95 velocity 127* is
+   *  this control plus `velocity == 127`, and the dark half of the same lamp
+   *  is the same source with the opposite test.
+   *
+   *  The URL never goes away - a source *adds* a way in - so a MIDI reflex is
+   *  still testable with `curl` while the DAW is closed. */
+  _reflexFrom(reflex, onChanged) {
+    const fields = el('div', { className: 'gesture-fields' });
+
+    const spec = () => (reflex.from && reflex.from.midi) || null;
+    const build = () => {
+      clear(fields);
+      const midi = spec();
+      if (!midi) return;
+      const numberKey = 'cc' in midi ? 'cc' : 'note';
+
+      // The port goes through the schema widget so it gets the service's own
+      // list of inputs as suggestions - and stays a free-text field where
+      // there is no service to ask (the offline editor).
+      const port = createField(
+        { key: 'port', label: 'MIDI port', kind: 'text', suggest: 'midi_in',
+          hint: 'Any part of the port name. Blank takes the first input.' },
+        midi, () => { onChanged(); this._markDirty(); }, { api: this.api },
+      );
+      const number = el('input', {
+        type: 'number', className: 'inp', min: 0, max: 127, step: 1,
+        value: midi[numberKey] ?? 0,
+        oninput: () => {
+          midi[numberKey] = Number(number.value);
+          onChanged();
+          this._markDirty();
+        },
+      });
+      // Blank means any channel, which is the useful default: a control
+      // surface protocol pins the note number and leaves the channel to
+      // whatever the DAW was set up with.
+      const channel = el('input', {
+        type: 'number', className: 'inp', min: 1, max: 16, step: 1,
+        value: midi.channel ?? '', placeholder: 'any',
+        oninput: () => {
+          if (channel.value === '') delete midi.channel;
+          else midi.channel = Number(channel.value);
+          onChanged();
+          this._markDirty();
+        },
+      });
+      fields.append(
+        port.el,
+        el('label', { className: 'fld' }, [
+          el('span', { className: 'fld-label',
+            textContent: numberKey === 'cc' ? 'Controller number' : 'Note number' }),
+          number,
+        ]),
+        el('label', { className: 'fld' }, [
+          el('span', { className: 'fld-label', textContent: 'Channel' }),
+          channel,
+          el('span', { className: 'fld-hint', 'data-help': true,
+            textContent: 'Leave blank for any channel.' }),
+        ]),
+      );
+    };
+
+    const pick = el('select', {
+      className: 'inp',
+      onchange: () => {
+        const midi = spec() || {};
+        if (!pick.value) {
+          delete reflex.from;
+        } else {
+          const number = midi.note ?? midi.cc ?? 0;
+          const next = { port: midi.port || '' };
+          next[pick.value] = number;
+          if (midi.channel != null) next.channel = midi.channel;
+          reflex.from = { midi: next };
+        }
+        build();
+        onChanged();
+        this._markDirty();
+      },
+    }, [
+      el('option', { value: '', textContent: 'its address only' }),
+      el('option', { value: 'note', textContent: 'a MIDI note' }),
+      el('option', { value: 'cc', textContent: 'a MIDI control change' }),
+    ]);
+    pick.value = spec() ? ('cc' in spec() ? 'cc' : 'note') : '';
+
+    build();
+    return el('div', { className: 'fld' }, [
+      el('span', { className: 'fld-label', textContent: 'Fired by' }),
+      pick,
+      el('span', { className: 'fld-hint', 'data-help': true, textContent:
+        'A DAW that lights up a control surface is telling you what it is '
+        + 'doing - point its feedback at a port the button listens on and a '
+        + 'note becomes a reflex. The value rides along as “velocity” (a '
+        + 'note) or “value” (a control change), for Only when to test.' }),
+      fields,
+    ]);
+  }
+
+  /** `when`: one field of the posted body, one operator, one number (TODO
+   *  72). Three controls on one line, because that is exactly what the test
+   *  is - and there is deliberately no "add another condition": two of these
+   *  would be an expression language, and an expression language cannot move
+   *  onto the button.
+   *
+   *  An empty field name means no test, the same "unset is absent" idiom the
+   *  scope row uses. */
+  _reflexWhen(reflex, onChanged) {
+    const test = reflex.when || {};
+    const write = () => {
+      const name = field.value.trim();
+      if (!name) {
+        delete reflex.when;
+      } else {
+        reflex.when = {
+          field: name,
+          op: op.value,
+          value: Number(value.value) || 0,
+        };
+      }
+      onChanged();
+      this._markDirty();
+    };
+    const field = el('input', {
+      type: 'text', className: 'inp', value: test.field || '',
+      placeholder: 'moisture', oninput: write,
+    });
+    const op = el('select', { className: 'inp', onchange: write },
+      REFLEX_OPS.map((o) => el('option', { value: o, textContent: o })));
+    op.value = test.op || '<';
+    const value = el('input', {
+      type: 'number', className: 'inp', step: 'any',
+      value: test.value ?? 0, oninput: write,
+    });
+    return el('label', { className: 'fld' }, [
+      el('span', { className: 'fld-label', textContent: 'Only when' }),
+      el('div', { className: 'scope-row' }, [field, op, value]),
+      el('span', { className: 'fld-hint', 'data-help': true, textContent:
+        'Left blank it fires on every arrival. Filled in, it reads one field '
+        + 'of the JSON you post - {"moisture": 12} - and fires only if the '
+        + 'comparison holds. The number is logged either way, so the Events '
+        + 'page charts it whether or not it crossed the line; a field that is '
+        + 'missing never fires.' }),
+    ]);
+  }
+
+  /** `while`: limit this reflex to one running app. Rare by design - a reflex
+   *  is about the button and the world, not about one app - so it is one
+   *  select that defaults to "any time". */
+  _reflexScope(reflex, onChanged) {
+    const apps = (this.model.modes || []).filter(
+      (m) => TEMPLATE_BY_TYPE[m?.template]?.nature === 'takeover',
+    );
+    const options = [el('option', { value: '', textContent: 'any time' })];
+    if (reflex.while && !apps.some((m) => m.name === reflex.while)) {
+      options.push(el('option', { value: reflex.while, textContent: `${reflex.while} (missing)` }));
+    }
+    options.push(...apps.map((m) => el('option', { value: m.name, textContent: m.name })));
+    const pick = el('select', {
+      className: 'inp',
+      onchange: () => {
+        if (pick.value) reflex.while = pick.value; else delete reflex.while;
+        onChanged();
+        this._markDirty();
+      },
+    }, options);
+    pick.value = reflex.while || '';
+    return el('label', { className: 'fld' }, [
+      el('span', { className: 'fld-label', textContent: 'Only while' }),
+      pick,
+      el('span', { className: 'fld-hint', 'data-help': true, textContent:
+        'Left at "any time" it fires whenever it arrives, and waits if an app '
+        + 'is running. Naming an app is how a reflex reaches *into* one while '
+        + 'it runs - "Put an app on a position" needs this, and so does '
+        + 'anything meant for that app and nothing else.' }),
+    ]);
+  }
+
   _renderActionPoolSection() {
     this.actionsWrap = el('div', { className: 'palette-wrap' });
     this._renderActionPool();
@@ -1077,6 +1508,7 @@ export class ConfigMenu {
       for (const spec of descriptor.fields) {
         const ctx = {
           getModes: () => this.model.modes, api: this.api, rebuild: buildFields,
+          getActions: () => this.model.actions || {},
         };
         const field = createField(spec, action, () => {
           summary.textContent = describeAction(action);
@@ -1217,6 +1649,10 @@ export class ConfigMenu {
   // document - purely to run its validators against the real mode object.
   // Widget validate() functions all read from the data object, not the DOM,
   // so this is exactly as correct as validating an on-screen card.
+  // Each error carries where to find it (TODO 60) - which panel, and which
+  // mode if it's a mode's - so a failed Check/Save can take you there instead
+  // of leaving you to guess among eleven. `.text` is still the flat string
+  // the Save bar has always shown; callers that only want that map over it.
   _collectErrors() {
     const errors = [];
     for (const mode of this.model.modes) {
@@ -1228,18 +1664,47 @@ export class ConfigMenu {
           getActions: () => this.model.actions || {},
         });
       const label = mode.name || '(unnamed mode)';
-      for (const err of editor.validate()) errors.push(`${label}: ${err}`);
+      for (const err of editor.validate()) errors.push({ text: `${label}: ${err}`, panel: 'modes', mode });
     }
-    for (const validate of [...this.settingValidators, ...(this.paletteValidators || [])]) {
+    for (const validate of this.settingValidators) {
       const error = validate();
-      if (error) errors.push(error);
+      if (error) errors.push({ text: error, panel: 'device', mode: null });
+    }
+    for (const validate of (this.paletteValidators || [])) {
+      const error = validate();
+      if (error) errors.push({ text: error, panel: 'lights', mode: null });
     }
     return errors;
   }
 
+  // Switches to wherever the first error lives and scrolls its field into
+  // view, re-validating a mode we just switched to so its inline .fld-err
+  // spans - only ever populated live for the mode on screen - actually show
+  // something. Settings and palette validators already ran against their
+  // live fields in _collectErrors, so no re-run is needed for those panels.
+  _jumpToError(errors) {
+    if (!errors.length) return;
+    const first = errors[0];
+    document.dispatchEvent(new CustomEvent('button:show-panel', { detail: first.panel }));
+    if (first.panel === 'modes' && first.mode !== this.selectedMode) this._renderModes(first.mode);
+    if (first.panel === 'modes') this.detailEditor?.validate();
+    requestAnimationFrame(() => {
+      const container = first.panel === 'modes' ? this.modeDetailEl : this.mounts[first.panel];
+      const bad = container?.querySelector('.fld-err:not(:empty)');
+      const field = bad?.closest('.fld, .gesture-row');
+      if (!field) return;
+      field.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      field.classList.add('fld-jump');
+      setTimeout(() => field.classList.remove('fld-jump'), 1600);
+    });
+  }
+
   async check() {
     const errors = this._collectErrors();
-    if (errors.length) return this._showResult('err', `Fix these first:\n• ${errors.join('\n• ')}`);
+    if (errors.length) {
+      this._jumpToError(errors);
+      return this._showResult('err', `Fix these first:\n• ${errors.map((e) => e.text).join('\n• ')}`);
+    }
     try {
       const res = await this.api.validate(this.model);
       this._showResult(
@@ -1253,13 +1718,17 @@ export class ConfigMenu {
 
   async save() {
     const errors = this._collectErrors();
-    if (errors.length) return this._showResult('err', `Fix these first:\n• ${errors.join('\n• ')}`);
+    if (errors.length) {
+      this._jumpToError(errors);
+      return this._showResult('err', `Fix these first:\n• ${errors.map((e) => e.text).join('\n• ')}`);
+    }
     try {
       const res = await this.api.put(this.model);
       // Re-seed from the normalized server result so the form shows exactly
       // what was stored (per-key fallbacks included).
       this.model = structuredClone(res.effective);
       if (!Array.isArray(this.model.modes)) this.model.modes = [];
+      if (!Array.isArray(this.model.reflexes)) this.model.reflexes = [];
       this.dirty = false;
       this._render();
       // A save changes the active scene's mode count and can introduce a

@@ -579,10 +579,25 @@ def test_the_duration_widget_floors_where_the_descriptor_says():
 # which is the asymmetric failure the action-list tests above are about.
 
 
+def _js_action_list(name: str) -> list[str]:
+    """One of schema.js's action allow-lists, with any `...OTHER` spread
+    expanded in place.
+
+    They are built from each other now - a hook is the sequence set plus
+    `sequence`, a reflex is the hook set plus two - which is the same
+    derivation config.py makes, and reading it literally is what keeps the two
+    sides comparable without writing the same six names in four places.
+    """
+    match = re.search(rf"export const {name} = \[(.*?)\];", SCHEMA_JS, re.S)
+    assert match, f"{name} is not a flat array literal any more"
+    out: list[str] = []
+    for spread, literal in re.findall(r"\.\.\.(\w+)|'(\w+)'", match.group(1)):
+        out.extend(_js_action_list(spread) if spread else [literal])
+    return out
+
+
 def _js_hook_actions() -> list[str]:
-    match = re.search(r"export const HOOK_ACTIONS = \[(.*?)\];", SCHEMA_JS, re.S)
-    assert match, "HOOK_ACTIONS is not a flat array literal any more"
-    return re.findall(r"'(\w+)'", match.group(1))
+    return _js_action_list("HOOK_ACTIONS")
 
 
 def _wire_kind(cls: type) -> str:
@@ -600,6 +615,55 @@ def test_the_two_lifecycle_hooks_are_the_same_two_on_both_sides():
 
 def test_which_actions_a_hook_may_run_matches_on_both_sides():
     assert _js_hook_actions() == [_wire_kind(c) for c in cfg.HOOK_ACTIONS]
+
+
+def test_the_operators_a_reflex_may_test_with_match_on_both_sides():
+    """One field, one operator, one number (TODO 72) - and the operator list
+    is the whole language, so an editor offering one the parser refuses is a
+    reflex that silently always fires."""
+    match = re.search(r"export const REFLEX_OPS = \[(.*?)\];", SCHEMA_JS, re.S)
+    assert match, "REFLEX_OPS is not a flat array literal any more"
+    assert sorted(re.findall(r"'([^']+)'", match.group(1))) == sorted(cfg.REFLEX_OPS)
+
+
+def test_every_menu_template_is_a_real_template():
+    """TODO 75's grouping is UI-only - `MENU_TEMPLATES` is not mirrored in
+    Python and does not have to be - but a heading that lists a template name
+    nothing answers to would silently show one group short."""
+    match = re.search(r"export const MENU_TEMPLATES = \[(.*?)\];", SCHEMA_JS, re.S)
+    assert match, "MENU_TEMPLATES is not a flat array literal any more"
+    named = re.findall(r"'(\w+)'", match.group(1))
+    assert named, "MENU_TEMPLATES is empty - the Menus group would be too"
+    assert set(named) <= set(_template_chunks())
+
+
+def test_which_actions_a_sequence_step_may_be_match_on_both_sides():
+    """A step the editor offers and the parser refuses is a step lost on Save;
+    a `sequence` in this list on either side is the nesting TODO 33 exists to
+    make impossible."""
+    listed = _js_action_list("SEQUENCE_ACTIONS")
+    assert listed == [_wire_kind(c) for c in cfg.SEQUENCE_ACTIONS]
+    assert "sequence" not in listed
+
+
+def test_a_sequences_limits_are_the_same_number_on_both_sides():
+    """The editor stops you where the parser would. One of them knowing a
+    different number means either a save that loses steps or a bound a
+    hand-edited file walks past."""
+    for name, value in [
+        ("MAX_SEQUENCE_STEPS", cfg.MAX_SEQUENCE_STEPS),
+        ("MAX_SEQUENCE_S", cfg.MAX_SEQUENCE_S),
+    ]:
+        match = re.search(rf"export const {name} = (\d+(?:\.\d+)?);", SCHEMA_JS)
+        assert match, f"{name} is not a plain number in schema.js"
+        assert float(match.group(1)) == float(value), name
+
+
+def test_which_actions_a_reflex_may_run_matches_on_both_sides():
+    """The hook set plus `enter_mode` - a reflex is dispatched *by* the run
+    loop, so starting an app is exactly what it is for (TODO 71)."""
+    js = _js_action_list("REFLEX_ACTIONS")
+    assert js == [_wire_kind(c) for c in cfg.REFLEX_ACTIONS]
 
 
 def test_a_hooks_allow_list_only_names_actions_that_exist():

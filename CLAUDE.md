@@ -429,9 +429,10 @@ in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
 - **A gesture holds an action or names one, and the name is resolved at use
   time.** The pool is `AppConfig.actions`; a binding that is a **bare string**
   is a reference into it (`NamedAction`). One resolver,
-  `config.resolve_action`, called at each of the four places an action is
-  dispatched (`main.handle`, `run_control`, `run_signal`, and `fire_hook` for
-  a mode's `on_enter`/`on_exit`) — a fifth dispatch site calls it too, or that
+  `config.resolve_action`, called at each of the five places an action is
+  dispatched (`main.handle`, `run_control`, `run_signal`, `fire_hook` for a
+  mode's `on_enter`/`on_exit`, and `handle_reflex` — which was the predicted
+  fifth and arrived as one) — a sixth dispatch site calls it too, or that
   surface silently cannot use the pool. Naming is optional and inline actions
   are untouched, because most actions are used once. **Deleting a pool entry leaves the references dangling on purpose**:
   the parser warns, the editor shows "(missing)", and the runtime fails
@@ -440,6 +441,96 @@ in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
   can still dangle, which is why the parser warns at all. A pool entry may not
   itself be a name — that is where one-level-only is guaranteed, so
   `resolve_action` needs no cycle check.
+- **A sequence is flat, bounded, and its limits live in the parser.**
+  `SequenceAction` (TODO 33) is a list of primitives with optional waits — no
+  loops, no conditionals, **no nesting**, because the on-device runtime has to
+  be able to run it (ROADMAP D2) and an interpreter is exactly what it cannot
+  have. Nesting is refused **twice**, and both are load-bearing: the parser
+  refuses an inline `sequence` step, and `resolve_action` refuses a step that
+  *names* a pooled sequence — the shape the parser cannot see. A step is a
+  fire-and-forget primitive (`SEQUENCE_ACTIONS`); the four the run loop keeps
+  for itself are not steps, for the same reason they are not hooks.
+  `MAX_SEQUENCE_STEPS` and `MAX_SEQUENCE_S` are enforced in `config.py` and
+  mirrored into the editor — a bound only the UI knows is one a hand-edited
+  file walks straight past. Over either, the list is **truncated with a
+  warning**, never rejected. And it **holds the button**: presses made while it
+  runs are dropped by the rule that already drops them during any other action.
+- **A new action shape is resolved in `resolve_action`, not at each dispatch
+  site.** Sequences reached all six sites without one of them being edited,
+  because that function is where a binding becomes the thing that runs. *If a
+  future shape needs unpacking, unpack it there.*
+- **A reflex adds a source of events and no new vocabulary of consequences.**
+  A reflex ([config.py](aibutton/config.py)'s `Reflex`, TODO 70/71) is *a
+  circumstance with an action attached* — a standalone top-level object, not a
+  field on a mode, because most reflexes start no app at all and a field could
+  only ever say "this app starts now". `then` is any action the button already
+  has (`REFLEX_ACTIONS`: the hook set plus `enter_mode`, which a hook may not
+  have because a hook fires *beside* the run loop and a reflex is dispatched
+  *by* it). So **a new source — MIDI in, OSC in, the media keys — puts a name
+  on `main`'s inbound queue and stops there.** If adding one means adding a
+  consequence, the consequence belongs in the action table where every other
+  surface gets it too.
+- **A reflex's test is one field, one operator, one number — and that is the
+  whole language.** `REFLEX_OPS` in [config.py](aibutton/config.py) is the
+  complete operator list, mirrored in schema.js. **The moment it grows an
+  `and`, an `or` or a second condition it is an expression language, and an
+  expression language cannot move onto the device** (ROADMAP D2) — which is
+  the one thing this has to stay able to do. The matcher (`reflex_matches`) is
+  **pure and called from exactly one place**, the run loop, so a later source
+  (MIDI in, OSC in) applies the same test rather than growing a second answer;
+  the endpoint carries the body and never reads it.
+  Two behaviours worth not flipping: **a test whose field is missing does not
+  fire** (firing on missing turns a renamed sensor field into an alarm that
+  never stops), and **a broken test is dropped while its reflex is kept**
+  (silencing it would make a typo look like a sensor that stopped reporting).
+- **A source says which messages reach a reflex; the test says whether they
+  fire it.** That split (TODO 73) is why MIDI in needed no comparison language
+  of its own: `MidiSource` pins the port, the note-or-CC number and optionally
+  the channel, the message becomes a **payload** (`velocity` and `value` are
+  the same number under the two names a DAW uses), and `when` does the rest —
+  *note 95 velocity 127* and *the same note at 0* are one source and two
+  opposite tests. **A new source builds a payload and stops there.** Both
+  halves are pure and live in [config.py](aibutton/config.py) (`reflex_hears`,
+  `reflex_matches`), because the run loop is not a place a question about data
+  can be tested.
+- **A driver callback hands three bytes to the loop and does nothing else.**
+  `asyncio.Queue.put_nowait` is not thread-safe and neither is reading the live
+  config, so `main._on_midi` is one `loop.call_soon_threadsafe` and every
+  decision happens in `_dispatch_midi` on the loop — the same discipline
+  `ClockListener` documents for its ring of timestamps, one step stricter
+  because this one wants the config. **And a MIDI input opens exclusively on
+  Windows**: one listener per port, so a metronome following the clock on the
+  port a reflex listens to falls back to tap-only and says so. Two ports is
+  the answer; loopMIDI makes them free.
+- **A number that arrived is logged whether or not it fired.** `handle_reflex`
+  writes one row per *arrival* that carried a tested value, named after the
+  reflex — so the Events page charts the sensor, not the alarm history, and
+  the group-by-name rule below applies unchanged: one reflex reports one kind
+  of number. No test means no row, because nothing to report costs nothing.
+- **A circumstance is not a press, and never travels as one.** The run loop
+  selects on two queues (`_wait_for_press_or_reflex`): the device's, and
+  `inbound`. Injecting a synthetic press would work and would make every app's
+  log a lie — a session summary would record a press nobody made.
+  **A reflex is not dropped the way a press made while busy is**: a press
+  whose moment has passed is noise, a plant that has gone dry still means it.
+- **A reflex reaches a running app only by naming it** (`while`), and what it
+  hands over is an action, not a keystroke. `wait_in_app` is the takeover's
+  version of `_wait_for_trigger` (TODO 74): it returns a press, or a
+  `SetPositionAction` when a reflex addressed to *this* app says where it should
+  now be, and it runs anything else the reflex carries itself — an ordinary
+  consequence the app has no opinion about, kept off the app's light.
+  A reflex **not** addressed to the running app is *held* and put back when the
+  button is handed over, so a system-wide reflex still fires, just after its
+  turn. Held rather than requeued immediately, which would spin.
+  *An app that wants to hear from the world adopts `wait_in_app`; one that
+  does not simply keeps `_wait_for_trigger`, and reflexes wait for it.*
+- **What the world reports is shown, not announced.** `run_signal` paints a
+  reported position without firing that position's own action, the same rule
+  entering a signal light already followed — and with a DAW it is stronger
+  than politeness: sending "record" back to the thing that just told you it is
+  recording is a feedback loop. **Derived state beats modelled state**
+  (item 25): the position is a fact that arrived, never one the button
+  inferred from its own presses.
 - **A mode names a look; it never owns one.** The pool is `AppConfig.looks`
   and a mode holds `{state: look-name}`. Which states a mode may colour is
   `MODE_LED_STATES` in [config.py](aibutton/config.py), mirrored as
@@ -484,6 +575,13 @@ in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
   sparklines, and **both keep every label in HTML around the plot**. Anything
   that cannot shrink past a point scrolls in its own `.scroll-x`, never
   dragging the panel sideways.
+- **A field that decides whether an action does anything at all is not
+  tinker-tier.** The `midi` action's port was hidden as an advanced option, so
+  a control surface got configured five times with no port - and an empty port
+  means *the first output on the machine*, which on Windows is the built-in
+  synth. The DAW heard nothing, and nothing reported an error, because nothing
+  had failed. *Tier hides detail, never the difference between working and
+  silently going somewhere else.*
 - **A group of fields is as hidden as its fields.** A settings group whose every
   field is `tier: 'tinker'` is itself tinker-tier, derived from the specs rather
   than declared — otherwise a basic user gets a heading with nothing under it,
@@ -542,6 +640,16 @@ is the one surface that will exist in someone else's pocket.
 - Comments explain **why**, not what. The tricky ones here are hardware
   reality (WS2812 byte order, sticky download mode) and deliberate
   trade-offs (dropping presses while busy) — those are worth a sentence.
+- **Two `def`s of the same name shadow silently, and Python says nothing.**
+  `_parse_sequence` was the stop-list parser in
+  [config.py](aibutton/config.py); adding an *action* called a sequence
+  (TODO 33) took the name, and every named look began parsing to `None` - the
+  web API answered 500 on a config that had been fine a minute earlier, with
+  no error at the point of the mistake. The action one is
+  `_parse_action_sequence` now, and
+  [test_config.py](tests/test_config.py) fails on any module-level
+  redefinition in the package. *A "sequence" here is a stop list; check the
+  name is free before reusing the word.*
 - **A ctypes callback must be kept alive by something Python can see.**
   [midi_io.py](aibutton/midi_io.py)'s clock listener parks its `WINFUNCTYPE`
   object on the closer it returns, because a driver calling a collected
@@ -633,16 +741,23 @@ is the one surface that will exist in someone else's pocket.
   `readout` and `standby` change what the mode *loop* does next, and there is
   no loop left to change once an app has finished. *A new non-gesture trigger
   declares a binding; it does not grow its own editor.*
-- **The two kinds of mode are a *reflex* and an *app*, in copy only** (TODO
-  46). A reflex answers a press and hands the button straight back; an app
-  takes the button over until you leave. The gesture that starts one reads
-  "Launch an app". **The tokens did not move and must not**: `nature:
-  'takeover'` in schema.js mirrors `TAKEOVER_BEHAVIORS` in Python, and the
-  config key is still `modes` — renaming a mirrored value to improve a
-  sentence is a drift risk taken for nothing, since no user ever reads it.
-  "Mode" stays the umbrella noun in generic chrome, because a reflex and an
-  app are two kinds of one config object. *New copy uses the new words;
-  comments and docstrings may keep the old ones where they describe code.*
+- **Three words in the UI copy: a *menu*, an *app*, a *reflex*** (TODO 46,
+  renamed by TODO 75). A menu is a press picking between things — the everyday
+  gesture map, a launcher, a control page; an app takes the button over until
+  you leave; a reflex fires with nobody pressing anything (`AppConfig.
+  reflexes`, plus the apps a clock starts). The gesture that starts an app
+  reads "Launch an app". **The word "reflex" moved once and must not move
+  again**: it headed the gesture maps — the most *voluntary* thing on the page
+  — until there was something involuntary to give it to.
+  **The tokens did not move and must not**: `nature: 'takeover'` in schema.js
+  mirrors `TAKEOVER_BEHAVIORS` in Python, `MENU_TEMPLATES` is UI-only grouping
+  beside `MODE_GROUPS`, and the config key is still `modes` — renaming a
+  mirrored value to improve a sentence is a drift risk taken for nothing,
+  since no user ever reads it. "Mode" stays the umbrella noun in generic
+  chrome, because a menu and an app are two kinds of one config object — and a
+  reflex is *not* one, which is why it is a list of its own. *New copy uses
+  the new words; comments and docstrings may keep the old ones where they
+  describe code.*
 - Firmware changes need a **reflash** before they mean anything. Firmware
   modules import each other by bare name and sit flat on the device.
 - **Keep [TODO.md](TODO.md) current in the same commit as the work.** When an
