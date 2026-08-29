@@ -18,11 +18,16 @@ Endpoints (a future phone app should use these same routes):
     GET  /api/events?limit=50     recent events, newest first; filter with
                                   kind/name/mode/since/until
     GET  /api/events/kinds        the kinds actually present in the log
+    GET  /api/events/summary      one row per (kind, name): count, last, extremes
     GET  /api/events/export       the same rows, as a csv or json download
     GET  /api/midi/ports          MIDI ports this machine can reach (out/in)
+    GET  /api/documents           each app's durable named values (TODO 34)
     POST /api/trigger/{trigger}   simulate a button press
-    POST /api/reflex/{name}       fire a configured reflex (TODO 71)
+    POST /api/reaction/{name}     fire a configured reaction (TODO 71); also
+                                  answers on its original /api/reflex/{name}
     POST /api/dev/led             show one look now, saving nothing
+    POST /api/webhook/preview     the exact body a webhook would POST; `send`
+                                  actually posts it (TODO 65)
 
 Submitted configs go through the exact parser the service uses
 (config.parse_config); anything invalid falls back per-key and the
@@ -57,21 +62,26 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, midi_io, scenes, sequencer
+from .actions import execute as execute_action, webhook_payload
 from .audio import ToneLibrary
 from .config import (
     TRIGGER_TYPES,
     AppConfig,
     ConfigManager,
     LedEffect,
+    WebhookAction,
     as_dict,
     flash_safe,
     look_to_dict,
+    parse_action_with_warnings,
     parse_look_with_warnings,
+    parse_with_details,
     parse_with_warnings,
 )
 from .device import ButtonDevice, LEDState, MockDevice, Sound, TriggerType
 from .rules import resolve
 from .store import EventStore
+from .summary import clean as summary_clean
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +101,11 @@ _EVENT_FIELDS = ("ts", "kind", "name", "duration_s", "mode", "value")
 # pagination because this log is a few rows a day: it exists so a hand-made
 # query cannot ask the service to build a 200 MB string.
 _EVENT_EXPORT_MAX = 10000
+
+# The timestamp a webhook preview shows. Fixed, and obviously so: a preview
+# whose `ts` ticked every render would draw the eye to the one field that
+# never matters, and a screenshot of it would look like a real event.
+_PREVIEW_TS = "2026-01-01T09:00:00+00:00"
 
 # Windows' registry sometimes maps .js to text/plain, which browsers reject
 # for <script type="module">. Pin it so the config-menu ES modules load.
@@ -143,6 +158,11 @@ class WebContext:
     # The config as it was when this process started, kept only to answer
     # "does switching to that scene need a restart?" - see _STARTUP_ONLY.
     startup_config: AppConfig | None = None
+    # The apps' durable named values (TODO 34). None when nothing provided one
+    # (tests, and anything embedding the app), in which case the endpoint
+    # answers with an empty table rather than an error: no documents is a real
+    # and ordinary state, not a failure.
+    documents: object = None
 
 
 def _effect_dict(effect):
@@ -218,8 +238,30 @@ def _scene_state(ctx: WebContext, warnings: list[str] | None = None) -> dict:
             for info in scenes.list_scenes(scenes.dir_for(ctx.cm.path, settings))
         ],
         "effective": as_dict(ctx.cm.config),
-        "warnings": warnings or [],
+        # Sentences here: a scene response is about which scene is running,
+        # and nothing on that bar marks a field.
+        "warnings": [
+            w if isinstance(w, str) else w.message for w in (warnings or [])
+        ],
         "needs_restart": _needs_restart(ctx),
+    }
+
+
+def _warned(found) -> dict:
+    """Both shapes of the same complaints (TODO 62).
+
+    `warnings` is the list of sentences every caller has always had, and
+    `warning_details` carries where each came from so the editor can mark the
+    field instead of printing into a banner the next Save overwrites. Two keys
+    from one parse, never two parses - and the sentence stays authoritative,
+    because a complaint whose origin could not be worked out has `mode: null`
+    and still has to be readable.
+    """
+    return {
+        "warnings": [w.message for w in found],
+        "warning_details": [
+            {"message": w.message, "mode": w.mode, "key": w.key} for w in found
+        ],
     }
 
 
@@ -235,11 +277,15 @@ def _scene_file_body(body: dict, name: str | None) -> dict:
     return {"name": name, **payload} if name else payload
 
 
-def _write_scene(ctx: WebContext, path: Path, payload: dict) -> list[str]:
-    """Write a scene and return the warnings it would load with. Validation is
-    against the *merged* result, since that is what the service will run."""
+def _write_scene(ctx: WebContext, path: Path, payload: dict) -> list:
+    """Write a scene and return the warnings it would load with, structured.
+
+    Validation is against the *merged* result, since that is what the service
+    will run - and structured because a scene is where most editing happens
+    here, so field marking that skipped it would miss the common case.
+    """
     base = _read_raw(ctx.cm.path) or {}
-    _, warnings = parse_with_warnings(scenes.merge(base, payload))
+    _, warnings = parse_with_details(scenes.merge(base, payload))
     try:
         scenes.write_json(path, payload)
     except OSError as exc:
@@ -330,9 +376,9 @@ def create_app(ctx: WebContext) -> FastAPI:
     @app.get("/api/config")
     async def get_config():
         raw = _read_raw(ctx.cm.path)
-        warnings: list[str] = []
+        warnings: list = []
         if isinstance(raw, dict):
-            _, warnings = parse_with_warnings(raw)
+            _, warnings = parse_with_details(raw)
         return {
             "path": ctx.cm.path,
             # Where a Save actually lands - the active scene's file, when
@@ -342,7 +388,7 @@ def create_app(ctx: WebContext) -> FastAPI:
             "scene": ctx.cm.loaded.scene_id,
             "raw": raw,
             "effective": as_dict(ctx.cm.config),
-            "warnings": warnings,
+            **_warned(warnings),
         }
 
     @app.put("/api/config")
@@ -355,9 +401,9 @@ def create_app(ctx: WebContext) -> FastAPI:
         if scene_id is not None:
             existing = scenes.read_json(path) or {}
             payload = _scene_file_body(body, existing.get("name"))
-            warnings = _write_scene(ctx, path, payload)
+            found = _write_scene(ctx, path, payload)
         else:
-            _, warnings = parse_with_warnings(body)
+            _, found = parse_with_details(body)
             payload = body
             try:
                 scenes.write_json(path, payload)
@@ -370,7 +416,7 @@ def create_app(ctx: WebContext) -> FastAPI:
             "scene": ctx.cm.loaded.scene_id,
             "raw": payload,
             "effective": as_dict(ctx.cm.config),
-            "warnings": warnings,
+            **_warned(found),
             "needs_restart": _needs_restart(ctx),
         }
 
@@ -494,8 +540,82 @@ def create_app(ctx: WebContext) -> FastAPI:
         """Dry-run the parser without writing or reloading - the config
         menu calls this to preview what would be accepted (and which keys
         would fall back) before the user commits a Save."""
-        cfg, warnings = parse_with_warnings(body)
-        return {"effective": as_dict(cfg), "warnings": warnings}
+        cfg, found = parse_with_details(body)
+        return {"effective": as_dict(cfg), **_warned(found)}
+
+    @app.post("/api/webhook/preview")
+    async def webhook_preview(body: dict = Body(...)):
+        """What this webhook would POST, and optionally actually POST it
+        (TODO 65).
+
+        **The colour pickers' "Show on the button", for the one action nobody
+        could see.** A webhook's body is assembled from three places - the
+        event's identity, the app's session summary, and the user's own
+        payload - with a precedence rule between them, and until now the only
+        way to look at the result was to stand up a receiver.
+
+        The body is `{action, trigger, mode, summary, send}`. `summary` is
+        whatever the caller wants merged in as an app's session numbers; the
+        editor fills it from the template's declared `summaryKeys`, because
+        those live in schema.js and this end has never needed to know them.
+        `send: true` performs the POST and reports what came back - which is
+        an outward request the *user* asked for, on a URL they typed, so it is
+        opt-in per call rather than what this endpoint does by default.
+
+        The action is parsed through the ordinary parser, so a URL this would
+        reject is rejected here too rather than previewing something that
+        could never run.
+        """
+        action = parse_action_with_warnings(body.get("action"), "webhook")[0]
+        if not isinstance(action, WebhookAction):
+            raise HTTPException(422, "not a usable webhook action")
+        session = body.get("summary")
+        if session is not None and not isinstance(session, dict):
+            raise HTTPException(422, "summary must be an object")
+        # Through the same gate a real session's numbers pass, so the preview
+        # shows what would *survive* rather than what was offered - a key the
+        # contract drops must not appear here looking like it will arrive.
+        session, dropped = summary_clean(session or {})
+        payload = webhook_payload(
+            action,
+            trigger=str(body.get("trigger") or "short_press"),
+            mode_name=body.get("mode"),
+            session=session,
+            ts=_PREVIEW_TS,
+        )
+        result = {
+            "url": action.url,
+            "payload": payload,
+            # Named rather than implied: a preview whose keys quietly differ
+            # from the real thing is worse than no preview.
+            "dropped": list(dropped),
+            "sent": False,
+        }
+        if not body.get("send"):
+            return result
+        outcome = await execute_action(
+            action, trigger="preview", mode_name=body.get("mode"), store=ctx.store,
+        )
+        return {**result, "sent": True, "ok": outcome.ok, "message": outcome.message}
+
+    @app.get("/api/documents")
+    async def documents():
+        """Every app's durable named values (TODO 34), as `{app: {slot: value}}`.
+
+        **A read, and only ever a read.** An app's page shows what that app has
+        done and writes nothing back (CLAUDE.md); a document is the button's
+        own memory of a number, and a page that could set it would be a second
+        writer racing the run loop for no reason anybody asked for. `set_value`
+        is how a number changes, and it is bound to a gesture like everything
+        else.
+
+        The declared slots are not repeated here - schema.js has them, and
+        which values *exist* is a different question from which are declared:
+        a slot never written has no row, and its default is what the app reads.
+        """
+        return {
+            "documents": ctx.documents.everything() if ctx.documents else {},
+        }
 
     @app.post("/api/config/reload")
     async def reload_config():
@@ -553,6 +673,33 @@ def create_app(ctx: WebContext) -> FastAPI:
         rather than hard-coded, so a new event kind appears on its own."""
         return {"kinds": ctx.store.kinds()}
 
+    @app.get("/api/events/summary")
+    async def event_summary():
+        """Per-(kind, name) totals, for the live line under each app in the nav
+        (TODO 101).
+
+        **One request for a whole list.** The nav holds every app you own and
+        re-renders as you type; a per-app query would be dozens of requests per
+        keystroke for numbers that cannot differ between two rows of one
+        render. The editor fetches this once per load and patches the rows when
+        it arrives - so a shell with no service (the offline editor) simply
+        never patches and keeps the line it computed from the config, which is
+        the degradation this was shaped around.
+
+        Not windowed, unlike `/api/events`: that one is a feed and this one is
+        a total, and a "12 runs" that meant "12 of the last 500 rows" would
+        look right for months.
+        """
+        return {"rows": [
+            {
+                "kind": kind, "name": name, "count": count, "last": last,
+                "duration_min": dmin, "duration_max": dmax,
+                "value_min": vmin, "value_max": vmax,
+            }
+            for kind, name, count, last, dmin, dmax, vmin, vmax
+            in ctx.store.readout_summary()
+        ]}
+
     @app.get("/api/events/export")
     async def export_events(
         format: str = "csv",
@@ -604,6 +751,7 @@ def create_app(ctx: WebContext) -> FastAPI:
         ctx.device.press(TriggerType(trigger))
         return {"queued": trigger}
 
+    @app.post("/api/reaction/{name}")
     @app.post("/api/reflex/{name}")
     async def reflex(name: str, body: dict | None = Body(None)):
         """Fire a configured reflex: the one hole every other source arrives
@@ -625,6 +773,15 @@ def create_app(ctx: WebContext) -> FastAPI:
         loop, in the one place `reflex_matches` is called, so this stays a
         queue and a later source (MIDI in) cannot end up with a second answer.
         The reply says the circumstance was *accepted*, never that it matched.
+
+        **Two paths, one handler, and the old one is not deprecated** (TODO
+        103). The UI calls these *reactions* now; the address does not follow,
+        because this URL is the one thing in this project written down
+        *outside* it - in a phone shortcut, a cron line, a sensor's firmware -
+        and none of those can be edited from here. `/api/reaction/{name}` is
+        what the editor shows and the docs teach; `/api/reflex/{name}` keeps
+        answering for as long as anything might still be calling it, which is
+        forever. Renaming a route is a rename someone else pays for.
         """
         reflex = next(
             (r for r in ctx.cm.config.reflexes if r.name == name), None

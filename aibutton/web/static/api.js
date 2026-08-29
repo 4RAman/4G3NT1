@@ -54,6 +54,17 @@ export class ConfigApi {
     return this._send('/api/dev/led', 'POST', body);
   }
 
+  /** Per-(kind, name) totals from the whole log: count, last, extremes.
+   *
+   *  One request for a whole list (TODO 101) - the nav shows a live line under
+   *  every app and re-renders as you type, so a query per row would be dozens
+   *  per keystroke. Fetched once per load and applied to rows already on
+   *  screen, which is also why a shell with no service degrades cleanly: it
+   *  never patches, and keeps the line it computed from the config. */
+  eventSummary() {
+    return this._json('/api/events/summary');
+  }
+
   /** Rows from the event log, newest first. Takes the same filters the Events
    *  table uses (`kind`, `name`, `mode`, `since`, `until`, `limit`).
    *
@@ -68,6 +79,18 @@ export class ConfigApi {
    *  here passes one deliberately. */
   events(params = {}) {
     return this._json(`/api/events?${new URLSearchParams(params)}`);
+  }
+
+  /** The exact JSON body a webhook action would POST, without sending it -
+   *  and with `send: true`, actually sent, reporting what came back.
+   *
+   *  The one action with nothing to show for itself until now (TODO 65): its
+   *  body is the event's identity, plus whatever an app reports on the way
+   *  out, plus the user's own payload, with a precedence rule between them.
+   *  Optional by construction like showLook: the offline editor's FileApi has
+   *  no such method, and the row does not appear there. */
+  previewWebhook(body) {
+    return this._send('/api/webhook/preview', 'POST', body);
   }
 
   /** MIDI ports this machine can reach: { available, out, in, note }. `out`

@@ -13,7 +13,8 @@ import { clear, el } from './dom.js';
 // The import is one-way - schema.js is DOM-free data and never reaches back.
 import {
   ACTIONS, ACTION_BY_TYPE, MAX_SEQUENCE_S, MAX_SEQUENCE_STEPS, SEQUENCE_ACTIONS,
-  describeEffect, describeTemplate, levelHex, levelPercent, modeLook,
+  TEMPLATE_BY_TYPE, describeEffect, describeTemplate, levelHex, levelPercent,
+  modeLook,
 } from './schema.js';
 // The same painter the nav and the App page use, so a look previews once and
 // identically wherever it is shown.
@@ -398,11 +399,23 @@ const WIDGETS = {
   // called with, e.g. { getModes }) so it can read sibling state - this is
   // how the enter_mode picker lists the current takeover modes. Same
   // { el, validate } contract.
+  // `options` may be a function of `(ctx, obj)`. The second argument is what
+  // lets one select depend on another in the same action - `set_value`'s slot
+  // list is decided by which app it names - and `spec.rebuilds` is the other
+  // half of that: the field it depends on redraws the set. Optional by
+  // construction, like every `ctx` capability here: an editor that provides no
+  // `rebuild` shows a list that is right when it opened, never a broken one.
   select(spec, obj, onInput, ctx) {
-    const options = typeof spec.options === 'function' ? (spec.options(ctx) || []) : (spec.options || []);
+    const options = typeof spec.options === 'function'
+      ? (spec.options(ctx, obj) || [])
+      : (spec.options || []);
     const input = el('select', {
       className: 'inp',
-      onchange: () => { obj[spec.key] = input.value; onInput(); },
+      onchange: () => {
+        obj[spec.key] = input.value;
+        onInput();
+        if (spec.rebuilds) ctx?.rebuild?.();
+      },
     }, options.map((o) => el('option', { value: o.value, textContent: o.label })));
     // Reflect the current value even if it is not (yet) in the list.
     input.value = obj[spec.key] ?? '';
@@ -651,7 +664,10 @@ const WIDGETS = {
       }, [
         swatch,
         el('span', { className: 'pick-name', textContent: option.label }),
-        el('span', { className: 'pick-note', textContent: mode ? describeTemplate(mode) : '' }),
+        // `describe` stopped naming the template (TODO 101) - the nav has a
+        // heading for that and this picker does not, so it prefixes the label
+        // itself rather than a second description existing to carry it.
+        el('span', { className: 'pick-note', textContent: mode ? describePick(mode) : '' }),
       ]));
     }
     if (!options.length) {
@@ -1047,33 +1063,119 @@ const WIDGETS = {
     };
   },
 
+  // "Show on the button", for the one action that has no button to show on
+  // (TODO 65). A webhook's body is assembled from three places with a
+  // precedence rule between them, and the only way to see the result used to
+  // be to stand up a receiver.
+  //
+  // It edits nothing. `spec.key` is unused and `validate` always passes: this
+  // is a *field descriptor that is a control*, which is what keeps it out of
+  // every sub-editor's code - a gesture, a hook, a reflex, a pool entry and a
+  // sequence step all loop over `descriptor.fields`, so declaring it once on
+  // the webhook action puts it in all five.
+  //
+  // Optional by construction, the rule colorEngine's showLook set: no
+  // `ctx.api.previewWebhook` (the offline editor's FileApi has none) and the
+  // row simply is not there.
+  webhookPreview(spec, obj, _onInput, ctx) {
+    const pass = () => null;
+    if (typeof ctx?.api?.previewWebhook !== 'function') {
+      return { el: el('span'), validate: pass };
+    }
+    const out = el('pre', { className: 'mono webhook-out', hidden: true });
+    const note = el('span', { className: 'fld-err' });
+    // Sample values, not real ones: the question this answers is "which keys
+    // arrive", and inventing a plausible 4 for `blocks` is clearer than
+    // showing a zero that looks like a measurement. Empty when the surrounding
+    // editor does not know the template - a reflex's webhook has no app.
+    const sampleSummary = () => {
+      const keys = (typeof ctx.summaryKeys === 'function' ? ctx.summaryKeys() : null) || [];
+      return Object.fromEntries(keys.map((k, i) => [k.key, i + 1]));
+    };
+
+    const run = async (send) => {
+      note.textContent = send ? 'Sending…' : 'Building…';
+      out.hidden = true;
+      try {
+        const res = await ctx.api.previewWebhook({
+          action: obj,
+          trigger: 'short_press',
+          mode: typeof ctx.modeName === 'function' ? ctx.modeName() : null,
+          summary: sampleSummary(),
+          send,
+        });
+        const lines = [`POST ${res.url}`, JSON.stringify(res.payload, null, 2)];
+        if (res.sent) lines.push(res.ok ? `✓ ${res.message}` : `✗ ${res.message}`);
+        for (const complaint of res.dropped || []) lines.push(`! ${complaint}`);
+        out.textContent = lines.join('\n');
+        out.hidden = false;
+        note.textContent = '';
+      } catch (err) {
+        note.textContent = String((err && err.message) || err);
+      }
+    };
+
+    const row = el('div', { className: 'row' }, [
+      el('button', {
+        type: 'button', className: 'primary', textContent: 'Preview payload',
+        onclick: () => run(false),
+      }),
+      el('button', { type: 'button', textContent: 'Send a test', onclick: () => run(true) }),
+    ]);
+    return {
+      el: el('label', { className: 'fld', ...tierAttr(spec) }, [
+        el('span', { className: 'fld-label', textContent: spec.label }),
+        row,
+        hintLine(spec),
+        note,
+        out,
+      ]),
+      validate: pass,
+    };
+  },
+
+  // An object by default, a list where the descriptor says `shape: 'list'`.
+  // The shape is **declared, not sniffed**: an empty box has to write `[]` or
+  // `{}` and there is nothing left to sniff it from. This widget refused an
+  // array outright, which made every list-shaped field using it uneditable in
+  // the browser while its parser took a list happily - OSC `args`, a signal
+  // light's positions and a control surface's, three of the four. Same family
+  // as the textarea rule in CLAUDE.md: a widget whose shape disagrees with the
+  // parser fails at the moment of saving, not at the moment of writing.
   json(spec, obj, onInput) {
+    const isList = spec.shape === 'list';
     const current = obj[spec.key];
+    const hasContent = current != null && (
+      Array.isArray(current) ? current.length : Object.keys(current).length
+    );
     const input = el('textarea', {
       className: 'inp mono',
       rows: 4,
-      value: current && Object.keys(current).length ? JSON.stringify(current, null, 2) : '',
-      placeholder: '{ }',
+      value: hasContent ? JSON.stringify(current, null, 2) : '',
+      placeholder: isList ? '[ ]' : '{ }',
       oninput: () => { parse(); onInput(); },
     });
     const err = errLine();
     const parse = () => {
       const text = input.value.trim();
       if (!text) {
-        obj[spec.key] = {};
+        obj[spec.key] = isList ? [] : {};
         err.textContent = '';
         return null;
       }
       try {
         const value = JSON.parse(text);
-        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-          throw new Error('not an object');
-        }
+        const ok = isList
+          ? Array.isArray(value)
+          : typeof value === 'object' && value !== null && !Array.isArray(value);
+        if (!ok) throw new Error('wrong shape');
         obj[spec.key] = value;
         err.textContent = '';
         return null;
       } catch {
-        err.textContent = 'Must be a JSON object, e.g. {"key": "value"}';
+        err.textContent = isList
+          ? 'Must be a JSON list, e.g. [{"name": "Stopped"}]'
+          : 'Must be a JSON object, e.g. {"key": "value"}';
         return `${spec.label}: invalid JSON`;
       }
     };
@@ -1087,6 +1189,14 @@ const WIDGETS = {
  * context object passed through to dynamic widgets (e.g. a select whose
  * `options` is a function reading `ctx.getModes()`). Returns { el, validate }.
  */
+/** "Stopwatch - logs “mile run”": the kind, then what makes this one itself.
+ *  Only the picker needs both halves; the nav already says the kind. */
+function describePick(mode) {
+  const label = TEMPLATE_BY_TYPE[mode?.template]?.label;
+  const detail = describeTemplate(mode);
+  return label ? `${label} - ${detail}` : detail;
+}
+
 export function createField(spec, obj, onInput, ctx) {
   return (WIDGETS[spec.kind] || WIDGETS.text)(spec, obj, onInput, ctx);
 }

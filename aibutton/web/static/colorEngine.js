@@ -426,6 +426,42 @@ export function createLookEditor(o) {
     const gapPainters = [];
     const repaintGaps = () => { for (const paint of gapPainters) paint(); };
 
+    // A proportional read of the whole list in one strip, before you scroll
+    // through the rows that produced it. Flex-grow/-shrink set to the raw
+    // duration is not a shortcut standing in for the maths - it *is* the
+    // maths: the browser distributes space by that exact ratio, so a 2s hold
+    // next to a 1s hold comes out twice the width with no rounding of my own,
+    // and a zero-duration fade collapses to nothing rather than a sliver.
+    // Works the same under any drive - it reads proportions of the numbers
+    // typed in, not wall-clock time, so "share" and "beats" scale exactly
+    // like seconds do.
+    const timelineEl = el('div', { className: 'seq-timeline' });
+    const paintTimeline = () => {
+      clear(timelineEl);
+      const unit = UNITS[seq.drive] || 's';
+      seq.stops.forEach((stop, index) => {
+        const prev = index > 0
+          ? seq.stops[index - 1].color
+          : (seq.repeat ? seq.stops[seq.stops.length - 1].color : '#000000');
+        const fade = Math.max(0, Number(stop.fade_s) || 0);
+        const hold = Math.max(0, Number(stop.hold_s) || 0);
+        const fadeSeg = el('span', {
+          className: 'seq-timeline-seg',
+          title: `fade ${fade}${unit} → ${stop.color}`,
+        });
+        fadeSeg.style.flex = `${fade} ${fade} 0`;
+        fadeSeg.style.background = `linear-gradient(to right, ${prev}, ${stop.color})`;
+        const holdSeg = el('span', {
+          className: 'seq-timeline-seg',
+          title: `${stop.color} · hold ${hold}${unit}`,
+        });
+        holdSeg.style.flex = `${hold} ${hold} 0`;
+        holdSeg.style.background = stop.color;
+        timelineEl.append(fadeSeg, holdSeg);
+      });
+    };
+    paintTimeline();
+
     /**
      * The gap above stop `index`: what its fade crosses, and the two fields
      * that shape it. Named from both ends, because "Fade 0.3s" sitting in a
@@ -458,7 +494,7 @@ export function createLookEditor(o) {
 
       const gapFields = el('div', { className: 'gap-fields' });
       for (const spec of unitFields(FADE_FIELDS, seq.drive)) {
-        const field = createField(spec, stop, () => { refresh(); o.onChange?.(); });
+        const field = createField(spec, stop, () => { paintTimeline(); refresh(); o.onChange?.(); });
         validators.push(field.validate);
         gapFields.append(field.el);
       }
@@ -474,6 +510,7 @@ export function createLookEditor(o) {
       for (const spec of unitFields(STOP_FIELDS, seq.drive)) {
         const field = createField(spec, stop, () => {
           if (spec.key === 'color') repaintGaps();
+          paintTimeline();
           refresh();
           o.onChange?.();
         });
@@ -541,7 +578,7 @@ export function createLookEditor(o) {
       seq,
       // Repeat decides what the *first* gap fades out of - off for a one-shot,
       // the last stop for a loop - so its label and swatch have to follow.
-      () => { repaintGaps(); refresh(); o.onChange?.(); },
+      () => { repaintGaps(); paintTimeline(); refresh(); o.onChange?.(); },
     );
     validators.push(repeatField.validate);
 
@@ -568,22 +605,20 @@ export function createLookEditor(o) {
     // Drive and Repeat go *above* the stops, not below them. They are
     // properties of the whole list, and the drive decides what the Hold and
     // Fade numbers even mean - reading eighteen rows before finding out
-    // whether they are seconds, shares or beats is the wrong way round.
+    // whether they are seconds, shares or beats is the wrong way round. The
+    // timeline goes with them, above the rows it summarises.
     fields.append(el('div', { className: 'sequence-edit' }, [
-      driveField.el, repeatField.el, rows, add, floorHint,
+      driveField.el, repeatField.el, timelineEl, rows, add, floorHint,
     ]));
   };
 
   const renderFields = () => {
     clear(fields);
     validators.length = 0;
-    if (isSequence()) renderSequenceFields();
+    if (activeTab === 'preset') fields.append(presetBody());
+    else if (isSequence()) renderSequenceFields();
     else renderEffectFields();
-    if (modeToggle) modeToggle.sync();
-    // The drawer used to hide for a sequence, because every preset was a
-    // plain effect and none of them could be dropped into one. Some are stop
-    // lists now (TODO 36a), so it stays open and filters instead.
-    if (presetDrawerEl) presetDrawerEl.hidden = false;
+    syncTabs();
   };
 
   // --- the library ----------------------------------------------------
@@ -616,13 +651,16 @@ export function createLookEditor(o) {
       for (const key of ['stops', 'repeat', 'drive']) delete target[key];
     }
     Object.assign(target, presetLook(preset));
+    // Land on whichever tab shows what you just picked, rather than leaving
+    // the picker up over a result you can't see.
+    activeTab = presetIsSequence(preset) ? 'sequence' : 'single';
     renderFields();
     refresh();
     o.onChange?.();
     if (canPreview) show(effect());
   };
 
-  const presetDrawer = () => {
+  const presetBody = () => {
     const body = el('div', { className: 'preset-groups' });
     for (const group of LOOK_PRESET_GROUPS) {
       const dots = el('div', { className: 'preset-dots' });
@@ -682,12 +720,7 @@ export function createLookEditor(o) {
       );
     }
 
-    const drawer = el('details', { className: 'preset-drawer' }, [
-      el('summary', { textContent: 'Start from a preset' }),
-      body,
-    ]);
-    if (o.openPresets) drawer.open = true;
-    return drawer;
+    return body;
   };
 
   // --- the head -------------------------------------------------------
@@ -775,39 +808,47 @@ export function createLookEditor(o) {
     if (canPreview) show(cur);
   };
 
-  let modeToggle = null;
-  if (o.allowSequence) {
-    const oneBtn = el('button', { type: 'button', className: 'mini', textContent: 'Single colour',
-      title: 'One colour or animation the device renders on its own.' });
-    const seqBtn = el('button', { type: 'button', className: 'mini', textContent: 'Sequence',
-      title: 'A list of colours the host walks through in order.' });
-    oneBtn.addEventListener('click', () => switchShape(false));
-    seqBtn.addEventListener('click', () => switchShape(true));
-    modeToggle = {
-      el: el('div', { className: 'look-mode-toggle' }, [oneBtn, seqBtn]),
-      sync: () => {
-        oneBtn.classList.toggle('active', !isSequence());
-        seqBtn.classList.toggle('active', isSequence());
-      },
-    };
-  }
+  // --- the tab bar ------------------------------------------------------
+  // Single Color / Sequence / Preset, replacing what used to be a two-button
+  // shape toggle plus a separate "Start from a preset" drawer - one control
+  // answering "how is this look specified", not two stacked on top of each
+  // other. Sequence is offered only where `allowSequence` allows the shape at
+  // all (see the doc above); Preset is always offered, as a picker rather
+  // than a persisted shape - applying one lands on whichever of the other two
+  // tabs shows the result (see `applyPreset`).
+  let activeTab = o.openPresets ? 'preset' : (isSequence() ? 'sequence' : 'single');
 
-  const presetDrawerEl = presetDrawer();
+  const singleTab = el('button', {
+    type: 'button', className: 'mini', textContent: 'Single Color',
+    title: 'One colour or animation the device renders on its own.',
+    onclick: () => { switchShape(false); activeTab = 'single'; renderFields(); },
+  });
+  const seqTab = o.allowSequence ? el('button', {
+    type: 'button', className: 'mini', textContent: 'Sequence',
+    title: 'A list of colours the host walks through in order.',
+    onclick: () => { switchShape(true); activeTab = 'sequence'; renderFields(); },
+  }) : null;
+  const presetTab = el('button', {
+    type: 'button', className: 'mini', textContent: 'Preset',
+    title: 'Start from a built-in look.',
+    onclick: () => { activeTab = 'preset'; renderFields(); },
+  });
+  const tabsEl = el('div', { className: 'look-mode-toggle' }, [singleTab, seqTab, presetTab].filter(Boolean));
+
+  const syncTabs = () => {
+    singleTab.classList.toggle('active', activeTab === 'single');
+    seqTab?.classList.toggle('active', activeTab === 'sequence');
+    presetTab.classList.toggle('active', activeTab === 'preset');
+  };
 
   renderFields();
   refresh();
-  // Filtered, because this is a raw `append` rather than `el()` - and only
-  // `el()` skips nullish children. `modeToggle?.el` is undefined on every row
-  // that did not opt into sequences (the system palette's five), and
-  // `Element.append(undefined)` inserts the *string* "undefined", which is
-  // exactly what it was doing on the Lights tab.
-  row.append(...[
+  row.append(
     el('div', { className: 'palette-head' }, head),
-    presetDrawerEl,
-    modeToggle?.el,
+    tabsEl,
     fields,
     actions,
-  ].filter((node) => node != null));
+  );
 
   return {
     el: row,

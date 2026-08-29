@@ -45,9 +45,10 @@ OTA_CONTROL_UUID = "f3641406-00b0-4240-ba50-05ca45bf8abc"
 
 PROTOCOL_VERSION = 1
 # Bumped on any behaviour change, wire change or not, because the version is the
-# only way to tell a flashed board from an un-flashed one. 0.7.0: a rainbow
-# reads its saturation from colour2 (led.Renderer._rainbow).
-FIRMWARE_VERSION = (0, 7, 0)
+# only way to tell a flashed board from an un-flashed one. 0.8.0: the board's
+# own BOOT button is a second input, always on, in parallel with the wired one
+# (hardware.BOOT_BUTTON_PIN).
+FIRMWARE_VERSION = (0, 8, 0)
 
 CAP_LED = 0x0001      # an LED came up and can be driven
 CAP_BUZZER = 0x0002   # a buzzer came up and can be driven

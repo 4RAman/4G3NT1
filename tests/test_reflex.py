@@ -330,6 +330,33 @@ async def test_posting_a_reflex_queues_it(client, ctx):
     assert ctx.fired == [("water_me", None)]
 
 
+async def test_the_new_spelling_answers_too_and_the_old_one_never_stops(client, ctx):
+    """TODO 103 renamed reflexes to *reactions* in the UI. The route did not
+    follow, it gained a second name.
+
+    This URL is the one thing in the project written down *outside* it - in a
+    phone shortcut, a cron line, a sensor's firmware - so retiring the old
+    spelling is a rename someone else pays for. Both paths, one handler, and
+    the test says so in one place rather than being split across two files.
+    """
+    res = await client.post("/api/reaction/water_me", json={"moisture": 12})
+    assert res.status_code == 200
+    assert res.json() == {"queued": "water_me"}
+
+    res = await client.post("/api/reflex/water_me", json={"moisture": 12})
+    assert res.status_code == 200
+
+    assert ctx.fired == [("water_me", {"moisture": 12})] * 2
+
+
+async def test_an_unknown_name_says_so_on_either_spelling(client, ctx):
+    for path in ("/api/reaction/watrer_me", "/api/reflex/watrer_me"):
+        res = await client.post(path)
+        assert res.status_code == 404, path
+        assert "water_me" in res.json()["detail"]
+    assert ctx.fired == []
+
+
 async def test_a_body_is_carried_to_the_loop_untouched(client, ctx):
     """The endpoint never tests it (TODO 72): one place evaluates, so a later
     source cannot end up with a second answer."""

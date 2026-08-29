@@ -53,17 +53,36 @@ class ScriptedPin:
         return 0 if pressed else 1  # active low, matching hardware.py
 
 
+class ReleasedPin:
+    """A pin nothing is connected to: the pull-up holds it high for ever.
+
+    What the BOOT button reads as while nobody is touching it, which is the
+    state every test here except the two about it should see."""
+
+    def value(self):
+        return 1
+
+
 class PinStub:
     """machine.Pin: constructing one hands back the scripted pin under test.
     The class attributes are there because main.py reads Pin.IN / Pin.PULL_UP
-    off the class, exactly as MicroPython exposes them."""
+    off the class, exactly as MicroPython exposes them.
+
+    `by_num` is consulted first, because the loop now opens two inputs (the
+    wired button and the board's BOOT button) and a test about one of them has
+    to be able to hold the other still. `made` counts constructions, which is
+    the only way to see from out here that a pin was opened once rather than
+    twice."""
 
     IN = 0
     PULL_UP = 1
     scripted = None
+    by_num = {}
+    made = []
 
     def __new__(cls, num, mode, pull):
-        return cls.scripted
+        cls.made.append(num)
+        return cls.by_num.get(num, cls.scripted)
 
 
 class FakeCharacteristic:
@@ -150,9 +169,12 @@ def test_a_board_with_no_led_or_buzzer_reports_exactly_that(main):
     assert not info.has(CAP_EFFECT)
 
 
-async def _run(main, transitions, until, connected=True, max_taps=None):
+async def _run(main, transitions, until, connected=True, max_taps=None, boot=None):
     """Run the button loop over a scripted pin until `until` virtual
-    seconds, and return the gesture codes it notified."""
+    seconds, and return the gesture codes it notified.
+
+    `boot` scripts the board's BOOT button in the same shape; None leaves it
+    released, which is what a board nobody is poking at looks like."""
     clock = VirtualClock()
     pin = ScriptedPin(clock, transitions)
 
@@ -166,6 +188,15 @@ async def _run(main, transitions, until, connected=True, max_taps=None):
     main.now_s = clock.now_s
     main._POLL_S = 0  # spin as fast as the event loop will go; time is virtual
     PinStub.scripted = pin
+    PinStub.made = []
+    # The BOOT button, held released unless this test is about it. Explicit
+    # rather than left to fall through to `scripted`: an input that mirrored
+    # the wired one would make the loop's OR test nothing.
+    PinStub.by_num = {
+        getattr(main.hardware, "BOOT_BUTTON_PIN", 0): (
+            ScriptedPin(clock, boot) if boot else ReleasedPin()
+        ),
+    }
     try:
         task = asyncio.create_task(peripheral.read_button_forever())
         while clock.t < until and not task.done():
@@ -315,3 +346,92 @@ async def test_a_hold_is_measured_from_the_edge_too(main):
     script = [(0.10, True), (2.0, False)]
     assert await _run(main, script, until=1.12) == [protocol.LONG_PRESS]
     assert await _run(main, script, until=1.05) == []
+
+
+# --- the board's own BOOT button, always an input (TODO 89) ----------------
+# Added the day the wired switch came off the board and a press stopped
+# meaning anything. The property under test is that there is no second kind of
+# press: both inputs feed the one detector, so every gesture already tested
+# above works from either, and nothing downstream can tell which was used.
+
+
+async def test_the_boot_button_is_a_press(main):
+    """The whole point: nothing is wired to GPIO10 and the button still
+    works."""
+    codes = await _run(
+        main, [], until=1.0, boot=[(0.1, True), (0.2, False)],
+    )
+    assert codes == [protocol.SHORT_PRESS]
+
+
+async def test_the_boot_button_makes_the_same_gestures(main):
+    """Not a second kind of press. It feeds the same detector, so a double tap
+    off the BOOT button is a double tap."""
+    codes = await _run(
+        main, [], until=1.2,
+        boot=[(0.1, True), (0.2, False), (0.3, True), (0.4, False)],
+    )
+    assert codes == [protocol.DOUBLE_TAP]
+
+
+async def test_both_at_once_is_one_press_not_two(main):
+    """They are one button in parallel, so holding both is holding it."""
+    codes = await _run(
+        main,
+        [(0.1, True), (0.3, False)],
+        until=1.2,
+        boot=[(0.1, True), (0.3, False)],
+    )
+    assert codes == [protocol.SHORT_PRESS]
+
+
+async def test_a_press_can_move_from_one_input_to_the_other(main):
+    """ORed *before* the debounce, which is what makes this a hold rather than
+    a release and a fresh press: letting go of one and taking hold of the
+    other is what a person doing it would mean."""
+    codes = await _run(
+        main,
+        [(0.1, True), (0.5, False)],       # wired: held, then released
+        until=2.5,
+        boot=[(0.45, True), (2.0, False)],  # BOOT: picked up before that
+    )
+    # One continuous hold across the handover, so it is a long press - not two
+    # short ones with a gap.
+    assert codes == [protocol.LONG_PRESS]
+
+
+async def test_the_wired_button_is_unaffected(main):
+    """The guard on all of the above: adding an input must not change what the
+    one that was already there does."""
+    codes = await _run(main, [(0.1, True), (0.2, False)], until=1.0)
+    assert codes == [protocol.SHORT_PRESS]
+
+
+async def test_one_pin_is_opened_when_the_wired_button_is_the_boot_button(
+    main, monkeypatch,
+):
+    """A board whose only switch is on GPIO0 must not poll it twice - and the
+    dedupe is in the firmware rather than left to be harmless, because two Pin
+    objects on one strapping pin is the kind of thing that is harmless until
+    it is not."""
+    monkeypatch.setattr(main.hardware, "BUTTON_PIN", 0)
+    await _run(main, [(0.1, True), (0.2, False)], until=0.5)
+    assert PinStub.made == [0]
+
+
+async def test_an_older_hardware_py_still_boots(main, monkeypatch):
+    """The reason those two settings are read through `getattr`. hardware.py is
+    the one file people edit and carry forward, and a copy predating these
+    names must degrade to "no BOOT button" rather than raising at startup -
+    which on a headless board is indistinguishable from a dead board."""
+    monkeypatch.delattr(main.hardware, "BOOT_BUTTON_PIN", raising=False)
+    monkeypatch.delattr(main.hardware, "BOOT_BUTTON_ACTIVE_LOW", raising=False)
+    codes = await _run(main, [(0.1, True), (0.2, False)], until=1.0)
+    assert codes == [protocol.SHORT_PRESS]
+
+
+def test_hardware_declares_the_boot_button_on_by_default(main):
+    """It is "always active" by decision, not by accident - a default of None
+    would make every board that never edits hardware.py lose the spare."""
+    assert main.hardware.BOOT_BUTTON_PIN == 0
+    assert main.hardware.BOOT_BUTTON_ACTIVE_LOW is True

@@ -10,7 +10,7 @@ straight back — always live, fired without thinking (the everyday set, plus
 time-windowed overrides, launchers and control pages). **Apps** own the button
 until you leave — twelve of
 them: alarm,
-reminder, stopwatch, counter, intervals (Pomodoro, Tabata or HIIT — one
+reminder, stopwatch, tally, intervals (Pomodoro, Tabata or HIIT — one
 template, three presets), metronome, countdown, two games (Hot/Cold and a
 reaction timer), a signal light that doubles as an OSC or MIDI footswitch,
 a control surface that fires a different command per gesture (the DAW
@@ -43,9 +43,9 @@ Menus resolve first-match-wins against eight action primitives:
 | `enter_mode` | launch an app — one of the eleven, or the launcher that lists them |
 | `standby` | put the menus to sleep; the same gesture wakes them |
 
-And one thing no press starts: a **reflex** is a circumstance with an action
+And one thing no press starts: a **reaction** is a circumstance with an action
 attached. Name one, and anything that can make an HTTP request fires it —
-`POST /api/reflex/moisture_low` from a sensor, a cron job, a deploy script or
+`POST /api/reaction/moisture_low` from a sensor, a cron job, a deploy script or
 an iPhone Shortcut — running any of the actions below, launching an app
 included. The button acts with nobody touching it.
 
@@ -53,10 +53,11 @@ Example: between 05:00 and 07:00, a double tap logs `meds_taken`;
 any other time it falls through to **Home**, the always-on floor. See the
 `modes` section of [config.json](config.json).
 
-Modes are built from **behaviour templates** — actions, alarm, reminders,
-stopwatch, counter, pomodoro, metronome, countdown, hot/cold, reaction,
-signal, control and launcher — plus an *activation* saying when each turns
-on (always / time window / at a clock time / entered from another mode).
+Modes are built from **behaviour templates** — Actions, Notice, Stopwatch,
+Tally, Intervals, Metronome, Countdown, Hot/Cold, Reaction timer, Signal
+light, Control surface, Launcher and Light show — plus an *activation*
+saying when each turns on (always / time window / at a clock time /
+entered from another mode).
 
 A built-in **web UI** (http://localhost:8080) shows live device state and the
 event log, and includes a **point-and-click configuration menu**: add,
@@ -96,6 +97,7 @@ that a future phone app can reuse.
 | `control.pyw` | double-click launcher for the control panel — no console window |
 | `aibutton/web/index.html` | the web UI dashboard — one static page, no build step |
 | `aibutton/web/static/` | the configuration menu, as small ES modules (no build step) — `schema.js` is the single place to add an action type or setting |
+| `aibutton/documents.py` | an app's durable named values, beside the event log in the same file — the current value, where the log holds the history |
 | `aibutton/scenes.py` | scenes: swappable saved configs, merged over `config.json` before parsing — imports nothing from the package, and carries the offline CLI |
 | `config.json` | the config the app runs on (override with `--config` or `$AIBUTTON_CONFIG`) |
 | `scenes/` | saved setups, one JSON file each — hand-editable with nothing running; `config.json` says which is active |
@@ -108,7 +110,7 @@ LED/sound feedback, and an embedded uvicorn server for the web UI + REST
 API — no second service, no IPC. They share one live `ConfigManager`,
 `EventStore`, and `ButtonDevice`.
 
-The pipeline per press is a one-way flow (a *reflex* is the same flow with an
+The pipeline per press is a one-way flow (a *reaction* is the same flow with an
 HTTP request where the gesture would be — one queue over, dispatched by the
 same loop into the same actions):
 
@@ -169,6 +171,40 @@ Flashing the ESP32 is in [firmware/README.md](firmware/README.md). Only one
 instance can run at a time — BLE allows a single central — and a second one
 refuses at startup rather than fighting the first for the connection.
 
+## Numbers the button remembers
+
+The event log only ever appends, which answers "what happened in March" and
+cannot answer "what is it now" without recounting — and cannot express *"set
+this to 3"* at all. So an app may also keep a small **document**: a bounded bag
+of named values, declared per template, stored beside the log and never
+instead of it.
+
+Today one app uses it. A **tally** with *Keep counting past midnight* switched
+on takes its number from its document rather than from today's rows, which
+makes it a running total that survives midnight and restarts. Every press is
+still logged, so history, streaks and the Events page are unchanged.
+
+Because a document lives outside every app's run loop, **anything can write
+it**: bind a gesture anywhere to **Change an app's number** and you have
+"smoking +1" without opening the tally — and the tally opens on that same
+number, because it is the same number rather than two that agree. `GET
+/api/documents` reads them all; nothing but the button writes them.
+
+The limits are deliberate and small: scalars only, slots declared in advance,
+and a ceiling on how many an app may hold. That is the same "bounded by
+construction" line the on-device app runtime draws, applied to storage — see
+[ARCHITECTURE.md](ARCHITECTURE.md), "Apps own data".
+
+## Seeing a webhook before you send it
+
+A webhook's body is assembled from three places — the event's identity
+(`trigger`, `mode`, `ts`), the session summary the app reports as it finishes,
+and the payload you wrote — and which keys survive a collision is a rule
+rather than an accident: identity beats the app, and your payload beats both.
+Every webhook has **Preview payload**, which shows the exact JSON and sends
+nothing, and **Send a test**, which posts it and reports what came back. Keys
+the summary contract drops are named rather than silently missing.
+
 ## Driving a DAW — OSC and MIDI
 
 Two actions reach music software, and which one you want is decided by the
@@ -218,7 +254,7 @@ nothing else; the service starts and every other action works.
 
 ### The quick way: add the DAW transport app
 
-In the web UI, **Manage apps → Control surface → DAW transport (MIDI)**. It
+In the web UI, **Apps tab → Control surface → DAW transport (MIDI)**. It
 drops in a **control
 surface** — an app you open from the launcher, with one command per gesture:
 
@@ -254,6 +290,40 @@ Record is on the double tap deliberately: it is the one command whose
 accidental firing costs you a take. The marker is on five taps rather than the
 long press because **long press always means "up one level"** — an app that ate
 it would strand you inside itself.
+
+### The other direction: the light follows the DAW
+
+A control surface can also be a **readout**. Give it **positions** — a name
+and one of your named looks each, say *Stopped* wearing a dark blue and
+*Recording* wearing a slow red breathe — and the page wears whichever position
+it was last told it is in, instead of a single resting colour.
+
+Nothing you press moves it. A position arrives as a **reaction**: the DAW lights
+its own Record lamp by sending note 95 back down the wire, so *"recording"*
+reaches the button as a fact rather than as a guess about what you last
+pressed. That distinction is the whole point — a local toggle is right until
+somebody clicks in the DAW, and then it is silently inverted for the rest of
+the session, every press doing the opposite of what the light says.
+
+What it needs:
+
+1. **A second loopMIDI port** for the return direction. One cable per
+   direction; the DAW's Mackie Control device has a **Send To** as well as a
+   **Receive From**.
+2. **A reaction per position**, each listening on that port
+   (*From: MIDI*, note 95), scoped with **Only while** to the surface's name,
+   and running **Put an app on a position**. Velocity is what tells them
+   apart: `velocity == 127` is the lamp coming on, `velocity == 0` is it going
+   off — one source, two opposite tests.
+
+The position's own gestures are **not** fired when it changes this way.
+Sending "record" back to the thing that just told you it is recording is a
+loop.
+
+**A surface with positions and no reaction able to set one says so** — in the
+log and on the dashboard — rather than showing the first position as if it had
+been reported. Position one looks identical whether it is a fact or an
+assumption, so it has to say which.
 
 ### Following the project tempo
 
@@ -343,12 +413,20 @@ runs, which is why a scene gets the same per-key fallbacks and the same
 warnings as a config: there is only one parser. A scene need only carry what
 it changes — one holding just `modes` keeps the base's colours.
 
+**`scenes/default.json` is the one exception to "these are yours to make"** —
+it is the curated, shipped starter every clone of this repo gets, checked into
+git so it can be handed to someone with nothing configured yet. Every other
+scene is somebody's own button, made through the UI or by hand, and
+`.gitignore` keeps it that way: `scenes/*.json` is ignored except
+`default.json`, so a personal scene never ends up in a commit by accident.
+Name yours anything but `default`.
+
 Because they are files, they are editable with nothing running:
 
 ```bash
-.venv/Scripts/python -m aibutton.scenes list           # what exists, what is active
-.venv/Scripts/python -m aibutton.scenes check focus    # validate, with the real parser
-.venv/Scripts/python -m aibutton.scenes activate focus # switch, applies at next start
+./.venv/Scripts/python -m aibutton.scenes list           # what exists, what is active
+./.venv/Scripts/python -m aibutton.scenes check focus    # validate, with the real parser
+./.venv/Scripts/python -m aibutton.scenes activate focus # switch, applies at next start
 ```
 
 Switching is hot — modes, colours and all — with one honest exception: the BLE
@@ -359,7 +437,7 @@ scene that changes them reports `needs_restart` rather than pretending. No
 For a GUI with nothing running, build the standalone editor:
 
 ```bash
-.venv/Scripts/python tools/build_editor.py
+./.venv/Scripts/python tools/build_editor.py
 ```
 
 That writes `dist/button-editor.html` — one self-contained file you can

@@ -1,38 +1,37 @@
 {
   "name": "Default",
-  "ble_device_name": "AIButton",
-  "sounds_enabled": false,
-  "database_path": "data/events.db",
-  "web_enabled": true,
-  "web_host": "0.0.0.0",
-  "web_port": 8080,
-  "min_flash_period_s": 0.3,
   "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": {
+        "type": "always"
+      },
+      "short_press": {
+        "action": "log",
+        "event": "button_press"
+      },
+      "double_tap": {
+        "action": "enter_mode",
+        "target": "Launcher"
+      },
+      "long_press": {
+        "action": "enter_mode",
+        "target": "Pomodoro"
+      }
+    },
+    {
+      "name": "Launcher",
+      "template": "launcher",
+      "activation": {
+        "type": "manual"
+      }
+    },
     {
       "name": "Stopwatch",
       "template": "stopwatch",
       "activation": {
         "type": "manual"
-      },
-      "log_as": "stopwatch",
-      "ladder": {
-        "enabled": true,
-        "tick_s": 0.5,
-        "base": "#000000",
-        "rungs": [
-          {
-            "every_s": 10,
-            "color": "#ffffff"
-          },
-          {
-            "every_s": 2,
-            "color": "#421e00"
-          },
-          {
-            "every_s": 1,
-            "color": "#92904f"
-          }
-        ]
       }
     },
     {
@@ -40,390 +39,16 @@
       "template": "pomodoro",
       "activation": {
         "type": "manual"
-      },
-      "looks": {
-        "WORKING": "Ponder",
-        "RESTING": "Cooldown"
-      },
-      "work_s": 1500,
-      "break_s": 6006,
-      "long_break_s": 900,
-      "blocks_before_long_break": 4,
-      "extend_s": 600,
-      "rounds": 0,
-      "lead_in_s": 3,
-      "advance": "break_only",
-      "log_as": "pomodoro",
-      "waiting_style": "solid",
-      "ramp": [
-        {
-          "color": "#ffffff",
-          "at": 0
-        }
-      ],
-      "short_press": "toggle",
-      "long_press": "exit",
-      "double_tap": "extend"
+      }
     },
     {
-      "name": "Metronome",
-      "template": "metronome",
-      "activation": {
-        "type": "manual"
-      },
-      "ladder": {
-        "enabled": true,
-        "tick_s": 0.5,
-        "base": "#000000",
-        "rungs": [
-          {
-            "every_s": 8,
-            "color": "#00ff2a"
-          },
-          {
-            "every_s": 4,
-            "color": "#103d00"
-          },
-          {
-            "every_s": 2,
-            "color": "#4c8e9a"
-          },
-          {
-            "every_s": 1,
-            "color": "#1d2062"
-          }
-        ]
-      },
-      "start_bpm": 120,
-      "tap_history": 4,
-      "reset_gap_s": 2,
-      "max_bpm": 600,
-      "sound_on_tap": true,
-      "log_as": "metronome",
-      "clock_port": ""
-    },
-    {
-      "name": "Counter",
-      "template": "counter",
-      "activation": {
-        "type": "manual"
-      },
-      "looks": {
-        "COUNTING": "Got It"
-      },
-      "event": "Habit"
-    },
-    {
-      "name": "Alarm",
-      "template": "alarm",
-      "activation": {
-        "type": "schedule",
-        "at": "07:00",
-        "days": [
-          "mon",
-          "tue",
-          "wed",
-          "thu",
-          "fri",
-          "sat",
-          "sun"
-        ]
-      },
-      "message": "Wake up",
-      "label": "",
-      "snooze_minutes": 10,
-      "dismiss_event": "woke_up",
-      "grace_minutes": 0
-    },
-    {
-      "name": "Countdown 60s",
+      "name": "Countdown 10 min",
       "template": "countdown",
       "activation": {
         "type": "manual"
       },
-      "minutes": 1,
-      "label": "1min",
-      "style": "flash",
-      "period_s": 0.5,
-      "ramp": [
-        {
-          "color": "#240000",
-          "at": 0
-        },
-        {
-          "color": "#703c00",
-          "at": 0.2
-        },
-        {
-          "color": "#999900",
-          "at": 0.4
-        },
-        {
-          "color": "#00c79f",
-          "at": 0.6
-        },
-        {
-          "color": "#000cb8",
-          "at": 0.8
-        },
-        {
-          "color": "#ffffff",
-          "at": 1
-        }
-      ],
-      "ring_on_finish": true,
-      "log_as": "countdown",
-      "ladder": {
-        "enabled": true,
-        "tick_s": 1,
-        "base": "#000000",
-        "rungs": [
-          {
-            "every_s": 10,
-            "color": "#ffffff"
-          },
-          {
-            "every_s": 5,
-            "color": "#00ffd5"
-          },
-          {
-            "every_s": 2,
-            "color": "#6689db"
-          }
-        ]
-      }
-    },
-    {
-      "name": "Actions",
-      "template": "actions",
-      "activation": {
-        "type": "always"
-      },
-      "short_press": {
-        "action": "enter_mode",
-        "target": "DAW Control"
-      },
-      "double_tap": {
-        "action": "enter_mode",
-        "target": "DAW Control"
-      },
-      "triple_tap": {
-        "action": "enter_mode",
-        "target": "Stopwatch"
-      },
-      "tap_4": {
-        "action": "enter_mode",
-        "target": "Countdown 60s"
-      }
-    },
-    {
-      "name": "DAW Control",
-      "template": "control",
-      "activation": {
-        "type": "manual"
-      },
-      "looks": {
-        "LISTENING": "look"
-      },
-      "short_press": {
-        "action": "midi",
-        "port": "4G3NT",
-        "channel": 1,
-        "kind": "note_on",
-        "number": 95,
-        "value": 127
-      },
-      "double_tap": {
-        "action": "midi",
-        "port": "4G3NT",
-        "channel": 1,
-        "kind": "note_on",
-        "number": 93,
-        "value": 127
-      },
-      "triple_tap": {
-        "action": "midi",
-        "port": "4G3NT",
-        "channel": 1,
-        "kind": "note_on",
-        "number": 94,
-        "value": 127
-      },
-      "tap_4": {
-        "action": "midi",
-        "port": "4G3NT",
-        "channel": 1,
-        "kind": "note_on",
-        "number": 89,
-        "value": 127
-      },
-      "tap_5": {
-        "action": "midi",
-        "port": "4G3NT",
-        "channel": 1,
-        "kind": "note_on",
-        "number": 86,
-        "value": 127
-      },
-      "log_as": "",
-      "return_after": true
+      "minutes": 10,
+      "label": "10 min"
     }
-  ],
-  "led_palette": {
-    "IDLE": {
-      "style": "rainbow",
-      "color": "#383838",
-      "color2": "#a3a3a3",
-      "period_s": 6
-    },
-    "LISTENING": {
-      "style": "solid",
-      "color": "#59ff00",
-      "color2": "#000000",
-      "period_s": 3
-    },
-    "THINKING": {
-      "style": "alternate",
-      "color": "#ccfff7",
-      "color2": "#6e6e6e",
-      "period_s": 0.4
-    },
-    "SUCCESS": {
-      "style": "solid",
-      "color": "#00ff00",
-      "color2": "#000000",
-      "period_s": 1
-    },
-    "ERROR": {
-      "style": "flash",
-      "color": "#ff0000",
-      "color2": "#000000",
-      "period_s": 0.483333333333333
-    },
-    "ALERT": {
-      "style": "alternate",
-      "color": "#ff0000",
-      "color2": "#fff700",
-      "period_s": 0.4
-    },
-    "TIMING": {
-      "style": "flash",
-      "color": "#0062ff",
-      "color2": "#000000",
-      "period_s": 0.603333333333333
-    },
-    "COUNTING": {
-      "style": "fade",
-      "color": "#00eeff",
-      "color2": "#0033ff",
-      "period_s": 8
-    },
-    "WORKING": {
-      "style": "breathe",
-      "color": "#4400ff",
-      "color2": "#000000",
-      "period_s": 10
-    },
-    "RESTING": {
-      "style": "breathe",
-      "color": "#00ff88",
-      "color2": "#000000",
-      "period_s": 10
-    },
-    "METRONOME": {
-      "style": "flash",
-      "color": "#ffffff",
-      "color2": "#000000",
-      "period_s": 0.5
-    }
-  },
-  "looks": {
-    "Ponder": {
-      "stops": [
-        {
-          "color": "#ff9e9e",
-          "hold_s": 0.5,
-          "fade_s": 0,
-          "curve": "linear"
-        },
-        {
-          "color": "#000000",
-          "hold_s": 1,
-          "fade_s": 0.5,
-          "curve": "linear"
-        }
-      ],
-      "repeat": true,
-      "drive": "clock"
-    },
-    "Cops": {
-      "style": "alternate",
-      "color": "#ff0000",
-      "color2": "#0033ff",
-      "period_s": 0.91
-    },
-    "Cooldown": {
-      "style": "breathe",
-      "color": "#00a8ff",
-      "color2": "#000000",
-      "period_s": 10
-    },
-    "blip": {
-      "stops": [
-        {
-          "color": "#04ff00",
-          "hold_s": 0.05,
-          "fade_s": 0,
-          "curve": "ease_out"
-        },
-        {
-          "color": "#000000",
-          "hold_s": 2.95,
-          "fade_s": 0,
-          "curve": "ease_out"
-        }
-      ],
-      "repeat": true,
-      "drive": "clock"
-    },
-    "look": {
-      "stops": [
-        {
-          "color": "#02030a",
-          "hold_s": 1,
-          "fade_s": 2,
-          "curve": "ease_in"
-        },
-        {
-          "color": "#7d7d7d",
-          "hold_s": 1,
-          "fade_s": 2,
-          "curve": "ease_in"
-        }
-      ],
-      "repeat": true,
-      "drive": "clock"
-    },
-    "Got It": {
-      "stops": [
-        {
-          "color": "#ffffff",
-          "hold_s": 0.07,
-          "fade_s": 0,
-          "curve": "linear"
-        },
-        {
-          "color": "#00ff2a",
-          "hold_s": 0.7,
-          "fade_s": 0.18,
-          "curve": "ease_out"
-        }
-      ],
-      "repeat": false,
-      "drive": "clock"
-    }
-  },
-  "actions": {},
-  "reflexes": [],
-  "state_looks": {}
+  ]
 }

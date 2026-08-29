@@ -84,8 +84,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE events ADD COLUMN value REAL")
 
 
-def _connect(path: str) -> sqlite3.Connection:
-    """Open (creating the directory if needed), apply the schema, migrate."""
+def open_database(path: str, schema: str) -> sqlite3.Connection:
+    """Open `path` (creating the directory if needed) and apply `schema`.
+
+    Shared with [documents.py](documents.py), which keeps a second table in
+    the same file (TODO 34): one place that knows about the busy timeout, the
+    in-memory sentinel and creating the parent directory, because two copies
+    of that would drift on the day one of them is tuned.
+    """
     target: str | Path = path
     if path != _MEMORY:
         db_path = Path(path)
@@ -93,7 +99,14 @@ def _connect(path: str) -> sqlite3.Connection:
             db_path.parent.mkdir(parents=True, exist_ok=True)
         target = db_path
     conn = sqlite3.connect(target, timeout=_BUSY_TIMEOUT_S)
-    conn.execute(_SCHEMA)
+    conn.execute(schema)
+    conn.commit()
+    return conn
+
+
+def _connect(path: str) -> sqlite3.Connection:
+    """The event log's own connection: the shared open, plus its migration."""
+    conn = open_database(path, _SCHEMA)
     _migrate(conn)
     conn.commit()
     return conn
@@ -283,6 +296,31 @@ class EventStore:
             "SELECT ts, kind, name, duration_s, mode, value "
             f"FROM events{clause} ORDER BY id DESC LIMIT ?",
             params,
+        ).fetchall()
+
+    def readout_summary(self) -> list[tuple]:
+        """One row per (kind, name): how many, when last, and the extremes.
+
+        **One query for the whole log, because the caller is a list** (TODO
+        101). The nav shows a live line under every app it holds, and asking
+        per app would be one request per row on a page that re-renders as you
+        type. Grouping in SQLite is what this shape is for; the rows come back
+        small - one per distinct (kind, name) pair the log has ever seen.
+
+        Deliberately *not* windowed. A headline saying "12 runs" that silently
+        meant "12 of the last 500 rows" is the kind of number that looks right
+        for months, and `recent`'s limit exists because that view is a feed
+        rather than a total.
+
+        `duration_s` and `value` are summarised separately because they are
+        different questions asked of the same table - how long it took, and
+        what number it carried - and a row usually has exactly one of them.
+        """
+        return self._conn.execute(
+            "SELECT kind, name, COUNT(*), MAX(ts), "
+            "       MIN(duration_s), MAX(duration_s), "
+            "       MIN(value), MAX(value) "
+            "FROM events GROUP BY kind, name"
         ).fetchall()
 
     def kinds(self) -> list[str]:

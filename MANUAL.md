@@ -70,7 +70,7 @@ that owns:
 
 - what each gesture does,
 - how the LED looks and what sounds play,
-- any live state it keeps (a running stopwatch, a counter total).
+- any live state it keeps (a running stopwatch, a tally total).
 
 There are two kinds of mode:
 
@@ -79,11 +79,11 @@ There are two kinds of mode:
   is a menu, and is the floor that is always available. You can add other
   menus scoped to a time window (e.g. a different behaviour 5–7 am).
 - **Apps** *take over* the button. When one launches — an alarm ringing, a
-  stopwatch running, a counter open — every press goes to that app until you
+  stopwatch running, a tally open — every press goes to that app until you
   exit it, then the button drops back to your menus. While an app is
   running, your menus are muted; that is the point.
 
-And one thing that is not a mode: a **reflex** (§5.8), where the button acts
+And one thing that is not a mode: a **reaction** (§5.8), where the button acts
 with nobody pressing it.
 
 You build the device by defining modes and the **trigger** that activates each.
@@ -96,7 +96,7 @@ Open **http://&lt;device&gt;:8080** on any phone or laptop on the same network
 (during development, `http://localhost:8080`). Down the left is the
 navigation — four destinations, **Events**, **Lights**, **Device** and
 **Apps**, and under them everything you have, grouped into **Menus**, **Apps**
-and **Reflexes**.
+and **Reactions**.
 Clicking a mode opens it. The page lands on **Events**, because most visits
 are to see what the button has been doing rather than to change what it does.
 
@@ -115,57 +115,72 @@ with a long press.
 
 ### 4.1 The mode list
 
-The left-hand list is your modes, each with a one-line summary and a dot of
-the colour it runs in. This is what a button with no config of its own starts
-out holding:
+The left-hand list is your modes, each with a dot of the colour it runs in, a
+mark saying **what sets it off**, and one line saying what makes *this* one
+different from its siblings. This is what a button with no config of its own
+starts out holding:
 
 ```
 ◦ Events                    |
 ◦ Lights                    |   whichever section or mode
-◦ Device                    |   you picked on the left
+◦ Actions                   |   you picked on the left
+◦ Device                    |
+◦ Apps                      |
                             |
 MENUS                       |
   Home                      |
   short->Log "button_press" |
-  Launcher                  |
-  offers every app          |
+  ▸ Launcher                |
+  over every app            |
                             |
 APPS                        |
-  Pomodoro                  |
-  25/5, logs "pomodoro"     |
-  Stopwatch                 |
-  Stopwatch "stopwatch"     |
-                            |
-REFLEXES                    |
-  nothing happens on its    |
-  own yet                   |
+  ▸ Pomodoro                |
+  25m/5m (auto)             |
+  ▸ Stopwatch               |
+  logs "stopwatch"          |
   + Add menu                |
-  Manage apps →             |
                             |
                             [Save & apply] [Check] [Revert]  Saved
 ```
+
+**The mark in front of a name says what starts it**, which is the one thing you
+cannot work out by looking at the mode itself:
+
+| | Started by |
+|---|---|
+| *(nothing)* | it is always listening - every menu is |
+| **▸** | a press somewhere opens it |
+| **◷** | a clock does, with nobody pressing anything |
+| **⚡** | a reaction does (§5.8) |
+| **⊘** | **nothing can reach it.** You can configure this mode and never get to it - bind a gesture to *Launch an app*, or add it to a launcher |
+
+That last one is the reason the marks exist. An app nothing points at looks
+exactly like a working one until you go hunting for it on the button.
 
 **Home** is your baseline menu and the only mode that is always on. Its double
 tap opens the **Launcher** — a menu too, since all it does is let a press pick
 between things — which reaches every app you add later without you wiring
 anything (§7), and its long press opens the Pomodoro. Those four modes are
 also the floor a broken config falls back to, so this list is what the button
-does when nothing else is true. **Reflexes** starts empty, because nothing
-outside the button is talking to it yet (§5.8).
+does when nothing else is true.
+
+Your **named actions** and your **reactions** live together under **Actions**,
+because a reaction is a circumstance with an action attached and the pool is
+where those actions come from. Both start empty (§5.8).
 
 Click a mode in the list and it opens on the right; the list stays where it
 is, so moving between modes is one click rather than two. Device plumbing
 lives under **Device** so it stays out of your way, and the colours under
 **Lights** (§8).
 
-Two buttons sit under the list, because there are two different things to
-add. **+ Add menu** writes a new gesture map here and now. **Manage apps
-→** opens the App page (§4.6), which is where apps are installed — including
-the fourteen ready-made ones: Pomodoro, Tabata and HIIT intervals, a Gratitude
-counter, a Stopwatch, a 10-minute Countdown, a 5AM alarm, a Metronome, the
-Hot/Cold and Reaction games, a Status light, and three footswitch/transport
-remotes for a DAW (OSC and MIDI). Quicker than assembling one field by field,
-and a decent tour of what the button can do.
+One button sits under the list: **+ Add menu** writes a new gesture map here
+and now. Installing an app happens on the **Apps** tab instead (§4.6), up at
+the top of this same nav — including the sixteen ready-made ones: an Alarm and
+a Reminder, Pomodoro, Tabata and HIIT intervals, a Gratitude tally, a
+Stopwatch, a 10-minute Countdown, a 5AM alarm, a Metronome, the Hot/Cold and
+Reaction games, a Status light, and three footswitch/transport remotes for a
+DAW (OSC and MIDI). Quicker than assembling one field by field, and a decent
+tour of what the button can do.
 
 ### 4.2 Anatomy of a mode
 
@@ -174,9 +189,10 @@ Every mode is edited with the same three-part card, no matter its kind:
 1. **Name** — your label; shown in summaries, the status line, and over
    Bluetooth.
 2. **What it does** — *what kind* of mode it is: **Actions** for a menu,
-   or one of the eleven apps — Alarm, Reminder, Stopwatch, Counter,
-   Intervals, Metronome, Countdown, Hot/Cold, Reaction timer, Signal light,
-   Control surface — plus the **App launcher** that reaches them all (§5).
+   or one of the ten apps — Notice (an alarm or a gentler reminder,
+   depending on one setting), Stopwatch, Tally, Intervals, Metronome,
+   Countdown, Hot/Cold, Reaction timer, Signal light, Control surface — plus
+   the **App launcher** that reaches them all (§5).
    Choosing it swaps the fields below to match.
 3. **When it's on** — (Always on / Only during certain hours / At a set time
    each day / Only when another mode starts it). Choosing it swaps the scope
@@ -225,7 +241,7 @@ one `.json` each, and you can edit them in Notepad with nothing running — no
 service, no button, no browser. To check one before you use it:
 
 ```bash
-.venv/Scripts/python -m aibutton.scenes check focus
+./.venv/Scripts/python -m aibutton.scenes check focus
 ```
 
 That runs the same validator the button does and prints exactly what it would
@@ -306,7 +322,7 @@ button fails loudly there rather than quietly doing something nobody chose.
 
 Open one of your apps and the first thing on the page is **what it has
 actually done**, above its settings. A stopwatch lists its runs — longest,
-shortest, average, and how each run compared with the one before it. A counter
+shortest, average, and how each run compared with the one before it. A tally
 shows how many a day held. An alarm shows whether you answered it.
 
 None of this is new data. It is the event log, filtered to that app's own
@@ -362,14 +378,14 @@ One kind of menu, twelve apps, and a launcher that reaches them:
 | **Alarm** | rings at a set time until you stop it, and can act if you *don't* (§5.2) | any press; long press snoozes if you set one |
 | **Reminder** | a gentler alarm: shows at a set time, chimes once, gives up on its own after a while | any press |
 | **Stopwatch** | times something, with laps (§5.3) | long press stops and logs |
-| **Counter** | a tally you press up (§5.5) | long press |
+| **Tally** | a count you press up — today's, or a running total it remembers (§5.5) | long press |
 | **Intervals** | work/rest blocks — Pomodoro, Tabata or HIIT from the one template (§5.4) | whichever gesture you put "leave" on; long press by default |
 | **Metronome** | tap a tempo and the light keeps it, or follow a DAW's MIDI clock (§5.6) | long press |
 | **Countdown** | counts a set number of minutes down, the colour walking as the time goes, then rings | long press; at zero it rings until any press |
 | **Hot / Cold** | a guessing game: stop a spinning colour wheel on the hidden target | long press (short press stops the wheel) |
 | **Reaction timer** | the light goes out at a random moment; press as fast as you can | long press (short press is your answer) |
 | **Signal light** | wears one of your positions — Free / Busy / On air — and can send something on each change, which makes it an OSC or MIDI footswitch too | long press (short = next, double tap = send again) |
-| **Control surface** | a remote: one command per gesture, held open so you can send several. Bind a gesture to **Launch an app** and it becomes a menu page | long press |
+| **Control surface** | a remote: one command per gesture, held open so you can send several. Bind a gesture to **Launch an app** and it becomes a menu page; give it **positions** and it also shows what the far end says it is doing (§7) | long press |
 | **Light show** | plays a playlist of your named looks, one after another (§5.7) | long press (short = next, double tap = hold) |
 | **App launcher** | steps through your apps so you don't need a gesture wired to each one | long press (short = next app, **double tap launches**) |
 
@@ -389,10 +405,11 @@ Available actions:
 | **Log an event** | records a timestamped event (meds, habits); counted and streak-tracked |
 | **Show a count on the light** | blinks today's count for an event back at you without opening anything: tens as slow pulses, units as quick ones, so 27 is two slow then seven quick. It only reads — it never adds a count of its own |
 | **Start / stop a timer** | toggles a named stopwatch; the elapsed time is logged when stopped |
-| **Call a webhook** | POSTs to any URL — the IFTTT / Make / n8n / Home Assistant hook. Pick a service and it fills in a template for you |
+| **Call a webhook** | POSTs to any URL — the IFTTT / Make / n8n / Home Assistant hook. Pick a service and it fills in a template for you, and **Preview payload** shows the exact body before you send anything |
 | **Send an OSC message** | fires one OSC message over the network at anything listening — Reaper, QLab, Resolume, TouchOSC, VCV Rack |
 | **Send a MIDI message** | sends one note or CC to a MIDI port, for a DAW that speaks MIDI and not OSC. Start from a DAW command (Play, Record, Loop…) and it works unlearned |
-| **Launch an app** | opens one of your apps — how you start a stopwatch, a counter or the launcher by hand. The picker shows each app's light beside its name, so you choose the one you recognise rather than the one you remembered naming |
+| **Launch an app** | opens one of your apps — how you start a stopwatch, a tally or the launcher by hand. The picker shows each app's light beside its name, so you choose the one you recognise rather than the one you remembered naming |
+| **Change an app's number** | adds to (or sets) a value an app remembers — "smoking +1" without opening the tally. Only apps that keep a value appear in the picker |
 | **Sleep / wake the button** | puts your menus to sleep; the same gesture wakes them |
 | **Do several things in order** | one gesture, several actions, each able to wait a moment first. Up to eight steps and ten seconds, and the button is held until the last one finishes. This is how you send a *press and a release* to a DAW that wants a button rather than a trigger, or the *Stop, Stop* that Mackie Control uses for return-to-zero |
 
@@ -402,6 +419,22 @@ sat there. Nothing about it depends on telling colours apart — the *rhythm*
 carries the number — so it still works across a warm-tinted room and for a
 colourblind reader. And because it only reads, it is safe on a gesture that
 some other mode already logs to: you will not double-count anything.
+
+**About seeing what a webhook sends.** A webhook's body is three things
+merged: the event's identity (`trigger`, `mode`, `ts`), whatever the app
+reports as it finishes, and the payload you typed. Which keys actually arrive
+was previously something you found out by standing up a receiver, so every
+webhook now has **Preview payload** — the exact body, sent nowhere — and
+**Send a test**, which really posts it and reports what came back. Identity
+wins over an app's numbers, and your own payload wins over both.
+
+**About changing an app's number.** An app that keeps a value — today, a
+tally with *Keep counting past midnight* switched on — can be written from
+anywhere, without opening it. Pick the app, pick the value, and choose **add
+to it** (the everyday one) or **set it to** (which is how you reset it to
+zero). The app shows the same number the next time you open it, because it is
+the same number rather than two that agree. An action naming an app you later
+delete stays as it is and says so, rather than quietly pointing somewhere else.
 
 **About Sleep / wake.** While asleep the button answers nothing — no tone, no
 light, no logged event — except the gesture you bound to this, which is what
@@ -451,9 +484,12 @@ Fields:
 
 - **Message** — shown while ringing.
 - **Short label** — optional name for status/Bluetooth.
+- **Urgent** — on for an alarm's loop-and-hard-flash; off for a gentler
+  chime-once-and-breathe (this is the one setting that turns the same app
+  into a Reminder — see below).
 - **Snooze minutes** — `0` means long-press just dismisses like any other press.
-- **Log on dismiss** — optional event name recorded when you dismiss (e.g.
-  `woke_up`), so it shows up in your history.
+- **Log as** — every clear logs `1` and every miss logs `0` under this name,
+  automatically — there is nothing to opt into, it always happens.
 
 Activate an alarm with **At a time** (a real alarm clock) — see §6.
 
@@ -463,8 +499,9 @@ waits forever: it rings, and if nothing has answered by then it runs that
 action once and stops. A webhook that texts someone, a log row, an OSC
 message — anything a hook can run.
 
-Both halves are needed. Set one without the other and the editor's log says
-so, because a switch that was never armed looks exactly like one that was.
+Give it an action with **Give up after** still at `0` and the editor's log
+says so — that action could structurally never fire. The other half needs no
+warning any more: **Log as** already records every miss, action or not.
 
 Each outcome is recorded under the same event name, so **Events** answers "did
 I check in?" for both: `1` for answered, `0` for unanswered.
@@ -527,7 +564,7 @@ get-ready pause, the LED keeps the **colour of the block it is about** and
 just stops moving — the style you picked under *While paused or waiting for a
 press*. Same colour, no animation: it is the same block, not counting.
 
-### 5.5 Counter — tally something
+### 5.5 Tally — count something
 
 An **app**. Opening it starts a tally (LED shows a counting state).
 
@@ -536,7 +573,27 @@ An **app**. Opening it starts a tally (LED shows a counting state).
 | **Short press / double tap** | +1 (each is logged, so counts and streaks build up) |
 | **Long press** | exit |
 
-Field: **Event name** — what each increment is logged as (e.g. `water`).
+Fields:
+
+- **Event name** — what each increment is logged as (e.g. `water`).
+- **Keep counting past midnight** — which question the number answers. Off
+  (the default), it is *today's* presses and it starts again each day, which
+  is what a habit tally wants. On, it is a **running total the app
+  remembers**: it survives midnight, restarts and power cuts, and you reset it
+  by setting it to 0.
+
+Either way every press is logged, so the Events page, streaks and this app's
+own history read the same.
+
+**A running total can be added to from anywhere.** Bind a gesture — in your
+everyday menu, on a control surface, anywhere an action goes — to **Change an
+app's number**, name the tally and add 1. That is "smoking +1" without
+opening the app, and the tally shows the same number when you next do open
+it, because it is the same number rather than two that agree.
+
+The action has three parts: which **app**, which of its **values** (a tally
+keeps one, called `count`), and whether to **add to it** or **set it to** a
+number. Only apps that keep a value of their own appear in the picker.
 
 ### 5.6 Metronome — tap out a tempo
 
@@ -577,49 +634,55 @@ than one that shows a gap.
 
 ---
 
-### 5.8 Reflexes — the button acting on its own
+### 5.8 Reactions — the button acting on its own
 
-Everything above answers a press. A **reflex** does not: it is a circumstance
+Everything above answers a press. A **reaction** does not: it is a circumstance
 with an action attached, and something *outside* the button sets it off.
 
 Give it a name and an action, and it gets an address:
 
 ```
-POST http://<device>:8080/api/reflex/moisture_low
+POST http://<device>:8080/api/reaction/moisture_low
 ```
 
 Anything that can make an HTTP request can fire it — a sensor, a cron job, a
 deploy script, Home Assistant, an iPhone Shortcut, or `curl` from a terminal:
 
 ```bash
-curl -X POST http://localhost:8080/api/reflex/moisture_low
+curl -X POST http://localhost:8080/api/reaction/moisture_low
 ```
 
-The action is any action the button already has, plus **Launch an app** — so
-"the plant is dry, ring the alarm" is one reflex, and so is "the build passed,
-send the MIDI note". A reflex can also point at a **named action**, the same
-shared pool a gesture uses, so several reflexes can share one webhook.
+**If you wired something up before this was renamed, it still works.** These
+were called *reflexes*, and `POST /api/reflex/<name>` answers exactly as it
+always did and always will — the address is the one thing about this button
+that gets written down somewhere you cannot edit from here, so it does not get
+retired. Only the word changed.
 
-**Only when — testing what arrived.** Post a flat JSON object and a reflex can
+The action is any action the button already has, plus **Launch an app** — so
+"the plant is dry, ring the alarm" is one reaction, and so is "the build passed,
+send the MIDI note". A reaction can also point at a **named action**, the same
+shared pool a gesture uses, so several reactions can share one webhook.
+
+**Only when — testing what arrived.** Post a flat JSON object and a reaction can
 read one field of it: `moisture` `<` `30`. That is the whole test — one field,
 one operator, one number, and deliberately no way to write a second condition
 (a sensor that needs one can decide for itself and post a different name).
 
 ```bash
-curl -X POST http://localhost:8080/api/reflex/moisture_low   -H 'content-type: application/json' -d '{"moisture": 12}'
+curl -X POST http://localhost:8080/api/reaction/moisture_low   -H 'content-type: application/json' -d '{"moisture": 12}'
 ```
 
 **The number is recorded either way.** Whether or not it crossed the line, the
-reading lands in the event log under the reflex's name — so the Events page
+reading lands in the event log under the reaction's name — so the Events page
 charts your sensor, not just the times it set something off. A field that is
 missing from the body never fires: a renamed sensor key should look like
 silence, not like an alarm that will not stop.
 
-**Fired by MIDI, not just by its address.** A reflex can also listen to a MIDI
+**Fired by MIDI, not just by its address.** A reaction can also listen to a MIDI
 port: pick *a MIDI note* or *a control change* under **Fired by**, give it the
 port and the number, and every matching message arrives as if it had been
 posted — `{"note": 95, "velocity": 127, "channel": 1}` — for **Only when** to
-test. The URL keeps working either way, which is how you try a reflex out with
+test. The URL keeps working either way, which is how you try a reaction out with
 the DAW closed.
 
 This is what makes the button hear a DAW rather than guess at it. A control
@@ -632,23 +695,23 @@ that is right and one that is right until you click something in the DAW.
 
 Three more things worth knowing:
 
-- **A reflex is not a press.** Nothing acks, nothing flashes as if a finger
+- **A reaction is not a press.** Nothing acks, nothing flashes as if a finger
   arrived; the light shows the result of the action, and what gets logged is
   attributed to no mode, because none was running.
 - **A busy button finishes what it is doing first.** Presses made while an app
-  owns the button are dropped — their moment has passed — but a reflex waits
+  owns the button are dropped — their moment has passed — but a reaction waits
   its turn, because a plant that has gone dry still means it. Up to sixteen
   wait; past that the service says no rather than queueing an hour of them.
-- **"Only while"** is how a reflex reaches *into* an app that is already
-  running. Name the app and the reflex is delivered to it while it runs —
-  which is what **Put an app on a position** is for: with a signal light open,
-  something outside can move it between its positions, and the light follows
-  without anyone pressing anything. The position's own message is *not* sent
-  when it changes this way — something out there just told you that is where
-  you are, and sending it back would be an echo.
+- **"Only while"** is how a reaction reaches *into* an app that is already
+  running. Name the app and the reaction is delivered to it while it runs —
+  which is what **Put an app on a position** is for: with a signal light or a
+  control surface open, something outside can move it between its positions,
+  and the light follows without anyone pressing anything. The position's own
+  message is *not* sent when it changes this way — something out there just
+  told you that is where you are, and sending it back would be an echo.
 
 A typo in the name is told to you at the moment you make it: posting to a
-reflex that does not exist answers `404` and lists the ones that do.
+reaction that does not exist answers `404` and lists the ones that do.
 
 
 ## 6. When it's on
@@ -720,10 +783,10 @@ Clearing the long press entirely is a fine third option: every app is still a
 double tap and a few short presses away through the launcher.
 
 **Add an app without spending a gesture**
-Manage apps → Counter → Install → name it "Water" (event `water`) → **Only when another mode
+Apps tab → Tally → Install → name it "Water" (event `water`) → **Only when another mode
 starts it**. That is the whole recipe; there is no second step. The launcher
 offers every app in list order unless you name a shorter list, so the new
-counter turns up on your double tap with nothing else wired. Open it, tap once
+tally turns up on your double tap with nothing else wired. Open it, tap once
 per glass, long-press to close — and because you launched it from the
 launcher, that long press lands you back in the launcher rather than all the
 way home.
@@ -746,8 +809,8 @@ you get one of the two. That squeeze, in miniature, is why the launcher
 exists.
 
 **Wake-up alarm, weekdays at 7 am**
-Manage apps → Alarm → Install → name it "Wake up" (message "Wake up", snooze 9,
-log on dismiss `woke_up`) → **At a set time each day** 07:00, days Mon–Fri.
+Apps tab → Alarm → Install → name it "Wake up" (message "Wake up", snooze 9,
+logged as `woke_up`) → **At a set time each day** 07:00, days Mon–Fri.
 At 7 am it rings; tap to dismiss, hold to snooze 9 minutes. This one spends no
 gesture at all: a clock starts it, which is why Alarm and Reminder are the
 only two kinds offered **At a set time each day** (§6).
@@ -772,7 +835,7 @@ evening if you skip them.
    needed at all, and what would remove it, is written up as a project item;
    short version: a hardware controller *is* a MIDI port, and this one is not
    yet.)
-2. **Install the app**: Manage apps → **Control surface** → the ready-made
+2. **Install the app**: Apps tab → **Control surface** → the ready-made
    *DAW remote (MIDI)*. Its gestures come pre-mapped to Record, Stop, Play,
    Click and Loop, and you start it from a gesture like any other app.
 3. **Name the port on every binding.** Put part of your port's name in the
@@ -796,8 +859,21 @@ the same note at 0 with a wait of `0.05`.
 
 **The other direction** — the DAW telling the *button* what it is doing, so
 the light follows the transport rather than guessing — needs a second loopMIDI
-port for the DAW's **Send To**, and a reflex listening on it (§5.8). Two
+port for the DAW's **Send To**, and a reaction listening on it (§5.8). Two
 cables, because one carries each direction.
+
+Give the control surface **positions** to show it: a name and one of your
+named looks each, say *Stopped* in dark blue and *Recording* in a slow red
+breathe. Then one reaction per position, each listening on the return port for
+note 95, scoped with **Only while** to the surface, running **Put an app on a
+position**. Velocity tells them apart — `velocity == 127` is the DAW's Record
+lamp coming on, `velocity == 0` is it going off.
+
+Nothing you press moves a position, and that is the point: arming record *by
+clicking in the DAW* turns the light red, because the DAW said so rather than
+because the button assumed. A surface with positions and nothing able to
+report one **says it is guessing** instead of showing the first as if it were
+a fact.
 
 ---
 
@@ -837,7 +913,7 @@ no computer attached:
 | **Error** | red flash | action failed / no rule matched |
 | **Alarm ringing** | red/white alternating | an alarm or a reminder is going off |
 | **Stopwatch running** | cyan breathe (1.6 s) | a stopwatch or a countdown is open |
-| **Counter open** | magenta breathe (2.2 s) | a counter is open |
+| **Tally open** | magenta breathe (2.2 s) | a tally is open |
 | **Working** | slow orange breathe (5 s) | an intervals work block is running |
 | **Resting** | slow green breathe (5 s) | an intervals rest is running |
 | **Metronome running** | amber flash at the tapped tempo | a metronome is open |
@@ -847,7 +923,9 @@ this list, deliberately: every frame they show is a colour they worked out for
 themselves — how close your guess was, which position you are on, which app
 the menu is offering — so a fixed colour would only ever be the wrong one. A
 control surface rests on **Listening** between commands, flashing Success or
-Error for each one it sends and then going back to waiting.
+Error for each one it sends and then going back to waiting — or, if you have
+given it positions, going back to whichever position the world last reported
+(§7).
 
 | Sound | Tone | When |
 |---|---|---|
@@ -916,6 +994,13 @@ Home Assistant, or your own script.
   falls back to a safe default with a logged warning; the web editor shows you
   those warnings after a Save or Check, so you can see exactly what was
   accepted.
+- **The button is connected and the light works, but pressing it does
+  nothing** → that is the switch, not the software. Use the board's own
+  **BOOT** button in the meantime: it is a second input, always on, and it
+  makes every gesture the real one does. **Press it while the board is
+  running, never while it is starting up** — held down at power-on it puts
+  the chip into its firmware-loading mode, where it sits silent until you
+  unplug and replug it.
 - **No mode matched a press** → the error state (red flash + error tone). Add
   or adjust a mode so the gesture is covered — **Home**, the always-on mode,
   is your safety net; keep at least one gesture mapped there.

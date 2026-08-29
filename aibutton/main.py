@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import functools
 import logging
 import math
 import random
@@ -354,7 +355,6 @@ async def run(
     from .audio import ToneLibrary
     from .config import (
         MODE_LED_STATES,
-        AlarmBehavior,
         ConfigManager,
         ControlBehavior,
         CountdownBehavior,
@@ -365,17 +365,19 @@ async def run(
         LedEffect,
         LightShowBehavior,
         MetronomeBehavior,
+        NoticeBehavior,
         SetPositionAction,
         PomodoroBehavior,
         ReactionBehavior,
         ReadoutAction,
-        ReminderBehavior,
         SignalBehavior,
         StandbyAction,
         StopwatchBehavior,
+        blank_midi_ports,
         bound_triggers,
         flash_safe,
         look_for,
+        position_reporters,
         reflex_hears,
         reflex_matches,
         resolve_action,
@@ -383,6 +385,7 @@ async def run(
     )
     from .rules import resolve
     from .scheduler import due_alarm
+    from .documents import DocumentStore
     from .store import EventStore
     from .summary import clean as clean_summary
 
@@ -420,277 +423,336 @@ async def run(
     device.set_gesture_config(wanted_max_taps())
     tones = ToneLibrary()
     store = EventStore(cm.config.database_path)
+    # An app's durable named values, in the same file as the log and a table
+    # of its own (TODO 34). History and current value are different jobs, so
+    # they are different tables rather than one clever query.
+    documents = DocumentStore(cm.config.database_path)
 
-    # The takeover mode that currently owns the button, if any. Kept here so
-    # `set_led` can find the look it wears without every run_* loop having to
-    # be handed its own Mode and pass it along on every call.
-    active_mode = None
+    # Every action runs through this rather than through `execute` directly.
+    # The two stores an action may write are bound **once**, here, because
+    # there are seven dispatch sites and the eighth is the one that would
+    # forget `documents` and then silently do nothing - the same reasoning
+    # `resolve_action` uses for being one function rather than seven inlines.
+    run_action = functools.partial(execute, store=store, documents=documents)
 
-    # Whether the ambient layer is asleep (config.StandbyAction). Session
-    # state on purpose and therefore a local: an "off" that outlived a restart
-    # would be a button that comes back dead with nothing on it to say why.
-    standby = False
+    # A `midi` action with no port goes to output 0, which on Windows is the
+    # built-in synth - so the DAW hears nothing and nothing has failed. The
+    # editor's half of this shipped as a basic-tier field with a hint; this is
+    # the half that reaches a file somebody edited by hand. At load, once,
+    # because that is when a config becomes the thing the button is running.
+    try:
+        blanks = blank_midi_ports(cm.config, midi_io.ports())
+    except Exception as exc:  # noqa: BLE001 - no backend, no question to answer
+        log.debug("cannot list MIDI outputs to check for blank ports (%s)", exc)
+    else:
+        for where in blanks:
+            log.warning(
+                "%s sends MIDI with no port set - that means the first output "
+                "on this machine, which is rarely the one you meant", where,
+            )
 
-    # The task walking a Sequence look's planner, if one is running - see
-    # `_drive_sequence`. Cancelled by `set_led` before it does anything else,
-    # which is what makes a sequence last "until the next state change" exactly
-    # like an ephemeral effect: nothing downstream has to know one was involved.
-    sequence_task: asyncio.Task | None = None
+    class Lighting:
+        """Owns the button's light and sound: `set_led` and everything built
+        on it. Used to be a dozen closures here sharing `active_mode`/
+        `standby`/`sequence_task` by `nonlocal`; now one object, so the
+        run_* loops below share an instance instead of forty closures. A
+        medium-term SRP pass on `run()` (an owner audit found this the one
+        real violation in the file) - the run_* loops themselves are
+        unchanged and stay exactly where CLAUDE.md says they belong."""
 
-    async def _drive_sequence(state: LEDState, seq: sequencer.Sequence) -> None:
-        """Walk `seq`'s planner, pushing each frame as a plain solid
-        `LedEffect` - never a Sequence itself, since `device.set_led`
-        duck-types its `effect` on `.style`/`.color`/`.color2`/`.period_s`
-        (device.py). Solid is the only thing a frame can be: a stop is a flat
-        colour, and the movement is the walk between them.
+        def __init__(self, device: ButtonDevice, cm: ConfigManager, status: DeviceStatus):
+            self.device = device
+            self.cm = cm
+            self.status = status
+            # The takeover mode that currently owns the button, if any. Kept
+            # here so `set_led` can find the look it wears without every
+            # run_* loop having to be handed its own Mode and pass it along
+            # on every call. Set from outside (fire_alarm, enter_takeover)
+            # via this attribute now, in place of the old `nonlocal`.
+            self.active_mode = None
+            # Whether the ambient layer is asleep (config.StandbyAction).
+            # Session state on purpose: an "off" that outlived a restart
+            # would be a button that comes back dead with nothing on it to
+            # say why. Toggled from `handle()` via this attribute.
+            self.standby = False
+            # The task walking a Sequence look's planner, if one is running -
+            # see `_drive_sequence`. Cancelled by `set_led` before it does
+            # anything else, which is what makes a sequence last "until the
+            # next state change" exactly like an ephemeral effect: nothing
+            # downstream has to know one was involved.
+            self.sequence_task: asyncio.Task | None = None
 
-        Pushes go straight through `device.set_led`, *not* through the
-        `set_led` closure above: that closure cancels this very task on every
-        call, so calling it from inside its own task would cancel itself one
-        step in. `flash_safe` is skipped for the same reason a second clamp is
-        always wrong (CLAUDE.md): `sequence_safe` already floored both of this
-        sequence's axes before the task started.
+        async def _drive_sequence(self, state: LEDState, seq: sequencer.Sequence) -> None:
+            """Walk `seq`'s planner, pushing each frame as a plain solid
+            `LedEffect` - never a Sequence itself, since `device.set_led`
+            duck-types its `effect` on `.style`/`.color`/`.color2`/`.period_s`
+            (device.py). Solid is the only thing a frame can be: a stop is a flat
+            colour, and the movement is the walk between them.
 
-        **Assumes the host is awake and connected**, like every run_* loop in
-        this file (CLAUDE.md) - the sleeps are wall-clock, so a host that is
-        asleep stops advancing the sequence rather than catching up.
-        """
-        loop = asyncio.get_running_loop()
-        start = loop.time()
-        while True:
-            frame, wait = sequencer.plan_at(seq, loop.time() - start, _SEQUENCE_MIN_STEP_S)
-            if frame is None:
-                # A one-shot finished. `None` is what `set_led` (and the
-                # device) already mean by "no override" - falling back to the
-                # palette entry, not to whatever `active_mode` still names for
-                # this state, which would just restart the same sequence.
-                device.set_led(state, None)
-                status.led_state = state.value
-                status.led_effect = None
+            Pushes go straight through `self.device.set_led`, *not* through
+            `self.set_led`: that method cancels this very task on every
+            call, so calling it from inside its own task would cancel itself one
+            step in. `flash_safe` is skipped for the same reason a second clamp is
+            always wrong (CLAUDE.md): `sequence_safe` already floored both of this
+            sequence's axes before the task started.
+
+            **Assumes the host is awake and connected**, like every run_* loop in
+            this file (CLAUDE.md) - the sleeps are wall-clock, so a host that is
+            asleep stops advancing the sequence rather than catching up.
+            """
+            loop = asyncio.get_running_loop()
+            start = loop.time()
+            while True:
+                frame, wait = sequencer.plan_at(seq, loop.time() - start, _SEQUENCE_MIN_STEP_S)
+                if frame is None:
+                    # A one-shot finished. `None` is what `set_led` (and the
+                    # device) already mean by "no override" - falling back to the
+                    # palette entry, not to whatever `active_mode` still names for
+                    # this state, which would just restart the same sequence.
+                    self.device.set_led(state, None)
+                    self.status.led_state = state.value
+                    self.status.led_effect = None
+                    return
+                effect = LedEffect(style="solid", color=frame.color)
+                self.device.set_led(state, effect)
+                self.status.led_state = state.value
+                self.status.led_effect = effect
+                await asyncio.sleep(wait if wait and wait > 0 else _SEQUENCE_MIN_STEP_S)
+
+        def set_led(self, state: LEDState, effect=None):
+            """Show `state`, optionally wearing a one-off `effect` instead of its
+            palette entry - which is how a mode gets its own look without
+            allocating a global LEDState (ROADMAP D4).
+
+            With no explicit effect, the *active mode's* look for this state is
+            used if it has chosen one; that is what lets two Pomodoros look
+            different while both stay in `WORKING`. A mode that chose nothing
+            resolves to None and the device falls back to the palette.
+
+            A look that is a stop list (`sequencer.Sequence`) is handed to
+            `_drive_sequence` rather than pushed - the device understands one
+            effect at a time, not a schedule. Every call here first cancels
+            whatever sequence task is running, whatever `state`/`effect` turn out
+            to be: a sequence lasts until the next state change exactly like an
+            ephemeral effect, and that includes this call wanting another one.
+
+            Returns what actually went out - the look after the safety floor, or
+            None for "the device's own palette entry". Callers may ignore it; the
+            one that does not is `show_look` below, which has to *report* what the
+            light is doing and must not re-derive it from the floor a second time.
+            """
+            if self.sequence_task is not None:
+                self.sequence_task.cancel()
+                self.sequence_task = None
+
+            if effect is None:
+                effect = look_for(self.cm.config, self.active_mode, state)
+            if self.standby and state is LEDState.IDLE:
+                # Standby dims the *resting* light and only that: it is the ambient
+                # layer that is asleep, and an alarm ringing through a standby must
+                # still look like an alarm. Substituted here, where a mode's own
+                # look is, rather than at each of the several places that drop back
+                # to IDLE - those would drift. It wins over whatever IDLE would
+                # otherwise wear, a named look included (TODO 36a): "asleep" is the
+                # one thing this light has to say, and a configured IDLE look is
+                # exactly what would hide it. Nothing reachable pushes an explicit
+                # IDLE effect while asleep - the readout is ambient, so `handle`'s
+                # gate turned it away already.
+                effect = LedEffect(style="solid", color=_STANDBY_COLOR)
+
+            if isinstance(effect, sequencer.Sequence):
+                # THE ONE GATE for a sequence's floor, mirroring flash_safe just
+                # below for a plain effect - see config.sequence_safe. Nothing
+                # else may call sequence_safe; a second call site is a second
+                # floor with its own chance to drift from this one.
+                floored = sequence_safe(effect, self.cm.config.min_flash_period_s)
+                self.sequence_task = asyncio.create_task(self._drive_sequence(state, floored))
+                # The task pushes its first frame on the next loop iteration, not
+                # synchronously - set_led stays non-blocking either way. The state
+                # is already known, though, so the status line need not wait.
+                self.status.led_state = state.value
+                return floored
+
+            # The one gate every pushed look passes through, which is why the floor
+            # lives here rather than in each run_* loop: a mode computing its own
+            # effect (the metronome's period, the countdown's colour) cannot route
+            # around it, and neither can a look hand-edited into a scene file. The
+            # palette's own entries are floored in push_palette instead.
+            effect = flash_safe(effect, self.cm.config.min_flash_period_s)
+            self.device.set_led(state, effect)
+            self.status.led_state = state.value
+            self.status.led_effect = effect
+            return effect
+
+        def show_look(self, state: LEDState, look):
+            """Show one look now on behalf of the web UI's colour pickers, and
+            answer with what actually went out.
+
+            A thin wrapper rather than the endpoint calling `device.set_led`
+            itself, and the thinness is the point: a stop list is a *schedule*, so
+            previewing one needs the cancellable task and the `sequence_safe` gate
+            that only this method owns. The endpoint used to have neither, which
+            is why "Show on the button" could only ever flash a sequence's first
+            colour - the one thing about a sequence that is not the sequence.
+
+            `look=None` means "back to the configured colours", which is already
+            what `set_led` does with no effect: it re-resolves the state's own
+            look, cancelling any preview still playing.
+
+            **Assumes the host is awake and connected**, like everything else that
+            drives the light from here (CLAUDE.md).
+            """
+            return self.set_led(state, look)
+
+        def push_palette(self, palette: dict) -> None:
+            """Send the stored palette, floored. Separate from `set_led` because
+            the device renders these entries unasked when no effect overrides them,
+            so a strobing palette entry would never pass that gate."""
+            self.device.set_palette(
+                {
+                    name: flash_safe(entry, self.cm.config.min_flash_period_s)
+                    for name, entry in palette.items()
+                }
+            )
+
+        def base_look(self, state: LEDState):
+            """The look a mode should build its live effect on top of - its own if
+            it has one, the palette entry otherwise. What `run_countdown` walks the
+            colour of, and what `run_metronome` rewrites the period of.
+
+            A stop-list look falls back to the palette entry, exactly like a mode
+            that named nothing: the *derived, host-animated* effects this function
+            feeds (a ramp, a beat pulse, a ladder tick) need a style and a period
+            to modify, which a schedule is not. `set_led` still renders a sequence
+            directly wherever a mode's look is used as-is.
+            """
+            look = look_for(self.cm.config, self.active_mode, state)
+            if isinstance(look, sequencer.Sequence):
+                look = None
+            return look or self.cm.config.led_palette.get(state.value)
+
+        def driven_look(self, state: LEDState, drive: str):
+            """The active mode's look for `state`, if it is a stop list this app
+            can drive (TODO 36d). None otherwise, including for a plain effect.
+
+            The counterpart of `base_look`: that one asks "what do I animate on top
+            of", this one "did someone hand me a schedule to sample". A run loop
+            that owns a number - a countdown's progress, a metronome's beat - asks
+            this first and falls back to its own ramp or ladder.
+            """
+            look = look_for(self.cm.config, self.active_mode, state)
+            if isinstance(look, sequencer.Sequence) and look.drive == drive:
+                return look
+            return None
+
+        def sampled_paint(self, state: LEDState, seq: sequencer.Sequence):
+            """A `paint(fraction)` that shows `seq` sampled at 0..1.
+
+            The sampled twin of `ladder_paint`, making the same two moves for the
+            same reasons: pushes go through the central `set_led`, and a frame
+            identical to the last is not pushed at all (`ramp.differs` - a
+            fire-and-forget radio should not carry a colour that has not moved).
+
+            `sequence_safe` is deliberately *not* applied here: its dwell floor
+            asks how fast one stop follows another, which for a sampled sequence is
+            decided by how fast the app's number moves and not by the stops at all
+            - a countdown steps once a second whatever its stop list says.
+            """
+            shown: sequencer.Frame | None = None
+
+            def paint(fraction: float) -> None:
+                nonlocal shown
+                frame = sequencer.sample_at(seq, fraction)
+                if frame is None:
+                    return
+                if shown is not None and not ramp.differs(
+                    shown.color, frame.color, _COUNTDOWN_COLOR_STEP
+                ):
+                    return
+                shown = frame
+                self.set_led(state, LedEffect(style="solid", color=frame.color))
+
+            return paint
+
+        def ladder_paint(self, spec, state: LEDState):
+            """A `paint(seconds)` that shows `spec`'s colour for a moment in time.
+
+            Returns `(paint, tick_s)` - the cadence comes back because the caller
+            has to wake at it, and because it is not always the configured one.
+
+            **The flash floor applies to the cadence, not to the effect's period.**
+            A ladder changes colour every tick, so a 0.1s tick is a 10 Hz change
+            rate however sedate the underlying style is - the hole `flash_safe`
+            cannot see, since it reads `period_s` and a `solid` never strobes by
+            its own reckoning. Colours are pushed only when they change: most ticks
+            repeat the previous colour, and the radio is fire-and-forget.
+            """
+            tick = max(spec.tick_s, self.cm.config.min_flash_period_s)
+            shown: str | None = None
+
+            def paint(seconds: float) -> None:
+                nonlocal shown
+                index = ladder.tick_index(seconds, tick)
+                colour = ladder.color_for_tick(spec.rungs, index, tick, spec.base)
+                if colour == shown:
+                    return
+                base = self.base_look(state)
+                if base is None:
+                    return
+                shown = colour
+                # `solid` because the ladder *is* the animation - the tick supplies
+                # the rhythm, so asking the device to also flash inside each tick
+                # would be two clocks on one light.
+                self.set_led(state, replace(base, style="solid", color=colour))
+
+            return paint, tick
+
+        def play_sound(self, sound: Sound) -> None:
+            """Feedback tone + the web UI's mirror of it. sounds_enabled is read
+            per press, so muting the button takes effect on the next reload."""
+            if not self.cm.config.sounds_enabled:
                 return
-            effect = LedEffect(style="solid", color=frame.color)
-            device.set_led(state, effect)
-            status.led_state = state.value
-            status.led_effect = effect
-            await asyncio.sleep(wait if wait and wait > 0 else _SEQUENCE_MIN_STEP_S)
+            self.device.play_sound(sound)
+            self.status.last_sound = sound.value
+            self.status.sound_seq += 1
 
-    def set_led(state: LEDState, effect=None):
-        """Show `state`, optionally wearing a one-off `effect` instead of its
-        palette entry - which is how a mode gets its own look without
-        allocating a global LEDState (ROADMAP D4).
+        def start_loop(self, sound: Sound) -> None:
+            if not self.cm.config.sounds_enabled:
+                return
+            self.device.start_loop(sound)
+            self.status.last_sound = sound.value
+            self.status.sound_seq += 1
 
-        With no explicit effect, the *active mode's* look for this state is
-        used if it has chosen one; that is what lets two Pomodoros look
-        different while both stay in `WORKING`. A mode that chose nothing
-        resolves to None and the device falls back to the palette.
+        def stop_loop(self) -> None:
+            self.device.stop_loop()
 
-        A look that is a stop list (`sequencer.Sequence`) is handed to
-        `_drive_sequence` rather than pushed - the device understands one
-        effect at a time, not a schedule. Every call here first cancels
-        whatever sequence task is running, whatever `state`/`effect` turn out
-        to be: a sequence lasts until the next state change exactly like an
-        ephemeral effect, and that includes this call wanting another one.
+        def set_status(self, state: str) -> None:
+            self.status.state = state
 
-        Returns what actually went out - the look after the safety floor, or
-        None for "the device's own palette entry". Callers may ignore it; the
-        one that does not is `show_look` below, which has to *report* what the
-        light is doing and must not re-derive it from the floor a second time.
-        """
-        nonlocal sequence_task
-        if sequence_task is not None:
-            sequence_task.cancel()
-            sequence_task = None
-
-        if effect is None:
-            effect = look_for(cm.config, active_mode, state)
-        if standby and state is LEDState.IDLE:
-            # Standby dims the *resting* light and only that: it is the ambient
-            # layer that is asleep, and an alarm ringing through a standby must
-            # still look like an alarm. Substituted here, where a mode's own
-            # look is, rather than at each of the several places that drop back
-            # to IDLE - those would drift. It wins over whatever IDLE would
-            # otherwise wear, a named look included (TODO 36a): "asleep" is the
-            # one thing this light has to say, and a configured IDLE look is
-            # exactly what would hide it. Nothing reachable pushes an explicit
-            # IDLE effect while asleep - the readout is ambient, so `handle`'s
-            # gate turned it away already.
-            effect = LedEffect(style="solid", color=_STANDBY_COLOR)
-
-        if isinstance(effect, sequencer.Sequence):
-            # THE ONE GATE for a sequence's floor, mirroring flash_safe just
-            # below for a plain effect - see config.sequence_safe. Nothing
-            # else may call sequence_safe; a second call site is a second
-            # floor with its own chance to drift from this one.
-            floored = sequence_safe(effect, cm.config.min_flash_period_s)
-            sequence_task = asyncio.create_task(_drive_sequence(state, floored))
-            # The task pushes its first frame on the next loop iteration, not
-            # synchronously - set_led stays non-blocking either way. The state
-            # is already known, though, so the status line need not wait.
-            status.led_state = state.value
-            return floored
-
-        # The one gate every pushed look passes through, which is why the floor
-        # lives here rather than in each run_* loop: a mode computing its own
-        # effect (the metronome's period, the countdown's colour) cannot route
-        # around it, and neither can a look hand-edited into a scene file. The
-        # palette's own entries are floored in push_palette instead.
-        effect = flash_safe(effect, cm.config.min_flash_period_s)
-        device.set_led(state, effect)
-        status.led_state = state.value
-        status.led_effect = effect
-        return effect
-
-    def show_look(state: LEDState, look):
-        """Show one look now on behalf of the web UI's colour pickers, and
-        answer with what actually went out.
-
-        A thin wrapper rather than the endpoint calling `device.set_led`
-        itself, and the thinness is the point: a stop list is a *schedule*, so
-        previewing one needs the cancellable task and the `sequence_safe` gate
-        that only this closure owns. The endpoint used to have neither, which
-        is why "Show on the button" could only ever flash a sequence's first
-        colour - the one thing about a sequence that is not the sequence.
-
-        `look=None` means "back to the configured colours", which is already
-        what `set_led` does with no effect: it re-resolves the state's own
-        look, cancelling any preview still playing.
-
-        **Assumes the host is awake and connected**, like everything else that
-        drives the light from here (CLAUDE.md).
-        """
-        return set_led(state, look)
-
-    def push_palette(palette: dict) -> None:
-        """Send the stored palette, floored. Separate from `set_led` because
-        the device renders these entries unasked when no effect overrides them,
-        so a strobing palette entry would never pass that gate."""
-        device.set_palette(
-            {
-                name: flash_safe(entry, cm.config.min_flash_period_s)
-                for name, entry in palette.items()
-            }
-        )
+    lighting = Lighting(device, cm, status)
+    # Aliased to the bare names every run_* loop below already calls, rather
+    # than rewriting ~150 call sites to `lighting.set_led(...)` etc. - this
+    # extraction is about giving the state one owner, not about how it reads
+    # at each call site. Touch a call site for another reason and either
+    # spelling is fine; both mean the same bound method.
+    push_palette = lighting.push_palette
+    set_led = lighting.set_led
+    show_look = lighting.show_look
+    base_look = lighting.base_look
+    driven_look = lighting.driven_look
+    sampled_paint = lighting.sampled_paint
+    ladder_paint = lighting.ladder_paint
+    play_sound = lighting.play_sound
+    start_loop = lighting.start_loop
+    stop_loop = lighting.stop_loop
+    set_status = lighting.set_status
 
     # Deferred until push_palette exists rather than pushed raw at connect
     # time: the very first palette the button sees has to be inside the floor
     # too. Nothing between here and device.start() reads the palette.
     push_palette(cm.config.led_palette)
 
-    def base_look(state: LEDState):
-        """The look a mode should build its live effect on top of - its own if
-        it has one, the palette entry otherwise. What `run_countdown` walks the
-        colour of, and what `run_metronome` rewrites the period of.
-
-        A stop-list look falls back to the palette entry, exactly like a mode
-        that named nothing: the *derived, host-animated* effects this function
-        feeds (a ramp, a beat pulse, a ladder tick) need a style and a period
-        to modify, which a schedule is not. `set_led` still renders a sequence
-        directly wherever a mode's look is used as-is.
-        """
-        look = look_for(cm.config, active_mode, state)
-        if isinstance(look, sequencer.Sequence):
-            look = None
-        return look or cm.config.led_palette.get(state.value)
-
-    def driven_look(state: LEDState, drive: str):
-        """The active mode's look for `state`, if it is a stop list this app
-        can drive (TODO 36d). None otherwise, including for a plain effect.
-
-        The counterpart of `base_look`: that one asks "what do I animate on top
-        of", this one "did someone hand me a schedule to sample". A run loop
-        that owns a number - a countdown's progress, a metronome's beat - asks
-        this first and falls back to its own ramp or ladder.
-        """
-        look = look_for(cm.config, active_mode, state)
-        if isinstance(look, sequencer.Sequence) and look.drive == drive:
-            return look
-        return None
-
-    def sampled_paint(state: LEDState, seq: sequencer.Sequence):
-        """A `paint(fraction)` that shows `seq` sampled at 0..1.
-
-        The sampled twin of `ladder_paint`, making the same two moves for the
-        same reasons: pushes go through the central `set_led`, and a frame
-        identical to the last is not pushed at all (`ramp.differs` - a
-        fire-and-forget radio should not carry a colour that has not moved).
-
-        `sequence_safe` is deliberately *not* applied here: its dwell floor
-        asks how fast one stop follows another, which for a sampled sequence is
-        decided by how fast the app's number moves and not by the stops at all
-        - a countdown steps once a second whatever its stop list says.
-        """
-        shown: sequencer.Frame | None = None
-
-        def paint(fraction: float) -> None:
-            nonlocal shown
-            frame = sequencer.sample_at(seq, fraction)
-            if frame is None:
-                return
-            if shown is not None and not ramp.differs(
-                shown.color, frame.color, _COUNTDOWN_COLOR_STEP
-            ):
-                return
-            shown = frame
-            set_led(state, LedEffect(style="solid", color=frame.color))
-
-        return paint
-
-    def ladder_paint(spec, state: LEDState):
-        """A `paint(seconds)` that shows `spec`'s colour for a moment in time.
-
-        Returns `(paint, tick_s)` - the cadence comes back because the caller
-        has to wake at it, and because it is not always the configured one.
-
-        **The flash floor applies to the cadence, not to the effect's period.**
-        A ladder changes colour every tick, so a 0.1s tick is a 10 Hz change
-        rate however sedate the underlying style is - the hole `flash_safe`
-        cannot see, since it reads `period_s` and a `solid` never strobes by
-        its own reckoning. Colours are pushed only when they change: most ticks
-        repeat the previous colour, and the radio is fire-and-forget.
-        """
-        tick = max(spec.tick_s, cm.config.min_flash_period_s)
-        shown: str | None = None
-
-        def paint(seconds: float) -> None:
-            nonlocal shown
-            index = ladder.tick_index(seconds, tick)
-            colour = ladder.color_for_tick(spec.rungs, index, tick, spec.base)
-            if colour == shown:
-                return
-            base = base_look(state)
-            if base is None:
-                return
-            shown = colour
-            # `solid` because the ladder *is* the animation - the tick supplies
-            # the rhythm, so asking the device to also flash inside each tick
-            # would be two clocks on one light.
-            set_led(state, replace(base, style="solid", color=colour))
-
-        return paint, tick
-
-    def play_sound(sound: Sound) -> None:
-        """Feedback tone + the web UI's mirror of it. sounds_enabled is read
-        per press, so muting the button takes effect on the next reload."""
-        if not cm.config.sounds_enabled:
-            return
-        device.play_sound(sound)
-        status.last_sound = sound.value
-        status.sound_seq += 1
-
-    def start_loop(sound: Sound) -> None:
-        if not cm.config.sounds_enabled:
-            return
-        device.start_loop(sound)
-        status.last_sound = sound.value
-        status.sound_seq += 1
-
-    def stop_loop() -> None:
-        device.stop_loop()
-
     set_led(LEDState.IDLE)
-
-    def set_status(state: str) -> None:
-        status.state = state
 
     # Created before the web UI so the stop endpoint can be handed the same
     # event the signal handlers below set - one shutdown path, three ways in.
@@ -722,103 +784,126 @@ async def run(
             return False
         return True
 
-    # MIDI in, the second source of circumstances (TODO 73). One listener per
-    # distinct port any reflex names; the set is re-checked on the tick, so a
-    # port that only exists once loopMIDI or the DAW has started is picked up
-    # without a restart, and a port that stops being named is closed.
-    midi_listeners: dict[str, object] = {}
-    midi_failed: dict[str, str] = {}
-    midi_retry_at = 0.0
+    class MidiIn:
+        """Owns MIDI-in listener lifecycle and turns an arriving message into
+        a reflex (TODO 73). Used to be three closures here sharing
+        `midi_listeners`/`midi_failed`/`midi_retry_at` by `nonlocal`; now one
+        object, for the same reason `Lighting` above is one. `_on_midi` still
+        runs on the driver's thread and does nothing but hop onto the event
+        loop; `_dispatch_midi` is where every decision is made, exactly as
+        before."""
 
-    def _on_midi(port: str, status: int, data1: int, data2: int) -> None:
-        """One MIDI message, **on the driver's thread**.
+        def __init__(self, cm: ConfigManager, fire_reflex):
+            self.cm = cm
+            self.fire_reflex = fire_reflex
+            # MIDI in, the second source of circumstances (TODO 73). One
+            # listener per distinct port any reflex names; the set is
+            # re-checked on the tick, so a port that only exists once
+            # loopMIDI or the DAW has started is picked up without a
+            # restart, and a port that stops being named is closed.
+            self.midi_listeners: dict[str, object] = {}
+            self.midi_failed: dict[str, str] = {}
+            self.midi_retry_at = 0.0
 
-        The only safe thing to do here is hand it to the event loop:
-        `asyncio.Queue.put_nowait` is not thread-safe and neither is reading
-        the live config, so the whole body is the hop. Everything that decides
-        anything happens in `_dispatch_midi`, which runs on the loop.
-        """
-        loop.call_soon_threadsafe(_dispatch_midi, port, status, data1, data2)
+        def _on_midi(self, port: str, status: int, data1: int, data2: int) -> None:
+            """One MIDI message, **on the driver's thread**.
 
-    def _dispatch_midi(port: str, status: int, data1: int, data2: int) -> None:
-        """What an arriving message means, on the event loop.
+            The only safe thing to do here is hand it to the event loop:
+            `asyncio.Queue.put_nowait` is not thread-safe and neither is reading
+            the live config, so the whole body is the hop. Everything that decides
+            anything happens in `_dispatch_midi`, which runs on the loop.
+            """
+            loop.call_soon_threadsafe(self._dispatch_midi, port, status, data1, data2)
 
-        The message becomes a **payload**, and from there a MIDI reflex is an
-        ordinary one: the source decided it reached this reflex, and `when`
-        decides whether it fires. That is why 73 needed no second comparison
-        language - `note 95 velocity 127` is a source plus a test, and note 95
-        velocity 0 is the same source and the opposite test (TODO 72).
+        def _dispatch_midi(self, port: str, status: int, data1: int, data2: int) -> None:
+            """What an arriving message means, on the event loop.
 
-        `velocity` and `value` are the same number under two names, because a
-        DAW's own UI says velocity for a note and value for a CC, and a config
-        should be able to say whichever it means.
-        """
-        decoded = midi.decode(status, data1, data2)
-        if decoded is None:
-            return  # clock, sysex, active sensing - not ours
-        kind, number, value, channel = decoded
-        family = "cc" if kind == midi.CONTROL_CHANGE else "note"
-        for reflex in cm.config.reflexes:
-            # The port is this listener's own (one per port), so what is left
-            # to ask is whether the message itself is one this reflex hears -
-            # a pure question, asked in config.py where it can be tested.
-            if reflex.source is None or reflex.source.port != port:
-                continue
-            if not reflex_hears(reflex, family, number, channel):
-                continue
-            payload = {family: number, "value": value, "channel": channel}
-            if family == "note":
-                payload["velocity"] = value
-            log.info(
-                "MIDI %s -> reflex %r", midi.describe(kind, channel, number, value),
-                reflex.name,
-            )
-            fire_reflex(reflex.name, payload)
+            The message becomes a **payload**, and from there a MIDI reflex is an
+            ordinary one: the source decided it reached this reflex, and `when`
+            decides whether it fires. That is why 73 needed no second comparison
+            language - `note 95 velocity 127` is a source plus a test, and note 95
+            velocity 0 is the same source and the opposite test (TODO 72).
 
-    def sync_midi_listeners(now: float) -> None:
-        """Open a listener for every port a reflex names, and close the rest.
+            `velocity` and `value` are the same number under two names, because a
+            DAW's own UI says velocity for a note and value for a CC, and a config
+            should be able to say whichever it means.
+            """
+            decoded = midi.decode(status, data1, data2)
+            if decoded is None:
+                return  # clock, sysex, active sensing - not ours
+            kind, number, value, channel = decoded
+            family = "cc" if kind == midi.CONTROL_CHANGE else "note"
+            for reflex in self.cm.config.reflexes:
+                # The port is this listener's own (one per port), so what is left
+                # to ask is whether the message itself is one this reflex hears -
+                # a pure question, asked in config.py where it can be tested.
+                if reflex.source is None or reflex.source.port != port:
+                    continue
+                if not reflex_hears(reflex, family, number, channel):
+                    continue
+                payload = {family: number, "value": value, "channel": channel}
+                if family == "note":
+                    payload["velocity"] = value
+                log.info(
+                    "MIDI %s -> reflex %r", midi.describe(kind, channel, number, value),
+                    reflex.name,
+                )
+                self.fire_reflex(reflex.name, payload)
 
-        Called on the tick as well as at startup, because the ports here are
-        virtual cables that come and go with the software at the other end. A
-        failure is retried on a slow timer and **logged only when the reason
-        changes**, so a port that never appears costs one warning rather than
-        one a second.
-        """
-        nonlocal midi_retry_at
-        wanted = {
-            reflex.source.port for reflex in cm.config.reflexes
-            if reflex.source is not None
-        }
-        for port in list(midi_listeners):
-            if port not in wanted:
-                midi_listeners.pop(port).stop()
-                midi_failed.pop(port, None)
-                log.info("stopped listening for MIDI reflexes on %r", port)
-        missing = wanted - set(midi_listeners)
-        if not missing or now < midi_retry_at:
-            return
-        midi_retry_at = now + _MIDI_RETRY_S
-        for port in sorted(missing):
-            # `p=port` binds the loop variable, so each listener reports the
-            # port it was configured with rather than the last one round.
-            listener = midi_io.MessageListener(
-                port, lambda status, d1, d2, p=port: _on_midi(p, status, d1, d2),
-            )
-            try:
-                where = listener.start()
-            except Exception as exc:  # noqa: BLE001 - any failure means no MIDI in
-                message = str(exc)
-                if midi_failed.get(port) != message:
-                    log.warning(
-                        "no MIDI input for reflexes on %r (%s) - retrying",
-                        port or "the first input", message,
-                    )
-                    midi_failed[port] = message
-                continue
-            midi_failed.pop(port, None)
-            midi_listeners[port] = listener
-            log.info("listening for MIDI reflexes on %s", where)
+        def sync_midi_listeners(self, now: float) -> None:
+            """Open a listener for every port a reflex names, and close the rest.
 
+            Called on the tick as well as at startup, because the ports here are
+            virtual cables that come and go with the software at the other end. A
+            failure is retried on a slow timer and **logged only when the reason
+            changes**, so a port that never appears costs one warning rather than
+            one a second.
+            """
+            wanted = {
+                reflex.source.port for reflex in self.cm.config.reflexes
+                if reflex.source is not None
+            }
+            for port in list(self.midi_listeners):
+                if port not in wanted:
+                    self.midi_listeners.pop(port).stop()
+                    self.midi_failed.pop(port, None)
+                    log.info("stopped listening for MIDI reflexes on %r", port)
+            missing = wanted - set(self.midi_listeners)
+            if not missing or now < self.midi_retry_at:
+                return
+            self.midi_retry_at = now + _MIDI_RETRY_S
+            for port in sorted(missing):
+                # `p=port` binds the loop variable, so each listener reports the
+                # port it was configured with rather than the last one round.
+                listener = midi_io.MessageListener(
+                    port, lambda status, d1, d2, p=port: self._on_midi(p, status, d1, d2),
+                )
+                try:
+                    where = listener.start()
+                except Exception as exc:  # noqa: BLE001 - any failure means no MIDI in
+                    message = str(exc)
+                    if self.midi_failed.get(port) != message:
+                        log.warning(
+                            "no MIDI input for reflexes on %r (%s) - retrying",
+                            port or "the first input", message,
+                        )
+                        self.midi_failed[port] = message
+                    continue
+                self.midi_failed.pop(port, None)
+                self.midi_listeners[port] = listener
+                log.info("listening for MIDI reflexes on %s", where)
+
+        def close(self) -> None:
+            """Stop every listener. Each holds a ctypes callback the driver
+            still has the address of, and a callback freed while winmm can
+            still reach it takes the process with it (CLAUDE.md) - called
+            from `run()`'s shutdown `finally`, before anything else that can
+            raise."""
+            for listener in self.midi_listeners.values():
+                listener.stop()
+            self.midi_listeners.clear()
+
+    midi_in = MidiIn(cm, fire_reflex)
 
     web_server = None
     web_task = None
@@ -829,6 +914,10 @@ async def run(
             ctx = WebContext(
                 cm=cm,
                 store=store,
+                # Read-only from the web side (TODO 34): an app's page shows
+                # what that app has done and writes nothing back, and a
+                # document is written by the button, never by the page.
+                documents=documents,
                 status=status,
                 device=device,
                 clock=clock,
@@ -906,58 +995,96 @@ async def run(
         set_status("ERROR")
         await asyncio.sleep(_ERROR_DISPLAY_S)
 
-    async def ring_alarm(behavior: AlarmBehavior, mode_name: str) -> ActionResult:
-        """Ring (ALERT LED + looping ALARM tone) for a takeover alarm mode
-        until the next press dismisses it, or - on long_press with
-        snooze_minutes set - go quiet for that long and ring again. Both waits
-        watch `stop`, so SIGTERM during a long snooze shuts down promptly
-        instead of waiting it out."""
+    def reminder_look(behavior: NoticeBehavior):
+        """What a gentle (non-`urgent`) notice shows on ALERT.
+
+        A named look wins, as everywhere else. With none chosen the fallback is
+        *not* the bare ALERT palette entry - that is the urgent look, and a
+        reminder indistinguishable from an alarm has failed at the one thing
+        it is for. Breathing the same colour reads as "notice me" where the
+        urgent hard flash reads as "deal with me", and costs no wire code.
+        """
+        chosen = look_for(cm.config, lighting.active_mode, LEDState.ALERT)
+        if chosen is not None:
+            return chosen
+        base = cm.config.led_palette.get(LEDState.ALERT.value)
+        return None if base is None else replace(
+            base, style="breathe", period_s=max(base.period_s, _REMINDER_PERIOD_S)
+        )
+
+    async def ring_notice(behavior: NoticeBehavior, mode_name: str) -> ActionResult:
+        """The merged alarm/reminder loop (TODO 84): the light goes off until
+        the next press clears it, or - on long_press with `snooze_minutes`
+        set - goes quiet for that long and fires again, or - if
+        `timeout_minutes` is set - gives up on its own. `urgent` decides how:
+        loop the alarm tone and hard-flash ALERT, or a single chime and a
+        gentle breathe. All waits watch `stop`, so SIGTERM mid-snooze shuts
+        down promptly instead of waiting it out.
+
+        Outcome logging is unconditional: cleared logs 1 and missed logs 0
+        under `behavior.log_as` (skipped only for the empty string
+        `run_countdown`'s "ring on finish" passes, which isn't a real,
+        independently-configured notice). `on_cleared`/`on_snoozed`/
+        `on_missed` are additional actions on top of that log, not instead of
+        it.
+        """
         label = behavior.message or behavior.label or mode_name
+        verb = "rings" if behavior.urgent else "flashes"
         if args.demo:
-            set_led(LEDState.ALERT)
-            start_loop(Sound.ALARM)
+            if behavior.urgent:
+                set_led(LEDState.ALERT)
+                start_loop(Sound.ALARM)
+            else:
+                set_led(LEDState.ALERT, reminder_look(behavior))
+                if behavior.chime:
+                    play_sound(Sound.ACK)
             status.last_message = label
-            set_status("ALARMING")
+            set_status("ALARMING" if behavior.urgent else "REMINDING")
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
-            stop_loop()
-            return ActionResult(True, f"{label} (demo: rings until dismissed)")
-        # The dead man's switch (TODO 44): with a grace period set, the ring is
-        # a question with a deadline rather than one that waits forever.
-        grace_s = behavior.grace_minutes * 60 if behavior.grace_minutes else None
+            if behavior.urgent:
+                stop_loop()
+            return ActionResult(True, f"{label} (demo: {verb} until dismissed)")
+
+        # Persistence (TODO 44's dead man's switch, generalised): with a
+        # timeout set, this is a question with a deadline rather than one
+        # that waits forever.
+        timeout_s = behavior.timeout_minutes * 60 if behavior.timeout_minutes > 0 else None
         while True:
-            set_led(LEDState.ALERT)
-            start_loop(Sound.ALARM)
+            if behavior.urgent:
+                set_led(LEDState.ALERT)
+                start_loop(Sound.ALARM)
+            else:
+                set_led(LEDState.ALERT, reminder_look(behavior))
+                if behavior.chime:
+                    play_sound(Sound.ACK)  # once - the light is what persists
             status.last_message = label
-            set_status("ALARMING")
-            trigger = await _wait_for_trigger(device.events, stop, grace_s)
-            stop_loop()
-            if trigger is None and grace_s is not None and not stop.is_set():
+            set_status("ALARMING" if behavior.urgent else "REMINDING")
+            trigger = await _wait_for_trigger(device.events, stop, timeout_s)
+            if behavior.urgent:
+                stop_loop()
+            if trigger is None and timeout_s is not None and not stop.is_set():
                 # Nobody answered. This is the *only* branch that fires
-                # on_timeout, and it fires once - the alarm is over either way,
-                # because an unanswered alarm that keeps ringing after raising
-                # the alert is just noise on top of the thing it already did.
+                # on_missed, and it fires once - the notice is over either
+                # way, because one that keeps going after raising the alert
+                # is just noise on top of the thing it already did.
                 set_led(LEDState.IDLE)
                 set_status("IDLE")
-                late = f"{behavior.grace_minutes:g} min"
-                if behavior.dismiss_event:
-                    # Logged on *every* outcome, not only on a dismissal: a
-                    # switch that fires while nobody is watching is only
-                    # trustworthy if the record says what happened.
-                    # value is numeric: 0 = nobody answered, 1 = someone did.
-                    # Same event name, both outcomes, one place to look.
-                    store.log_event(behavior.dismiss_event, mode=mode_name, value=0)
-                action = resolve_action(cm.config, behavior.on_timeout)
+                late = f"{behavior.timeout_minutes:g} min"
+                if behavior.log_as:
+                    # Logged on *every* outcome, not only on a clear: a
+                    # notice that fires while nobody is watching is only
+                    # trustworthy if the record says what happened. value is
+                    # numeric: 0 = missed, 1 = cleared - same event name, one
+                    # place to look.
+                    store.log_event(behavior.log_as, mode=mode_name, value=0)
+                action = resolve_action(cm.config, behavior.on_missed)
                 if action is None:
-                    log.warning(
-                        "alarm %r: went unanswered after %s and has no on_timeout "
-                        "action to run", mode_name, late,
-                    )
                     return ActionResult(True, f"{label} - unanswered after {late}")
-                result = await execute(
-                    action, trigger="timeout", mode_name=mode_name, store=store,
+                result = await run_action(
+                    action, trigger="timeout", mode_name=mode_name,
                 )
                 log.warning(
-                    "alarm %r: unanswered after %s - ran %s (%s)",
+                    "notice %r: unanswered after %s - ran %s (%s)",
                     mode_name, late, type(action).__name__, result.message,
                 )
                 return ActionResult(
@@ -970,66 +1097,21 @@ async def run(
                 set_led(LEDState.IDLE)
                 set_status("IDLE")
                 message = f"{label} - snoozed {behavior.snooze_minutes:g} min"
+                action = resolve_action(cm.config, behavior.on_snoozed)
+                if action is not None:
+                    await run_action(action, trigger="snoozed", mode_name=mode_name)
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=behavior.snooze_minutes * 60)
                     return ActionResult(True, message)  # shutting down mid-snooze
                 except asyncio.TimeoutError:
-                    continue  # snooze elapsed; ring again
-            if behavior.dismiss_event:
-                # 1 = answered, matching the 0 the unanswered branch writes.
-                store.log_event(behavior.dismiss_event, mode=mode_name, value=1)
-            return ActionResult(True, f"Dismissed: {label}")
-
-    def reminder_look(behavior: ReminderBehavior):
-        """What a reminder shows on ALERT.
-
-        A named look wins, as everywhere else. With none chosen the fallback is
-        *not* the bare ALERT palette entry - that is the ringing-alarm look,
-        and a reminder indistinguishable from an alarm has failed at the one
-        thing it is for. Breathing the same colour reads as "notice me" where
-        the alarm's hard flash reads as "deal with me", and costs no wire code.
-        """
-        chosen = look_for(cm.config, active_mode, LEDState.ALERT)
-        if chosen is not None:
-            return chosen
-        base = cm.config.led_palette.get(LEDState.ALERT.value)
-        return None if base is None else replace(
-            base, style="breathe", period_s=max(base.period_s, _REMINDER_PERIOD_S)
-        )
-
-    async def run_reminder(behavior: ReminderBehavior, mode_name: str) -> ActionResult:
-        """A scheduled nudge: flash until any press clears it, or until it
-        gives up on its own.
-
-        Three deliberate differences from `ring_alarm`, which this parallels
-        and does not touch. *Any* press clears it, because requiring a
-        nominated gesture would make a reminder as demanding as an alarm. No
-        snooze and no loop - a reminder you could postpone is an alarm with
-        extra steps; schedule it again instead. And it times out
-        (`timeout_minutes`, 0 = wait forever), because a reminder nobody was in
-        the room for should not still be flashing at midnight. A timeout is not
-        a clear: nothing is logged, because nobody saw it.
-        """
-        label = behavior.message or behavior.label or mode_name
-        set_led(LEDState.ALERT, reminder_look(behavior))
-        if behavior.chime:
-            play_sound(Sound.ACK)  # once - the light is what persists
-        status.last_message = label
-        set_status("REMINDING")
-
-        if args.demo:
-            await asyncio.sleep(_SUCCESS_DISPLAY_S)
-            return ActionResult(True, f"{label} (demo: flashes until cleared)")
-
-        timeout = behavior.timeout_minutes * 60 if behavior.timeout_minutes > 0 else None
-        trigger = await _wait_for_trigger(device.events, stop, timeout)
-        if trigger is None:
-            if stop.is_set():
-                return ActionResult(True, f"{label} (interrupted by shutdown)")
-            return ActionResult(True, f"{label} - not cleared, gave up")
-        if behavior.cleared_event:
-            store.log_event(behavior.cleared_event, mode=mode_name)
-        return ActionResult(True, f"Cleared: {label}")
+                    continue  # snooze elapsed; fires again
+            if behavior.log_as:
+                # 1 = cleared, matching the 0 the missed branch writes.
+                store.log_event(behavior.log_as, mode=mode_name, value=1)
+            action = resolve_action(cm.config, behavior.on_cleared)
+            if action is not None:
+                await run_action(action, trigger="cleared", mode_name=mode_name)
+            return ActionResult(True, f"Cleared: {label}")
 
     async def fire_hook(mode, which: str, session=None) -> None:
         """Run a mode's `on_enter` / `on_exit` action, if it has one.
@@ -1069,9 +1151,8 @@ async def run(
         for complaint in complaints:
             log.warning("mode %r %s summary: %s", mode.name, which, complaint)
         try:
-            result = await execute(
-                action, trigger=which, mode_name=mode.name, store=store,
-                session=carried,
+            result = await run_action(
+                action, trigger=which, mode_name=mode.name, session=carried,
             )
         except Exception:  # a hook bug must never cost you the mode
             log.exception("mode %r %s hook crashed", mode.name, which)
@@ -1104,30 +1185,26 @@ async def run(
         task.add_done_callback(_pending_hooks.discard)
 
     async def fire_alarm(mode) -> None:
-        """Run a scheduled mode - an alarm's ring or a reminder's flash - and
-        surface its result, then drop back to the ambient layer (IDLE)."""
-        nonlocal active_mode
+        """Run a scheduled mode - a notice's ring or flash - and surface its
+        result, then drop back to the ambient layer (IDLE)."""
         play_sound(Sound.ACK)
         status.last_trigger = None
         status.last_mode = mode.name
         log.info("scheduled mode %r firing", mode.name)
         entered_at = store.log_mode_enter(mode.name)
-        active_mode = mode  # so ALERT wears this mode's look, if it has one
+        lighting.active_mode = mode  # so ALERT wears this mode's look, if it has one
         # The other place a mode is entered and left, and hooks fire from both:
         # an alarm the clock started is the same session as one you started by
         # hand.
         spawn_hook(mode, "on_enter")
         try:
-            if isinstance(mode.behavior, ReminderBehavior):
-                result = await run_reminder(mode.behavior, mode.name)
-            else:
-                result = await ring_alarm(mode.behavior, mode.name)
+            result = await ring_notice(mode.behavior, mode.name)
         except Exception as exc:  # a scheduled-mode bug must never kill the loop
             log.exception("scheduled mode crashed")
             result = ActionResult(False, f"internal error: {exc}")
         store.log_mode_exit(mode.name, entered_at)
         await fire_hook(mode, "on_exit", result.summary)
-        active_mode = None
+        lighting.active_mode = None
         status.last_ok = result.ok
         status.last_message = result.message
         set_led(LEDState.IDLE)
@@ -1224,12 +1301,27 @@ async def run(
         same event name, so counting from Home and then entering the Counter to
         continue agrees by construction - they were already the same rows.
 
-        Reports both numbers it holds (summary.py): `count`, the day's total,
-        and `added`, this session's share of it. A receiver that only ever got
-        the first could not tell a busy session from an idle one."""
+        **`durable` swaps which store that number comes from** (TODO 34), and
+        nothing else: off, it is today's rows recounted, which is a habit
+        counter and what streaks are built on; on, it is this mode's document,
+        which keeps counting past midnight and which `set_value` can write
+        from any gesture in any mode - "Smoking +1" without entering the
+        Counter (TODO 15). **Rows are written either way**, so history, the
+        Events page and the readout do not change at all: what changes is only
+        the question the number on the light is answering.
+
+        Reports both numbers it holds (summary.py): `count`, the total, and
+        `added`, this session's share of it. A receiver that only ever got the
+        first could not tell a busy session from an idle one."""
         event = behavior.event
-        count = store.count_today(event)
-        opened_at = count  # what the day already held, so `added` can be told
+        # One slot, named in DOC_SLOTS["counter"] - the parser warns about a
+        # `set_value` that writes any other one, so this needs no lookup.
+        count = (
+            documents.get(mode_name, "count", 0.0) if behavior.durable
+            else store.count_today(event)
+        )
+        count = int(count)
+        opened_at = count  # what was already there, so `added` can be told
         set_led(LEDState.COUNTING)
         set_status("COUNTING")
         status.last_mode = mode_name
@@ -1238,9 +1330,18 @@ async def run(
         def tally() -> dict:
             return {"count": count, "added": count - opened_at}
 
+        def bump() -> int:
+            """One increment: a row for the history, and - when this counter
+            is durable - the document that holds the number. Both, never one:
+            the log is what "what happened in March" is asked of, and the
+            document is what "what is it now" is asked of."""
+            store.log_event(event, mode=mode_name)
+            if behavior.durable:
+                return int(documents.add(mode_name, "count", 1) or 0)
+            return count + 1
+
         if args.demo:
-            store.log_event(event, mode=mode_name)  # one increment, then out
-            count += 1
+            count = bump()  # one increment, then out
             play_sound(Sound.ACK)
             status.last_message = f"{event}: {count}"
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
@@ -1254,8 +1355,7 @@ async def run(
             if trigger is TriggerType.LONG_PRESS:
                 return ActionResult(True, f"{event}: {count} this session", tally())
             # short_press / double_tap -> +1
-            store.log_event(event, mode=mode_name)
-            count += 1
+            count = bump()
             play_sound(Sound.ACK)
             status.last_message = f"{event}: {count}"
 
@@ -1792,7 +1892,7 @@ async def run(
         # nothing here. A stop-list look has no style or period to take: same
         # fallback as base_look, warned about here because this runs once per
         # countdown rather than every tick.
-        look = look_for(cm.config, active_mode, LEDState.TIMING)
+        look = look_for(cm.config, lighting.active_mode, LEDState.TIMING)
         if isinstance(look, sequencer.Sequence):
             log.warning(
                 "countdown %r: TIMING's look is a stop list, which has no "
@@ -1895,9 +1995,15 @@ async def run(
         if not behavior.ring_on_finish:
             play_sound(Sound.SUCCESS)
             return ActionResult(True, f"{label} finished")
-        # A finished countdown *is* an alarm going off, so it rings like
-        # one rather than growing a second copy of that loop.
-        return await ring_alarm(AlarmBehavior(message=f"{label} finished"), mode_name)
+        # A finished countdown *is* a notice going off, so it rings like one
+        # rather than growing a second copy of that loop. `log_as=""`
+        # deliberately opts this synthetic, internal use out of the
+        # unconditional outcome log - it isn't a real, independently
+        # configured notice, and the countdown already logged its own finish
+        # above.
+        return await ring_notice(
+            NoticeBehavior(message=f"{label} finished", log_as=""), mode_name,
+        )
 
     async def run_hotcold(behavior: HotColdBehavior, mode_name: str) -> ActionResult:
         """Hot/Cold: a hue wheel spins, a press stops it, the light says how
@@ -2279,8 +2385,8 @@ async def run(
             # Reusing execute() is the whole reason this template is cheap:
             # webhook, OSC and log all already work here, and so will the next
             # primitive anyone adds.
-            result = await execute(
-                action, trigger="signal", mode_name=mode_name, store=store,
+            result = await run_action(
+                action, trigger="signal", mode_name=mode_name,
             )
             if not result.ok:
                 # A failed send must not strand the light on the old colour -
@@ -2360,6 +2466,14 @@ async def run(
         then the surface's resting light comes back, which is why this template
         needs no LED state of its own.
 
+        **With positions, that resting light is a readout** (TODO 77). A
+        reflex - the DAW saying it began recording - hands this loop a
+        `SetPositionAction` through `wait_in_app`, and the page wears that
+        position's look until something says otherwise. Nothing a finger does
+        moves it, which is deliberate: a local toggle is correct until someone
+        clicks in the DAW, and then it is silently inverted for the rest of
+        the session. Making a *press* depend on the position is TODO 78.
+
         Long press is not checked against the bindings because it cannot be
         bound - `_parse_control_body` drops it, keeping the escape gesture a
         property of the parser rather than of this loop's memory.
@@ -2374,24 +2488,88 @@ async def run(
         set_status("CONTROL")
         status.last_mode = mode_name
         fired = 0
+        positions = behavior.positions
+        index = 0
+        # Asked once, on entry, because "it is guessing" is a thing said when
+        # the page opens - and because the answer is about the config this
+        # session was opened under. A save mid-session replaces cm.config; the
+        # next time you open the page it is asked again.
+        reporters = position_reporters(cm.config, mode_name) if positions else ()
+        guessing = bool(positions) and not reporters
 
         def resting() -> None:
-            set_led(LEDState.LISTENING)
+            """Paint what the surface is showing between commands.
+
+            With no positions this is the state itself, which resolves the
+            page's own named look - a remote that always looks the same. With
+            positions it is the one the world last reported (TODO 77), and
+            **that is the whole rendering change**: a position names a look
+            from the pool, a missing or unnamed one falls back to None, and
+            None is what `set_led` already means by "no override".
+            """
+            if not positions:
+                set_led(LEDState.LISTENING)
+                status.last_message = (
+                    f"{mode_name}: {len(behavior.actions)} controls, long press to leave"
+                )
+                return
+            position = positions[index]
+            look = (cm.config.looks or {}).get(position.look) if position.look else None
+            if position.look and look is None:
+                log.warning(
+                    "control %r: position %r names look %r, which does not exist",
+                    mode_name, position.name, position.look,
+                )
+            set_led(LEDState.LISTENING, look)
             status.last_message = (
-                f"{mode_name}: {len(behavior.actions)} controls, long press to leave"
+                f"{mode_name}: {position.name} ({index + 1}/{len(positions)})"
+                + (" - guessing, nothing reports this" if guessing else "")
             )
 
+        if guessing:
+            # Said out loud rather than shown quietly: position one looks
+            # identical whether it was reported or assumed, and a transport
+            # light that is confidently wrong is worse than one that admits it.
+            log.warning(
+                "control %r shows positions but no reflex can set one - it is "
+                "showing %r without being told", mode_name, positions[0].name,
+            )
         resting()
         if args.demo:
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             return ActionResult(True, f"control (demo: {mode_name})"), None
 
         while True:
-            trigger = await _wait_for_trigger(device.events, stop)
+            trigger = await wait_in_app(mode_name)
             if trigger is None:
                 return ActionResult(
                     True, f"{mode_name} left ({fired} sent, shutdown)"
                 ), None
+            if isinstance(trigger, SetPositionAction):
+                # The DAW says what it is doing (TODO 74/77). **Shown, not
+                # announced**, and here that costs nothing to obey: a control
+                # position carries no message of its own, because the gesture
+                # map is a separate thing. Nothing goes out - which is the
+                # point, since sending "record" back to the thing that just
+                # said it was recording is a feedback loop.
+                match = next(
+                    (i for i, p in enumerate(positions) if p.name == trigger.name), None
+                )
+                if match is None:
+                    log.warning(
+                        "control %r: no position named %r", mode_name, trigger.name
+                    )
+                    status.last_message = f"{mode_name}: no position named {trigger.name!r}"
+                    continue
+                index = match
+                resting()
+                # No row, deliberately. `log_as` here means "one command sent",
+                # and its readout is a tally of those; a position that arrived
+                # is not a command, and counting it as one would inflate the
+                # only number this app reports.
+                status.last_ok = True
+                log.info("control %r <- %s (reported)", mode_name, positions[index].name)
+                continue
             if trigger is TriggerType.LONG_PRESS:
                 return ActionResult(True, f"{mode_name} left ({fired} sent)"), None
             bound = behavior.actions.get(trigger.value)
@@ -2435,8 +2613,8 @@ async def run(
                 continue
             set_led(LEDState.THINKING)
             try:
-                result = await execute(
-                    action, trigger=trigger.value, mode_name=mode_name, store=store
+                result = await run_action(
+                    action, trigger=trigger.value, mode_name=mode_name,
                 )
             except Exception as exc:  # a primitive bug must never close the app
                 log.exception("control action crashed")
@@ -2462,7 +2640,7 @@ async def run(
     # gesture can start". One tuple rather than two lists that drift apart -
     # the launcher both *is* a takeover and *chooses* one, which made that real.
     TAKEOVER_BEHAVIORS = (
-        AlarmBehavior, StopwatchBehavior, CounterBehavior, PomodoroBehavior,
+        NoticeBehavior, StopwatchBehavior, CounterBehavior, PomodoroBehavior,
         MetronomeBehavior, CountdownBehavior, LauncherBehavior, HotColdBehavior,
         ReactionBehavior, SignalBehavior, ControlBehavior, LightShowBehavior,
     )
@@ -2575,7 +2753,6 @@ async def run(
 
         Exception-guarded so a handler bug never kills the main loop.
         """
-        nonlocal active_mode
         play_sound(Sound.ACK)
         status.last_trigger = None
         # Set when a launcher hands off and wants the button back afterwards.
@@ -2590,7 +2767,7 @@ async def run(
             # Set before dispatch so the first set_led inside the loop already
             # wears this mode's look, and cleared after so the ambient layer's
             # IDLE below is the palette's again.
-            active_mode = mode
+            lighting.active_mode = mode
             # Before the loop starts, after the mode_enter row exists: a hook
             # that posts "I am in focus mode" must not be able to arrive ahead
             # of the row that says so.
@@ -2599,8 +2776,8 @@ async def run(
             try:
                 if isinstance(mode.behavior, LauncherBehavior):
                     result, chosen = await run_launcher(mode.behavior, mode.name)
-                elif isinstance(mode.behavior, AlarmBehavior):
-                    result = await ring_alarm(mode.behavior, mode.name)
+                elif isinstance(mode.behavior, NoticeBehavior):
+                    result = await ring_notice(mode.behavior, mode.name)
                 elif isinstance(mode.behavior, StopwatchBehavior):
                     result = await run_stopwatch(mode.behavior, mode.name)
                 elif isinstance(mode.behavior, CounterBehavior):
@@ -2646,7 +2823,7 @@ async def run(
             # own numbers ride out with it (summary.py); an app with nothing to
             # report passes None.
             await fire_hook(mode, "on_exit", result.summary)
-            active_mode = None
+            lighting.active_mode = None
             status.last_ok = result.ok
             status.last_message = result.message
 
@@ -2661,7 +2838,6 @@ async def run(
         set_status("IDLE")
 
     async def handle(trigger: TriggerType) -> None:
-        nonlocal standby
         resolved = resolve(
             cm.config.modes, trigger.value, clock.now(), logged_today=store.logged_today
         )
@@ -2670,7 +2846,7 @@ async def run(
         # what kind of action it is.
         action = resolve_action(cm.config, resolved[1]) if resolved is not None else None
 
-        if standby and not isinstance(action, StandbyAction):
+        if lighting.standby and not isinstance(action, StandbyAction):
             # Asleep: the ambient layer answers nothing and does not let on
             # that it was asked - no ack, no light, no event, no status line
             # moving. The one gesture that still lands is the one that can undo
@@ -2696,18 +2872,18 @@ async def run(
             # Handled here rather than in execute() for the reason enter_mode
             # and readout are: it changes what the *loop* does with the next
             # gesture, and that is state only the loop owns.
-            standby = not standby
+            lighting.standby = not lighting.standby
             status.last_mode = resolved[0].name
             status.last_ok = True
             status.last_message = (
                 "standby - the ambient layer is asleep"
-                if standby else "awake - the ambient layer is answering again"
+                if lighting.standby else "awake - the ambient layer is answering again"
             )
-            log.info("standby %s", "on" if standby else "off")
+            log.info("standby %s", "on" if lighting.standby else "off")
             # No explicit look either way: set_led already knows what IDLE
             # means while asleep, so the same call dims it and undims it.
             set_led(LEDState.IDLE)
-            set_status("STANDBY" if standby else "IDLE")
+            set_status("STANDBY" if lighting.standby else "IDLE")
             return
         elif isinstance(action, SetPositionAction):
             # Reachable only from a config that bound this to a gesture, which
@@ -2763,8 +2939,8 @@ async def run(
             )
             set_led(LEDState.THINKING)
             try:
-                result = await execute(
-                    action, trigger=trigger.value, mode_name=mode.name, store=store
+                result = await run_action(
+                    action, trigger=trigger.value, mode_name=mode.name,
                 )
             except Exception as exc:  # a primitive bug must never kill the loop
                 log.exception("action crashed")
@@ -2830,7 +3006,7 @@ async def run(
             # before this ever sees them (TODO 74). So a scoped reflex arriving
             # here has missed its app, which is not an error - it is the scope
             # doing exactly what it says.
-            running = active_mode.name if active_mode is not None else None
+            running = lighting.active_mode.name if lighting.active_mode is not None else None
             if running != reflex.while_app:
                 log.info(
                     "reflex %r skipped: %r is not the running app",
@@ -2870,8 +3046,8 @@ async def run(
         else:
             set_led(LEDState.THINKING)
             try:
-                result = await execute(
-                    action, trigger=f"reflex:{name}", mode_name=None, store=store
+                result = await run_action(
+                    action, trigger=f"reflex:{name}", mode_name=None,
                 )
             except Exception as exc:  # a primitive bug must never kill the loop
                 log.exception("reflex action crashed")
@@ -2947,8 +3123,8 @@ async def run(
                 log.warning("reflex %r: no action named %r", name, reflex.then.name)
                 continue
             try:
-                result = await execute(
-                    action, trigger=f"reflex:{name}", mode_name=mode_name, store=store
+                result = await run_action(
+                    action, trigger=f"reflex:{name}", mode_name=mode_name,
                 )
             except Exception as exc:  # a primitive bug must never close the app
                 log.exception("reflex action crashed inside %r", mode_name)
@@ -3035,7 +3211,7 @@ async def run(
                 # 73), and which ports that needs is config the same way the
                 # palette is - so it is re-checked here rather than only at
                 # startup.
-                sync_midi_listeners(loop.time())
+                midi_in.sync_midi_listeners(loop.time())
                 # After every wait (press or tick), ring whatever is due now;
                 # an alarm preempts the ambient layer. `fired` is pruned to
                 # today's keys so it never grows without bound across days,
@@ -3074,16 +3250,14 @@ async def run(
         # Before anything else that can raise: each of these holds a ctypes
         # callback the driver still has the address of, and a callback freed
         # while winmm can still reach it takes the process with it (CLAUDE.md).
-        for listener in midi_listeners.values():
-            listener.stop()
-        midi_listeners.clear()
-        if sequence_task is not None:
+        midi_in.close()
+        if lighting.sequence_task is not None:
             # Not another `set_led` - shutting down never repaints the light,
             # it just stops walking whatever sequence was mid-flight so the
             # task does not outlive `run()` and trip a loop-closed warning.
-            sequence_task.cancel()
+            lighting.sequence_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await sequence_task
+                await lighting.sequence_task
         if web_server is not None:
             web_server.should_exit = True
             # uvicorn raises SystemExit (a BaseException) if it never bound its
@@ -3095,6 +3269,7 @@ async def run(
             await device.close()
         tones.close()
         store.close()
+        documents.close()
         if guard is not None:
             guard.release()
 

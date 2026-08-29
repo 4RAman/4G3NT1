@@ -24,3 +24,8 @@ dist/
 .claude/worktrees/
 # Per-machine tool permissions, like control-panel.json above.
 .claude/settings.local.json
+# scenes/default.json is the curated, shipped starter (TODO 92) - everyone's
+# repo has the same one. Every other scene is somebody's own button, created
+# through the UI or by hand, and none of those belong in this repo either.
+scenes/*.json
+!scenes/default.json

@@ -34,6 +34,16 @@ export class ModeEditor {
     this.mode = mode;
     this.handlers = handlers;
     this._validators = []; // each returns an error string or null
+    // config key -> the element rendering it, so a parser warning can mark
+    // its own field (TODO 62). Rebuilt with the body; `_warnings` is kept so
+    // marks survive a template swap or a redraw, which is exactly when a
+    // warning is still true and would otherwise vanish.
+    this._byKey = new Map();
+    this._warnings = [];
+    // Which state's look is expanded, one at a time - the Lights tab's own
+    // `_expandedState` pattern (menu.js), so an app with several owned states
+    // reads as a short list rather than several editors stacked open.
+    this._expandedLookState = null;
     this.el = el('div', { className: 'mode-card' });
     this._build();
   }
@@ -55,6 +65,13 @@ export class ModeEditor {
       getLooks: this.handlers.getLooks || (() => ({})),
       getPalette: this.handlers.getPalette || (() => ({})),
       api: this.handlers.api,
+      // What this app reports when it finishes, so a webhook bound to its
+      // `on_exit` can show the keys that will actually arrive (TODO 65/66).
+      // Read through a function rather than captured, because the template
+      // can be swapped while the editor is open. Absent elsewhere - a
+      // reflex's webhook has no app, and saying so beats inventing one.
+      summaryKeys: () => (TEMPLATE_BY_TYPE[this.mode.template] || {}).summaryKeys || [],
+      modeName: () => this.mode.name || null,
     };
   }
 
@@ -68,7 +85,70 @@ export class ModeEditor {
   _build() {
     clear(this.el);
     this._validators = [];
+    this._byKey = new Map();
+    // Every `<details>` `_section()` wrapped this build (TODO 85), so a
+    // warning or error painted afterward knows which ones to force open.
+    this._sectionEls = [];
     this.el.append(this._body());
+    this._paintWarnings();
+  }
+
+  /**
+   * Show the parser's complaints about *this* mode on the fields they are
+   * about (TODO 62).
+   *
+   * @param {{message: string, key: ?string}[]} warnings - already filtered to
+   *   this mode by the caller, which is the only thing that knows this mode's
+   *   index in the config it came from.
+   *
+   * **A warning with no key still counts.** It cannot be placed on a field,
+   * and the Save bar goes on printing every one of them regardless - this
+   * marks what it can and silently leaves the rest to the bar, because a
+   * complaint that appeared in neither place would be a warning nobody acts
+   * on. That is also why the bar was not replaced.
+   */
+  showWarnings(warnings = []) {
+    this._warnings = warnings;
+    this._paintWarnings();
+  }
+
+  _paintWarnings() {
+    for (const element of this._byKey.values()) {
+      element.classList.remove('fld-warn');
+      element.querySelector('.fld-warned')?.remove();
+    }
+    for (const warning of this._warnings) {
+      const element = warning.key && this._byKey.get(warning.key);
+      if (!element || element.querySelector('.fld-warned')) continue;
+      element.classList.add('fld-warn');
+      element.append(el('span', {
+        className: 'fld-warned',
+        // The parser's own sentence, minus the "config: " and the location it
+        // already put you next to - the rest of it is the part that says what
+        // to do, and re-reading `modes[3].ladder` beside the ladder is noise.
+        textContent: warning.message
+          .replace(/^config: /, '')
+          .replace(/^modes\[\d+\](\.[\w.[\]']*)? ?/, ''),
+      }));
+    }
+    this._openSectionsWithProblems();
+  }
+
+  /**
+   * A collapsed section stays collapsed only while nothing inside it needs
+   * looking at (TODO 85). Called after every warning paint and every
+   * client-side validate() - both leave their marks as DOM state (`.fld-warn`
+   * for a parser warning, a non-empty `.fld-err` for a widget's own check),
+   * so this is a plain sweep rather than a second bookkeeping structure that
+   * could drift from what is actually on screen.
+   */
+  _openSectionsWithProblems() {
+    for (const details of this._sectionEls || []) {
+      const warned = details.querySelector('.fld-warn');
+      const errored = Array.from(details.querySelectorAll('.fld-err'))
+        .some((e) => e.textContent.trim());
+      if (warned || errored) details.open = true;
+    }
   }
 
   /**
@@ -100,11 +180,67 @@ export class ModeEditor {
     // rarer visit.
     this.bodyEl.append(
       this._header(), this._siblings(), this.howtoEl, this._readoutSection(),
-      this._looksPicker(),
-      this._templatePicker(), this._activationPicker(), this._hooks(),
+      this._section('How it looks', this._looksPicker(), this._looksDefaultOpen()),
+      // Always open: you reached this page by opening this app, and hiding
+      // the one section that holds its settings would be the wrong kind of
+      // quiet. The heading names the app rather than asking what it is
+      // (TODO 87) - see `_templateHeading`.
+      this._section(this._templateHeading(), this._templatePicker(), true),
+      this._section("When it's on", this._activationPicker(), this._activationDefaultOpen()),
+      this._section('Around the session', this._hooks(), this._hooksDefaultOpen(), { tinker: true }),
     );
     this.refreshExplainers();
     return this.bodyEl;
+  }
+
+  /**
+   * Wrap `contentEl` in a collapsible `<details>` named by `label` (TODO 85) -
+   * closed when `defaultOpen` is false, so a simple mode's card is mostly
+   * headings rather than four always-open blocks. `_openSectionsWithProblems`
+   * can still force one open later regardless of this initial state.
+   *
+   * Content with nothing to show at all (an ambient mode's "How it looks", an
+   * everyday mode's hooks) arrives already `.hidden` from its own builder and
+   * is returned as-is - a `<details>` around nothing is still a control that
+   * does nothing. `tinker: true` moves the whole section behind the Tinker
+   * toggle as one unit (help.js's `[data-tier="tinker"]`), which is what
+   * "Around the session" already did before it had a summary to carry that
+   * attribute instead.
+   */
+  _section(label, contentEl, defaultOpen, { tinker = false } = {}) {
+    if (contentEl.hidden) return contentEl;
+    const details = el('details', {
+      className: 'mode-section', open: defaultOpen,
+      ...(tinker ? { 'data-tier': 'tinker' } : {}),
+    }, [
+      el('summary', { className: 'fld-label', textContent: label }),
+      contentEl,
+    ]);
+    this._sectionEls.push(details);
+    return details;
+  }
+
+  /** "How it looks" opens when some owned state already names a look. TODO
+   *  86 made each row collapse on its own; this decides whether the section
+   *  heading around that short list is worth opening to begin with. */
+  _looksDefaultOpen() {
+    return Boolean(this.mode.looks && Object.values(this.mode.looks).some(Boolean));
+  }
+
+  /** "When it's on" opens when the activation differs from that type's own
+   *  bare `defaults()` - the same object a type switch seeds it with, so this
+   *  is a diff against the seed rather than a second declaration of what
+   *  "untouched" means. */
+  _activationDefaultOpen() {
+    const activation = this.mode.activation || {};
+    const bare = ACTIVATION_BY_TYPE[activation.type]?.defaults();
+    if (!bare) return true; // an unrecognised activation type is not "nothing to see"
+    return JSON.stringify(activation) !== JSON.stringify(bare);
+  }
+
+  /** "Around the session" opens when a hook is actually bound. */
+  _hooksDefaultOpen() {
+    return MODE_HOOKS.some((hook) => Boolean(this.mode[hook.key]));
   }
 
   /**
@@ -176,10 +312,14 @@ export class ModeEditor {
   }
 
   /**
-   * One picker per LED state this template owns, choosing a named look from
-   * the pool (or the standard colour). A *reference*, not an inline effect:
-   * that is what lets two Pomodoros differ while `WORKING` stays one shared
-   * state, and it is the same shape the wire already pushes (ROADMAP D4).
+   * One row per LED state this template owns, naming a look from the pool
+   * (or the standard colour) - a *reference*, not an inline effect, which is
+   * what lets two Pomodoros differ while `WORKING` stays one shared state
+   * (ROADMAP D4). Mirrors the Lights tab's own state rows (menu.js's
+   * `_renderStateRow`/`_renderLookEntry`): collapsed to a swatch and a
+   * summary until "Edit" is clicked, one open at a time, so an app with
+   * several owned states reads as a short list rather than several always-
+   * open pickers (TODO 86).
    */
   _looksPicker() {
     const descriptor = TEMPLATE_BY_TYPE[this.mode.template];
@@ -189,148 +329,212 @@ export class ModeEditor {
       wrap.hidden = true;
       return wrap;
     }
-    wrap.append(el('span', { className: 'fld-label', textContent: 'How it looks' }));
-    for (const key of states) {
-      const state = LED_STATE_BY_KEY[key] || { key, label: key, meaning: '' };
-      const select = el('select', {
-        className: 'inp',
-        onchange: () => { setLook(select.value); paint(); this._changed(); },
-      });
+    this._looksStates = states;
+    this.looksWrapEl = wrap;
+    this.looksListEl = el('div', {});
+    wrap.append(this.looksListEl);
+    this._renderLooksPicker();
+    return wrap;
+  }
 
-      const swatch = el('span', { className: 'palette-swatch' });
-      const summary = el('span', { className: 'palette-summary' });
-      // Where the editor for the *named* look appears, when one is named.
-      // This is what makes the mode page the only place mode colour is
-      // edited: picking is not enough if changing it sends you elsewhere.
-      const editorSlot = el('div', { className: 'looks-editor' });
+  /** Rebuild the state-row list in place - cheap, and it is never more than a
+   *  handful of rows. Called on every Edit/Done click rather than the whole
+   *  mode card, so an open editor elsewhere on the card survives it. */
+  _renderLooksPicker() {
+    if (!this.looksListEl) return;
+    clear(this.looksListEl);
+    for (const key of this._looksStates || []) {
+      this.looksListEl.append(this._renderLookStateRow(key));
+    }
+  }
 
-      const setLook = (name) => {
-        if (!this.mode.looks) this.mode.looks = {};
-        if (name) this.mode.looks[key] = name;
-        else delete this.mode.looks[key];
-        // An empty map is how "uses the palette" round-trips, and the Python
-        // serialiser omits the key entirely - so drop it here too.
-        if (!Object.keys(this.mode.looks).length) delete this.mode.looks;
-      };
+  /** What state `key` currently shows: the named look if one is set and
+   *  still in the pool, missing if it was deleted out from under it, or
+   *  nothing (the palette fallback) - the same three answers `paint()`
+   *  below computes for the picker itself, read once for the collapsed
+   *  line's snapshot. */
+  _resolvedLook(key) {
+    const name = this.mode.looks?.[key] || '';
+    if (!name) return { name: '', effect: null, missing: false };
+    const effect = (this.handlers.getLooks?.() || {})[name];
+    return { name, effect: effect || null, missing: !effect };
+  }
 
-      const sharedBy = (name) => (this.handlers.getModes?.() || []).filter(
-        (m) => m !== this.mode && Object.values(m.looks || {}).includes(name),
-      ).length;
+  _renderLookStateRow(key) {
+    const state = LED_STATE_BY_KEY[key] || { key, label: key, meaning: '' };
+    const open = this._expandedLookState === key;
 
-      const paint = () => {
-        const current = this.handlers.getLooks?.() || {};
-        const effect = current[select.value];
-        clear(editorSlot);
-        if (effect) {
+    const { name, effect, missing } = this._resolvedLook(key);
+    const swatch = el('span', { className: 'palette-swatch' });
+    if (effect) applySwatch(swatch, effect);
+    const summary = el('span', {
+      className: 'palette-summary',
+      textContent: missing
+        ? `${name} (missing)`
+        : (effect ? describeEffect(effect) : 'the standard colour for this state'),
+    });
+
+    const line = el('div', { className: 'look-line' }, [
+      swatch,
+      el('span', { className: 'palette-name', textContent: state.label }),
+      state.meaning ? el('span', { className: 'palette-meaning', textContent: state.meaning }) : null,
+      summary,
+      el('button', {
+        type: 'button', className: 'mini', textContent: open ? 'Done' : 'Edit',
+        onclick: () => {
+          this._expandedLookState = open ? null : key;
+          this._renderLooksPicker();
+        },
+      }),
+    ].filter(Boolean));
+
+    if (!open) return el('div', { className: 'look-entry' }, [line]);
+    return el('div', { className: 'look-entry open' }, [line, this._renderLookStateBody(key)]);
+  }
+
+  /** The open row's body: which look this state names, a way to start a new
+   *  one from a preset, and - once a look is chosen - that pool look's own
+   *  editor, in place. Unchanged from before TODO 86 except for where it
+   *  lives: this is what makes "Edit" open straight into the colour
+   *  sequencer rather than sending you elsewhere. */
+  _renderLookStateBody(key) {
+    const select = el('select', {
+      className: 'inp',
+      onchange: () => { setLook(select.value); paint(); this._changed(); },
+    });
+
+    const swatch = el('span', { className: 'palette-swatch' });
+    const summary = el('span', { className: 'palette-summary' });
+    const editorSlot = el('div', { className: 'looks-editor' });
+
+    const setLook = (name) => {
+      if (!this.mode.looks) this.mode.looks = {};
+      if (name) this.mode.looks[key] = name;
+      else delete this.mode.looks[key];
+      // An empty map is how "uses the palette" round-trips, and the Python
+      // serialiser omits the key entirely - so drop it here too.
+      if (!Object.keys(this.mode.looks).length) delete this.mode.looks;
+    };
+
+    const sharedBy = (name) => (this.handlers.getModes?.() || []).filter(
+      (m) => m !== this.mode && Object.values(m.looks || {}).includes(name),
+    ).length;
+
+    const paint = () => {
+      const current = this.handlers.getLooks?.() || {};
+      const effect = current[select.value];
+      clear(editorSlot);
+      if (effect) {
+        applySwatch(swatch, effect);
+        summary.textContent = describeEffect(effect);
+      } else {
+        swatch.style.background = '';
+        summary.textContent = select.value
+          ? 'no such look'
+          : 'the built-in colour for this state';
+      }
+      if (!effect) return;
+
+      const editor = createLookEditor({
+        get: () => effect,
+        onChange: () => {
           applySwatch(swatch, effect);
           summary.textContent = describeEffect(effect);
-        } else {
-          swatch.style.background = '';
-          summary.textContent = select.value
-            ? 'no such look'
-            : 'the built-in colour for this state';
-        }
-        if (!effect) return;
-
-        const editor = createLookEditor({
-          get: () => effect,
-          onChange: () => {
-            applySwatch(swatch, effect);
-            summary.textContent = describeEffect(effect);
-            this.handlers.onLooksChanged?.();
-          },
-          floor: this.handlers.getFloor?.(),
-          api: this.handlers.api,
-          label: select.value,
-          previewState: key,
-          // This edits a *pool* look in place, and pool looks may be stop
-          // lists - the same rule as the Lights tab's named-look rows.
-          allowSequence: true,
-        });
-        editorSlot.append(editor.el);
-
-        // Editing a shared look from here changes it everywhere, which is
-        // the correct behaviour for a *named* look and a genuinely surprising
-        // one if nobody says so. The copy button is the escape hatch, and it
-        // is offered only when there is something to escape.
-        const others = sharedBy(select.value);
-        if (others) {
-          editorSlot.append(el('div', { className: 'looks-shared' }, [
-            el('span', {
-              className: 'menu-hint',
-              textContent: `Shared with ${others} other mode${others > 1 ? 's' : ''} - editing changes it for all of them.`,
-            }),
-            el('button', {
-              type: 'button',
-              textContent: 'Make a copy just for this mode',
-              onclick: () => adopt(this.handlers.addLook?.(select.value, effect)),
-            }),
-          ]));
-        }
-      };
-
-      // A look deleted from the pool leaves a dangling name. It stays listed,
-      // marked, rather than silently snapping to the standard colour - the
-      // Python parser warns about exactly this, and the two should agree.
-      const rebuildOptions = (selected) => {
-        const current = Object.keys(this.handlers.getLooks?.() || {}).sort();
-        clear(select);
-        select.append(el('option', { value: '', textContent: '- standard colour -' }));
-        for (const n of current) select.append(el('option', { value: n, textContent: n }));
-        if (selected && !current.includes(selected)) {
-          select.append(el('option', { value: selected, textContent: `${selected} (missing)` }));
-        }
-        select.value = selected || '';
-      };
-
-      // Point this state at a look that has just been added to the pool.
-      const adopt = (name) => {
-        if (!name) return;
-        rebuildOptions(name);
-        setLook(name);
-        paint();
-        this._changed();
-      };
-
-      // Making a look from a preset, without going anywhere. This is the path
-      // that replaces "add one in the Lights tab first" - the pool still owns
-      // it afterwards, so nothing about the shared-look model changes.
-      const fromPreset = el('select', {
-        className: 'inp',
-        onchange: () => {
-          const preset = LOOK_PRESETS.find((p) => p.id === fromPreset.value);
-          fromPreset.value = '';
-          // `presetLook`, not `preset.effect` - **most presets have no
-          // `effect`.** 105 of the 142 are sequence-only and carry `stops`
-          // instead, so reading `.effect` gave `undefined`, `_addLook` spread
-          // it into `{}`, and the new look arrived empty: the editor showed
-          // "single colour" because an empty object has no stops, and the
-          // colours you picked were never copied anywhere to come back from.
-          // Reported 2026-08-26 as "it always defaults to single colour".
-          // `presetLook` is `sequence || effect` **deep-copied**, and the copy
-          // matters as much as the fallback: handing over `preset.effect`
-          // directly would share the stops array with the module-level preset
-          // table, so adding a row to your look would edit the preset for
-          // every later use in that session. Every other preset consumer in
-          // the app already goes through it; this was the one that did not.
-          if (preset) adopt(this.handlers.addLook?.(preset.label, presetLook(preset)));
+          this.handlers.onLooksChanged?.();
         },
-      }, [
-        el('option', { value: '', textContent: 'New look from a preset…' }),
-        ...LOOK_PRESET_GROUPS.map((group) => el('optgroup', { label: group },
-          LOOK_PRESETS.filter((p) => p.group === group).map(
-            (p) => el('option', { value: p.id, textContent: p.label }),
-          ))),
-      ]);
+        floor: this.handlers.getFloor?.(),
+        api: this.handlers.api,
+        label: select.value,
+        previewState: key,
+        // This edits a *pool* look in place, and pool looks may be stop
+        // lists - the same rule as the Lights tab's named-look rows.
+        allowSequence: true,
+      });
+      editorSlot.append(editor.el);
 
-      rebuildOptions(this.mode.looks?.[key] || '');
+      // Editing a shared look from here changes it everywhere, which is
+      // the correct behaviour for a *named* look and a genuinely surprising
+      // one if nobody says so. The copy button is the escape hatch, and it
+      // is offered only when there is something to escape.
+      const others = sharedBy(select.value);
+      if (others) {
+        editorSlot.append(el('div', { className: 'looks-shared' }, [
+          el('span', {
+            className: 'menu-hint',
+            textContent: `Shared with ${others} other mode${others > 1 ? 's' : ''} - editing changes it for all of them.`,
+          }),
+          el('button', {
+            type: 'button',
+            textContent: 'Make a copy just for this mode',
+            onclick: () => adopt(this.handlers.addLook?.(select.value, effect)),
+          }),
+        ]));
+      }
+    };
+
+    // A look deleted from the pool leaves a dangling name. It stays listed,
+    // marked, rather than silently snapping to the standard colour - the
+    // Python parser warns about exactly this, and the two should agree.
+    const rebuildOptions = (selected) => {
+      const current = Object.keys(this.handlers.getLooks?.() || {}).sort();
+      clear(select);
+      select.append(el('option', { value: '', textContent: '- standard colour -' }));
+      for (const n of current) select.append(el('option', { value: n, textContent: n }));
+      if (selected && !current.includes(selected)) {
+        select.append(el('option', { value: selected, textContent: `${selected} (missing)` }));
+      }
+      select.value = selected || '';
+    };
+
+    // Point this state at a look that has just been added to the pool.
+    const adopt = (name) => {
+      if (!name) return;
+      rebuildOptions(name);
+      setLook(name);
       paint();
-      wrap.append(el('div', { className: 'looks-pick' }, [
-        el('span', { className: 'palette-name', textContent: state.label }),
-        swatch, select, fromPreset, summary,
-      ]), editorSlot);
-    }
-    return wrap;
+      this._changed();
+    };
+
+    // Making a look from a preset, without going anywhere. This is the path
+    // that replaces "add one in the Lights tab first" - the pool still owns
+    // it afterwards, so nothing about the shared-look model changes.
+    const fromPreset = el('select', {
+      className: 'inp',
+      onchange: () => {
+        const preset = LOOK_PRESETS.find((p) => p.id === fromPreset.value);
+        fromPreset.value = '';
+        // `presetLook`, not `preset.effect` - **most presets have no
+        // `effect`.** 105 of the 142 are sequence-only and carry `stops`
+        // instead, so reading `.effect` gave `undefined`, `_addLook` spread
+        // it into `{}`, and the new look arrived empty: the editor showed
+        // "single colour" because an empty object has no stops, and the
+        // colours you picked were never copied anywhere to come back from.
+        // Reported 2026-08-26 as "it always defaults to single colour".
+        // `presetLook` is `sequence || effect` **deep-copied**, and the copy
+        // matters as much as the fallback: handing over `preset.effect`
+        // directly would share the stops array with the module-level preset
+        // table, so adding a row to your look would edit the preset for
+        // every later use in that session. Every other preset consumer in
+        // the app already goes through it; this was the one that did not.
+        if (preset) adopt(this.handlers.addLook?.(preset.label, presetLook(preset)));
+      },
+    }, [
+      el('option', { value: '', textContent: 'New look from a preset…' }),
+      ...LOOK_PRESET_GROUPS.map((group) => el('optgroup', { label: group },
+        LOOK_PRESETS.filter((p) => p.group === group).map(
+          (p) => el('option', { value: p.id, textContent: p.label }),
+        ))),
+    ]);
+
+    rebuildOptions(this.mode.looks?.[key] || '');
+    paint();
+    // `.palette-row` on purpose: `.look-entry.open > .palette-row` is what
+    // gives the Lights tab's own open rows their indent and left border, and
+    // this is a direct child of the same `.look-entry.open` wrapper.
+    return el('div', { className: 'palette-row' }, [
+      el('div', { className: 'looks-pick' }, [swatch, select, fromPreset, summary]),
+      editorSlot,
+    ]);
   }
 
   /**
@@ -351,10 +555,11 @@ export class ModeEditor {
     }
     // `gestures` for the layout, because that is literally what this row holds
     // - a stack of gesture-rows - and a second class copying its four
-    // properties would be a rule waiting to drift.
-    const wrap = el('div', { className: 'gestures hooks-row', 'data-tier': 'tinker' }, [
-      el('span', { className: 'fld-label', textContent: 'Around the session' }),
-    ]);
+    // properties would be a rule waiting to drift. `data-tier` moved to the
+    // `<details>` wrapper `_body()` puts around this (TODO 85) - the whole
+    // section disappears as one unit when Tinker is off, rather than leaving
+    // an empty collapsed heading behind.
+    const wrap = el('div', { className: 'gestures hooks-row' });
     // TODO 66: what on_exit actually hands a webhook or OSC binding, read
     // here rather than in main.py. In the order summary.clean will send it -
     // key-sorted, which is also OSC's argument order.
@@ -486,57 +691,56 @@ export class ModeEditor {
 
   // --- template picker (swaps the template body) ---------------------------
 
+  /** "Stopwatch settings" - the app's own name, not a question (TODO 87).
+   *
+   *  A mode with a template this page does not know keeps the old wording:
+   *  there is no name to put here, and inventing one is the classification a
+   *  fallback may not invent (TODO 107). */
+  _templateHeading() {
+    const label = TEMPLATE_BY_TYPE[this.mode.template]?.label;
+    return label ? `${label} settings` : 'What it does';
+  }
+
+  /**
+   * The template's own fields, with the template itself stated rather than
+   * offered (TODO 87).
+   *
+   * **This was a `<select>`, and it was the one control on the page that could
+   * destroy the page it was on.** You reached here by opening this app, so a
+   * dropdown saying "what it does" was redundant with where you were - and
+   * changing it swapped the whole body, discarding every field the old
+   * template owned. It looked like a label and behaved like a delete.
+   *
+   * Removing it rather than confirming it is what **TODO 88/101** decided:
+   * once the nav groups items under the app they belong to, an item's template
+   * is *which group it lives in*, and changing it means moving it. A select
+   * that silently rehomes a row is not merely risky, it is describing
+   * something the rest of the page no longer believes.
+   *
+   * So changing type is delete-and-add, which is what it always was
+   * underneath. The line saying so is the whole replacement - a door people
+   * used, removed in silence, is how a page earns a bug report.
+   */
   _templatePicker() {
-    const select = el('select', {
-      className: 'inp',
-      onchange: () => this._switchTemplate(select.value),
-    }, TEMPLATES.map((t) => el('option', { value: t.type, textContent: t.label })));
-    select.value = this.mode.template || TEMPLATES[0].type;
+    const descriptor = TEMPLATE_BY_TYPE[this.mode.template];
 
     this.templateBody = el('div', { className: 'tpl-body' });
     this._buildTemplateBody();
 
-    return el('div', { className: 'pick-row' }, [
-      el('div', { className: 'pick-head' }, [
-        el('span', { className: 'fld-label', textContent: 'What it does' }),
-        select,
-      ]),
-      this.templateBody,
+    const head = el('div', { className: 'pick-head' }, [
+      el('span', { className: 'menu-hint', textContent: descriptor?.about || '' }),
     ]);
-  }
-
-  // Replace template fields, then re-pin the activation to one this template
-  // allows - switching to stopwatch or counter lands on `manual`, their only
-  // allowed one.
-  _switchTemplate(type) {
-    const descriptor = TEMPLATE_BY_TYPE[type];
-    if (!descriptor) return;
-    // Strip old template-specific flat fields off the mode, keep core keys.
-    for (const key of [...GESTURES.map((g) => g.key), 'unless_logged_today',
-      'message', 'label', 'snooze_minutes', 'dismiss_event', 'log_as', 'event',
-      // A Pomodoro's WORKING look means nothing on a stopwatch, and the Python
-      // parser would warn that the mode does not own that state.
-      'looks']) {
-      delete this.mode[key];
-    }
-    // Hooks are the mode's own and survive a swap between takeovers: what they
-    // do does not depend on the template. An everyday mode is never entered or
-    // left, though, so one moved there could only be dead weight the parser
-    // warns about - drop it where it stops meaning anything.
-    if (descriptor.nature !== 'takeover') {
-      for (const hook of MODE_HOOKS) delete this.mode[hook.key];
-    }
-    this.mode.template = type;
-    Object.assign(this.mode, descriptor.defaults());
-
-    // Ensure the activation is compatible with the new template's nature.
-    const allowed = descriptor.allowedActivations;
-    const current = this.mode.activation?.type;
-    if (!allowed.includes(current)) {
-      this.mode.activation = ACTIVATION_BY_TYPE[allowed[0]].defaults();
-    }
-    this._build(); // full rebuild keeps validators + bodies in sync
-    this._changed();
+    head.hidden = !descriptor;
+    return el('div', { className: 'pick-row' }, [
+      head,
+      this.templateBody,
+      el('p', {
+        className: 'menu-hint', 'data-help': true,
+        textContent: 'This is what kind of app it is, and it does not change: '
+          + 'add the one you want and delete this, which is what changing it '
+          + 'always did underneath.',
+      }),
+    ]);
   }
 
   _buildTemplateBody() {
@@ -561,6 +765,10 @@ export class ModeEditor {
         const field = createField(spec, this.mode, () => this._changed(), this._fieldCtx());
         grid.append(field.el);
         this._validators.push(field.validate);
+        // Which element holds which config key, so a parser warning can mark
+        // the field it is about rather than being printed into a banner the
+        // next Save overwrites (TODO 62).
+        this._byKey.set(spec.key, field.el);
       }
       this.templateBody.append(grid);
     }
@@ -595,10 +803,7 @@ export class ModeEditor {
     this._buildActivationBody();
 
     return el('div', { className: 'pick-row' }, [
-      el('div', { className: 'pick-head' }, [
-        el('span', { className: 'fld-label', textContent: "When it's on" }),
-        select,
-      ]),
+      el('div', { className: 'pick-head' }, [select]),
       this.activationBody,
     ]);
   }
@@ -793,7 +998,7 @@ export class ModeEditor {
     });
 
     buildFields();
-    return el('div', { className: 'gesture-row' }, [
+    const row = el('div', { className: 'gesture-row' }, [
       el('div', { className: 'gesture-head' }, [
         el('span', { className: 'gesture-name', textContent: gesture.label }),
         select,
@@ -801,6 +1006,10 @@ export class ModeEditor {
       gesture.hint ? el('span', { className: 'fld-hint', 'data-help': true, textContent: gesture.hint }) : null,
       fields,
     ]);
+    // A binding is a config key like any other - `short_press`, `on_exit` -
+    // so a warning about one marks this row (TODO 62).
+    this._byKey.set(gesture.key, row);
+    return row;
   }
 
   /**
@@ -866,6 +1075,11 @@ export class ModeEditor {
 
   /** Run every field validator; returns an array of error strings (empty = ok). */
   validate() {
-    return this._validators.map((v) => v()).filter(Boolean);
+    const errors = this._validators.map((v) => v()).filter(Boolean);
+    // Validators write their own `.fld-err` as a side effect (widgets.js's
+    // `wrap`), so this sweep runs after them rather than duplicating what
+    // counts as an error (TODO 85).
+    this._openSectionsWithProblems();
+    return errors;
   }
 }

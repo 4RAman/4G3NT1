@@ -230,7 +230,16 @@ def test_every_template_claims_the_same_led_states_on_both_sides():
     from_js = {
         name: tuple(re.findall(r"'([^']+)'", states)) for name, states in pairs
     }
-    assert from_js == {name: tuple(v) for name, v in MODE_LED_STATES.items()}
+    # "alarm" and "reminders" are migrated template names (TODO 84): they still
+    # parse (into NoticeBehavior), so MODE_LED_STATES still needs them for
+    # `_parse_mode_looks` to validate a migrated mode's `looks`, but the editor
+    # only ever shows "notice" - schema.js has no descriptor for either any
+    # more, on purpose, so they are excluded here rather than compared.
+    from_py = {
+        name: tuple(v) for name, v in MODE_LED_STATES.items()
+        if name not in ("alarm", "reminders")
+    }
+    assert from_js == from_py
 
 
 def test_field_tiers_are_only_basic_or_tinker():
@@ -570,3 +579,155 @@ def test_the_integration_picker_is_an_inserter_not_a_stored_field():
     action = next(m for m in cfg.modes if m.name == "Desk").behavior.actions["short_press"]
     assert isinstance(action, WebhookAction)
     assert not hasattr(action, "integration")
+
+
+# --- a webhook you can look at before you send it (TODO 65) ----------------
+# The endpoint's whole job is to answer "what would actually arrive", so the
+# tests are about the three things that decide that: who wins a key collision,
+# what the summary contract drops, and whether `send` is genuinely opt-in.
+
+
+def _webhook(**over) -> dict:
+    body = {
+        "action": {
+            "action": "webhook", "url": "https://example.test/hook", "payload": {},
+        },
+        "trigger": "short_press",
+    }
+    body.update(over)
+    return body
+
+
+async def test_a_preview_shows_the_body_without_sending_it(client):
+    res = await client.post("/api/webhook/preview", json=_webhook())
+    assert res.status_code == 200
+    data = res.json()
+    assert data["sent"] is False
+    assert data["url"] == "https://example.test/hook"
+    assert data["payload"]["trigger"] == "short_press"
+    # A fixed timestamp, so the one field that never matters does not tick.
+    assert data["payload"]["ts"] == "2026-01-01T09:00:00+00:00"
+
+
+async def test_the_preview_shows_the_keys_an_app_adds_on_the_way_out(client):
+    """The half of a webhook's body nobody could see: a takeover's summary
+    merges in flat, and that is what the item was raised about."""
+    res = await client.post("/api/webhook/preview", json=_webhook(
+        mode="Focus", summary={"blocks": 4, "minutes": 25},
+    ))
+    payload = res.json()["payload"]
+    assert payload["blocks"] == 4 and payload["minutes"] == 25
+    assert payload["mode"] == "Focus"
+
+
+async def test_identity_beats_an_app_and_the_user_beats_both(client):
+    """`summary.merge`'s rule, visible where somebody can act on it: an app
+    that counts something called "mode" must not be able to rewrite whose
+    event this is, and the payload the user typed wins over everything."""
+    res = await client.post("/api/webhook/preview", json=_webhook(
+        mode="Focus",
+        summary={"mode": "sneaky", "trigger": "sneaky"},
+        action={
+            "action": "webhook", "url": "https://example.test/hook",
+            "payload": {"mode": "mine"},
+        },
+    ))
+    payload = res.json()["payload"]
+    assert payload["mode"] == "mine"        # the user's payload
+    assert payload["trigger"] == "short_press"  # identity, not the app's
+
+
+async def test_a_key_the_contract_drops_is_named_rather_than_shown(client):
+    """A preview whose keys quietly differ from the real thing is worse than
+    no preview - so the summary goes through `summary.clean` here too, and
+    what it refused is reported instead of appearing."""
+    res = await client.post("/api/webhook/preview", json=_webhook(
+        summary={"good": 1, "bad": {"nested": True}},
+    ))
+    data = res.json()
+    assert data["payload"]["good"] == 1
+    assert "bad" not in data["payload"]
+    assert any("bad" in complaint for complaint in data["dropped"])
+
+
+async def test_an_action_the_parser_would_reject_is_refused_here_too(client):
+    """Same rule the look preview follows: previewing something that could
+    never run stops the preview predicting the thing it previews."""
+    res = await client.post("/api/webhook/preview", json=_webhook(
+        action={"action": "webhook", "url": ""},
+    ))
+    assert res.status_code == 422
+
+
+async def test_a_different_action_is_not_a_webhook(client):
+    res = await client.post("/api/webhook/preview", json=_webhook(
+        action={"action": "log", "event": "x"},
+    ))
+    assert res.status_code == 422
+
+
+async def test_a_bad_summary_is_refused_rather_than_guessed(client):
+    res = await client.post("/api/webhook/preview", json=_webhook(summary=[1, 2]))
+    assert res.status_code == 422
+
+
+async def test_sending_is_opt_in(client, monkeypatch):
+    """`send` performs a real outward POST, so the default must never do it."""
+    calls = []
+
+    async def fake_execute(action, **kwargs):
+        calls.append(action)
+        from aibutton.actions import ActionResult
+        return ActionResult(True, "Webhook OK (200)")
+
+    monkeypatch.setattr("aibutton.webui.execute_action", fake_execute)
+    await client.post("/api/webhook/preview", json=_webhook())
+    assert not calls
+    res = await client.post("/api/webhook/preview", json=_webhook(send=True))
+    data = res.json()
+    assert len(calls) == 1
+    assert data["sent"] is True and data["ok"] is True
+    assert "200" in data["message"]
+
+
+# --- warnings that know which field they are about (TODO 62) ---------------
+
+
+BAD_MODE = {"modes": [
+    {"name": "Home", "template": "actions", "activation": {"type": "always"},
+     "short_press": {"action": "midi", "channel": 99, "number": 1},
+     "double_tap": {"action": "log", "event": "ok"}},
+]}
+
+
+async def test_validate_returns_both_shapes_of_the_same_warnings(client):
+    """One parse, two shapes: the sentences the Save bar has always printed,
+    and where each came from so the editor can mark the field."""
+    res = await client.post("/api/config/validate", json=BAD_MODE)
+    data = res.json()
+    assert data["warnings"]
+    assert [d["message"] for d in data["warning_details"]] == data["warnings"]
+
+
+async def test_a_detail_names_the_mode_index_and_the_field(client):
+    res = await client.post("/api/config/validate", json=BAD_MODE)
+    placed = [(d["mode"], d["key"]) for d in res.json()["warning_details"]]
+    assert (0, "short_press") in placed
+
+
+async def test_saving_reports_the_same_details(client):
+    """Check and Save are the two moments a field can be marked, so both have
+    to answer with the same shape - the editor has one code path."""
+    res = await client.put("/api/config", json=BAD_MODE)
+    data = res.json()
+    assert [d["message"] for d in data["warning_details"]] == data["warnings"]
+    assert any(d["key"] == "short_press" for d in data["warning_details"])
+
+
+async def test_a_clean_config_reports_no_details(client):
+    res = await client.post("/api/config/validate", json={"modes": [
+        {"name": "Home", "template": "actions", "activation": {"type": "always"},
+         "short_press": {"action": "log", "event": "ok"}},
+    ]})
+    data = res.json()
+    assert data["warnings"] == [] and data["warning_details"] == []

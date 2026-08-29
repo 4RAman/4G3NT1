@@ -35,13 +35,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from .config import AlarmBehavior, Mode, ReminderBehavior, ScheduleActivation
+from .config import Mode, NoticeBehavior, ScheduleActivation
 
 # Behaviours a ScheduleActivation may fire. Kept as a tuple rather than
 # "anything with a schedule" so a template that acquires a schedule by
 # accident (a parser bug, a hand-edited scene) cannot be started by a clock
-# without someone deciding it should be.
-SCHEDULED_BEHAVIORS = (AlarmBehavior, ReminderBehavior)
+# without someone deciding it should be. One entry since TODO 84 merged
+# AlarmBehavior/ReminderBehavior into NoticeBehavior.
+SCHEDULED_BEHAVIORS = (NoticeBehavior,)
 
 # How long after the scheduled minute an occurrence stays "due" if not yet
 # fired - wide enough to survive the run loop's <=1s recompute tick.

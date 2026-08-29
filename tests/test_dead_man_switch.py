@@ -130,16 +130,22 @@ async def test_without_a_grace_period_it_rings_exactly_as_before(tmp_path, monke
     assert "nobody_answered" not in [name for name, _ in _events(db_path)]
 
 
-def test_half_a_switch_is_warned_about(caplog):
-    """Each half is useless without the other, and a switch that was never
-    armed looks exactly like one that was."""
+def test_a_timeout_with_no_action_is_not_warned_about_any_more(caplog):
+    """TODO 84 made outcome logging unconditional: a timeout with no
+    `on_missed` action still logs a 0 under the mode's own name, so "nothing
+    will happen if this alarm goes unanswered" stopped being true - it always
+    logs *something* now, which is exactly the point of making it automatic."""
     config.parse_config({"modes": [{
         "name": "Armed but silent", "template": "alarm",
         "activation": {"type": "schedule", "at": AT}, "grace_minutes": 5,
     }]})
-    assert any("no on_timeout" in r.getMessage() for r in caplog.records)
+    assert not any("on_missed" in r.getMessage() or "on_timeout" in r.getMessage()
+                   for r in caplog.records)
 
-    caplog.clear()
+
+def test_an_action_with_no_timeout_is_still_warned_about(caplog):
+    """The other half is still a real misconfiguration: an `on_missed` that
+    can never fire, because the switch never gives up."""
     config.parse_config({"modes": [{
         "name": "Wired but never", "template": "alarm",
         "activation": {"type": "schedule", "at": AT},

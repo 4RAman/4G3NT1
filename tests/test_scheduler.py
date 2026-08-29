@@ -2,10 +2,10 @@ from datetime import datetime, time
 
 from aibutton.config import (
     ActionsBehavior,
-    AlarmBehavior,
     AlwaysActivation,
     LogAction,
     Mode,
+    NoticeBehavior,
     ScheduleActivation,
 )
 from aibutton.scheduler import due_alarm, occurrence_key
@@ -15,7 +15,7 @@ def alarm(name, at_, days=None, **fields):
     return Mode(
         name=name,
         activation=ScheduleActivation(at=at_, days=days),
-        behavior=AlarmBehavior(**fields),
+        behavior=NoticeBehavior(**fields),
     )
 
 

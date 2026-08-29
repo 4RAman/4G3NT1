@@ -626,6 +626,25 @@ def test_the_operators_a_reflex_may_test_with_match_on_both_sides():
     assert sorted(re.findall(r"'([^']+)'", match.group(1))) == sorted(cfg.REFLEX_OPS)
 
 
+def test_every_json_field_says_whether_it_is_a_list_or_an_object():
+    """The `json` widget writes `[]` or `{}` into an emptied box and rejects
+    the other shape outright, so a field that does not say which gets the
+    default - and three list-shaped fields (OSC `args`, a signal light's
+    positions, a control surface's) sat behind an object-only widget, editable
+    by hand in the file and not in the browser. Declared, because there is
+    nothing to infer from an empty textarea."""
+    specs = [
+        spec
+        for group in (_fields_by_template(), _fields_by_action())
+        for field_specs in group.values()
+        for spec in field_specs
+        if spec.get("kind") == "json"
+    ]
+    assert specs, "json fields stopped being extractable"
+    undeclared = [s.get("key") for s in specs if s.get("shape") not in ("list", "object")]
+    assert not undeclared, f"json fields with no shape: {undeclared}"
+
+
 def test_every_menu_template_is_a_real_template():
     """TODO 75's grouping is UI-only - `MENU_TEMPLATES` is not mirrored in
     Python and does not have to be - but a heading that lists a template name

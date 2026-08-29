@@ -2,7 +2,6 @@ from datetime import datetime, time
 
 from aibutton.config import (
     ActionsBehavior,
-    AlarmBehavior,
     AlwaysActivation,
     AppConfig,
     CounterBehavior,
@@ -10,6 +9,7 @@ from aibutton.config import (
     LogAction,
     ManualActivation,
     Mode,
+    NoticeBehavior,
     ScheduleActivation,
     StopwatchBehavior,
     TimerToggleAction,
@@ -108,7 +108,7 @@ def test_alarm_modes_are_not_gesture_resolved():
     alarm = Mode(
         name="Wake up",
         activation=ScheduleActivation(at=time(7, 0)),
-        behavior=AlarmBehavior(message="Wake up"),
+        behavior=NoticeBehavior(message="Wake up"),
     )
     assert resolve((alarm,), "short_press", at(7)) is None
     # ...and it doesn't shadow an ambient mode that does define the gesture.

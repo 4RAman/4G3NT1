@@ -58,8 +58,10 @@ import contextlib
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field, fields, replace
 from datetime import time
+from typing import get_args
 
 from . import keys, ladder, midi, ramp, scenes, sequencer
 from .device import LED_STYLES, SAFE_MIN_PERIOD_S, STYLE_STROBES, LEDState, TriggerType
@@ -267,6 +269,41 @@ class SetPositionAction:
     name: str
 
 
+# What `set_value` may do to a slot. Two, and deliberately only two: a delta
+# and an absolute. Anything else - multiply, min, clamp - is arithmetic, and
+# arithmetic on the button is the app runtime's expression language
+# (ARCHITECTURE.md), not an action's business. Mirrored in schema.js.
+SET_VALUE_OPS: tuple[str, ...] = ("add", "set")
+
+
+@dataclass(frozen=True)
+class SetValueAction:
+    """Write one slot of an app's document (TODO 34, ROADMAP D9's third action
+    family).
+
+    **App-bound**: it names an app and reaches into that app's data, which is
+    what makes it the answer to TODO 15's *"Smoking +1 without entering the
+    Counter"*. It is nonetheless an ordinary fire-and-forget primitive - it
+    changes no app's loop, owns no light and hands the button straight back -
+    so it works on a gesture, a hook, a reflex and a sequence step with no
+    site having to learn about it.
+
+    Not delivered to the running app the way `set_position` is, and the
+    difference is the point: a position is a thing only a running app can be
+    *in*, while a document lives outside every run loop precisely so anything
+    can write it. An app reads its own slot when it next looks.
+
+    **A name that no mode has is a dangling reference**, kept and warned about
+    like every other one here: quietly repointing it at some other app would
+    be worse, and deleting the binding would lose the number's owner.
+    """
+
+    app: str  # the mode's name - its document is keyed by that
+    slot: str  # one of DOC_SLOTS[template]
+    op: str = "add"  # "add" (a delta) or "set" (an absolute value)
+    value: float | str | bool = 1
+
+
 @dataclass(frozen=True)
 class NamedAction:
     """A reference into `AppConfig.actions` - the pool - by name.
@@ -286,7 +323,7 @@ class NamedAction:
 Action = (
     LogAction | ReadoutAction | TimerToggleAction | WebhookAction | OscAction
     | MidiAction | KeysAction | EnterModeAction | NamedAction | StandbyAction
-    | SetPositionAction | SequenceAction
+    | SetPositionAction | SetValueAction | SequenceAction
 )
 
 
@@ -345,6 +382,33 @@ class ActionsBehavior:
 
 
 @dataclass(frozen=True)
+class ControlPosition:
+    """One position a control surface can be *told* it is in (TODO 77).
+
+    **The Signal light's `states`, in the template that needed the same
+    thing** - "the app is in one of N visible states" - and the difference is
+    where each one gets its colour. A Signal position *carries* one, because a
+    status you invented has nothing else in the system it could mean. A control
+    position **names a look from the pool**, because a control surface already
+    answers "what does this look like" through `MODE_LED_STATES["control"]`,
+    and a second colour control on the same app would be exactly the two
+    answers CLAUDE.md forbids.
+
+    Nothing sets one by pressing. A position arrives as a `SetPositionAction`
+    from a reflex - *the DAW says it is recording* - which is why a surface
+    with positions and no reflex to report them says it is guessing rather than
+    showing the first one as if it were a fact.
+
+    An empty `look` is a position that wears the page's own LISTENING look: the
+    fallback chain is `set_led`'s, unchanged, and "more explicit wins" is why a
+    named look overrides it.
+    """
+
+    name: str
+    look: str = ""  # a name in AppConfig.looks; "" = the page's own look
+
+
+@dataclass(frozen=True)
 class ControlBehavior:
     """A control surface: an app whose gestures fire actions, like the ambient
     layer, but only while it is open.
@@ -370,6 +434,11 @@ class ControlBehavior:
     # On: a surface this one opens returns here when it is left, so long press
     # always travels exactly one level.
     return_after: bool = True
+    # What the world says this surface is showing (TODO 77). Empty is the
+    # ordinary remote: one resting look, and nothing to report. Non-empty makes
+    # `resting()` paint the current position instead, and the page becomes a
+    # readout of something else's state.
+    positions: tuple[ControlPosition, ...] = ()
 
     @property
     def template(self) -> str:
@@ -377,39 +446,64 @@ class ControlBehavior:
 
 
 @dataclass(frozen=True)
-class AlarmBehavior:
-    """The takeover alarm template: rings (ALERT LED + looping tone) until a
-    press dismisses it, or - on long_press with snooze_minutes set - snoozes.
-    Handled by main.py's ring loop, not actions.execute(), since ringing
-    owns the LED/sound/button-event loop.
+class NoticeBehavior:
+    """The takeover notice template (TODO 84): the light goes off at a
+    scheduled time and stays that way until cleared, snoozed, or missed. One
+    machine behind three presets - Alarm, Reminder, and a dead man's switch -
+    which used to be two templates (`AlarmBehavior`, `ReminderBehavior`) plus
+    a preset. Handled by main.py's `ring_notice`, not `actions.execute()`,
+    since it owns the LED/sound/button-event loop while it runs.
 
-    **`grace_minutes` + `on_timeout` make it a dead man's switch**: an alarm
-    that fires an action because it was *not* answered. `run_reminder` next
-    door already has the timeout branch and its docstring says a timeout is
-    not a clear, *because nobody saw it*; this is that branch inverted - nobody
-    saw it, so tell someone. It hangs off the alarm rather than the reminder
-    because the alarm insists (it loops, it snoozes) where a reminder gives up.
+    `timeout_minutes` is persistence: 0 rings/flashes forever (an alarm's
+    classic behaviour) until cleared or snoozed; >0 gives up after that long
+    (a reminder's classic behaviour) - the missed outcome.
+
+    `snooze_minutes` is 0 = no snooze offered; >0 = long_press snoozes for
+    that long instead of clearing, then it rings/flashes again with a fresh
+    `timeout_minutes`. Independent of persistence - a notice that also gives
+    up on its own can still be snoozed in the meantime.
+
+    `urgent` is the one thing the two old templates never shared a name for:
+    True loops the alarm tone and hard-flashes ALERT (an alarm); False plays
+    at most one chime and breathes ALERT gently (a reminder). It is
+    independent of `timeout_minutes` on purpose - an old reminder configured
+    to "wait forever" must keep breathing gently forever, not start looping
+    the alarm tone just because persistence now reads the same as an alarm's.
+    `chime` layers on top: whether it makes any sound at all when it fires -
+    an alarm had no way to be silent, so migrating one always sets `chime`
+    (True).
+
+    **Outcome logging is unconditional**, unlike the old `dismiss_event`/
+    `cleared_event` opt-in fields: cleared logs 1 and missed logs 0, always,
+    under `log_as` - the same convention every other template's own log name
+    already follows (`StopwatchBehavior.log_as` and friends). `on_cleared`,
+    `on_snoozed` and `on_missed` are *additional* actions on top of that log,
+    not a replacement for it - "log is an action" turned out to want the
+    logging to happen regardless of what the user configured, with the three
+    hooks free for whatever else should happen (a webhook, an OSC message).
 
     **It depends on this host being awake, and its whole point is firing while
     nobody is watching.** If the service stops, the machine sleeps, or BLE
     drops, it does not fire and cannot know that it did not. That is why every
-    outcome is logged (see `run_alarm`) and why the editor says plainly that
-    this is not a safety device. A promise the button cannot keep is worse
-    here than in any other app.
+    outcome is logged and why the editor says plainly that this is not a
+    safety device. A promise the button cannot keep is worse here than in any
+    other app.
     """
 
     message: str = ""
     label: str = ""
-    snooze_minutes: float = 0  # 0 = long_press dismisses like any other press
-    dismiss_event: str = ""  # optional `log` event name written on dismiss
-    # The dead man's switch (TODO 44). 0 = today's behaviour exactly: ring
-    # until answered, forever, and nothing else happens.
-    grace_minutes: float = 0
-    on_timeout: Action | None = None
+    log_as: str = "notice"  # always logs 1 (cleared) / 0 (missed) here
+    timeout_minutes: float = 0.0  # 0 = rings/flashes until answered
+    snooze_minutes: float = 0.0  # 0 = no snooze; long_press just clears
+    urgent: bool = True  # True: loop the alarm tone, hard ALERT flash.
+    chime: bool = True  # whether it makes any sound at all when it fires
+    on_cleared: Action | None = None
+    on_snoozed: Action | None = None
+    on_missed: Action | None = None
 
     @property
     def template(self) -> str:
-        return "alarm"
+        return "notice"
 
 
 def _default_rungs() -> tuple[ladder.Rung, ...]:
@@ -487,6 +581,17 @@ class CounterBehavior:
     # the editor and run_counter uses it unguarded, so "" writes rows called
     # "" and sums every unnamed counter into one bucket.
     event: str = "counter"
+    # Off: the number is today's rows, recounted (`count_today`) - a habit
+    # counter, which is what this template has always been and what streaks
+    # are built on. On: the number is this mode's document (TODO 34), which
+    # keeps counting past midnight and can be written from anywhere by
+    # `set_value` - a running total, and a different question.
+    #
+    # **A flag rather than a second template**, and not a silent change of
+    # meaning either: "how many today" and "how many ever" are both things
+    # people want from a counter, and the log is written the same way in both
+    # cases, so history and streaks work whichever is chosen.
+    durable: bool = False
 
     @property
     def template(self) -> str:
@@ -662,39 +767,6 @@ class CountdownBehavior:
     @property
     def template(self) -> str:
         return "countdown"
-
-
-@dataclass(frozen=True)
-class ReminderBehavior:
-    """The scheduled *nudge*: fires on a clock time like an alarm, but flashes
-    instead of ringing and clears on any press.
-
-    Its own template rather than a setting on AlarmBehavior: an alarm is a
-    thing you have to deal with, a reminder is a thing you should notice, and
-    folding them together would mean one dataclass whose fields half apply
-    depending on another field - the shape that produces "why is my snooze
-    doing nothing".
-
-    It owns no new LED state: `ALERT` already means "look at the button", and
-    the reminder's *look* is a named look pushed as an ephemeral effect.
-    """
-
-    message: str = ""
-    label: str = ""
-    # A single chime, not a loop. Off means silent, which is a real choice: the
-    # point of a reminder over an alarm is that it may be ignorable.
-    chime: bool = True
-    # Logged when the reminder is cleared - the row an ambient mode's
-    # `unless_logged_today` then stands down on.
-    cleared_event: str = ""
-    # How long it flashes before giving up on its own. 0 = until pressed.
-    # A reminder nobody was in the room for should not still be flashing at
-    # midnight, which is exactly the way an alarm and a reminder differ.
-    timeout_minutes: float = 5.0
-
-    @property
-    def template(self) -> str:
-        return "reminders"
 
 
 @dataclass(frozen=True)
@@ -949,9 +1021,9 @@ class ReactionBehavior:
 
 
 Behavior = (
-    ActionsBehavior | AlarmBehavior | StopwatchBehavior | CounterBehavior
+    ActionsBehavior | NoticeBehavior | StopwatchBehavior | CounterBehavior
     | PomodoroBehavior | MetronomeBehavior | CountdownBehavior
-    | ReminderBehavior | LauncherBehavior | HotColdBehavior | ReactionBehavior
+    | LauncherBehavior | HotColdBehavior | ReactionBehavior
     | SignalBehavior | ControlBehavior | LightShowBehavior
 )
 
@@ -960,8 +1032,12 @@ Behavior = (
 # not allowed for its template is skipped at parse time with a warning.
 _ALLOWED_ACTIVATIONS = {
     "actions": (AlwaysActivation, WindowActivation),
+    # "alarm" and "reminders" are migrated template names (TODO 84) - both
+    # parse into NoticeBehavior now, so both need the same allow-list entry
+    # `notice` itself uses.
     "alarm": (ScheduleActivation,),
     "reminders": (ScheduleActivation,),
+    "notice": (ScheduleActivation,),
     "stopwatch": (ManualActivation,),
     "counter": (ManualActivation,),
     "pomodoro": (ManualActivation,),
@@ -988,11 +1064,11 @@ _ALLOWED_ACTIVATIONS = {
 # test_webui.py fails if they drift.
 MODE_LED_STATES: dict[str, tuple[str, ...]] = {
     "actions": (),  # ambient: it never takes the light over
+    # "alarm" and "reminders" are migrated template names (TODO 84), both
+    # parsing into NoticeBehavior - same ALERT state as `notice` itself.
     "alarm": (LEDState.ALERT.value,),
-    # Same state as an alarm, deliberately: ALERT means "look at the button",
-    # and what distinguishes a reminder from a ringing one is the look it
-    # wears - so naming one matters more here than anywhere else.
     "reminders": (LEDState.ALERT.value,),
+    "notice": (LEDState.ALERT.value,),
     "stopwatch": (LEDState.TIMING.value,),
     "counter": (LEDState.COUNTING.value,),
     "pomodoro": (LEDState.WORKING.value, LEDState.RESTING.value),
@@ -1013,6 +1089,43 @@ MODE_LED_STATES: dict[str, tuple[str, ...]] = {
     # re-pushes LISTENING after each action's SUCCESS/ERROR flash.
     "control": (LEDState.LISTENING.value,),
 }
+
+@dataclass(frozen=True)
+class DocSlot:
+    """One named value an app of this template may keep (TODO 34).
+
+    **The manifest's precursor.** ARCHITECTURE.md's app package declares its
+    document's slots - names, types, defaults - so the size is fixed at
+    install time; until packages exist, the template declares them and this
+    table is the declaration. When a manifest arrives, this moves into it and
+    nothing else about a document changes.
+
+    The default is what the slot reads as before anything writes it, which is
+    what lets a document be read like a variable with no first-run branch. It
+    also carries the *type*: a bool default is how `DocumentStore.get` knows
+    to hand back a flag rather than the 1 sqlite stored.
+    """
+
+    name: str
+    default: float | str | bool = 0.0
+    about: str = ""  # one line, shown by the editor beside the slot
+
+
+# Which slots each template's document holds. Empty for every app that has
+# nothing durable to keep, which is most of them - a document costs nothing
+# until a slot is declared.
+#
+# Mirrored as `docSlots` on each template descriptor in schema.js;
+# test_documents.py fails if they drift.
+DOC_SLOTS: dict[str, tuple[DocSlot, ...]] = {
+    "counter": (
+        DocSlot(
+            "count", 0.0,
+            "The running total, when this counter keeps counting past midnight.",
+        ),
+    ),
+}
+
 
 # The rest: the button's own vocabulary, which no mode owns. LISTENING is the
 # one dual citizen (see MODE_LED_STATES["control"]) and is kept here as well,
@@ -1050,7 +1163,7 @@ MODE_HOOKS: tuple[str, ...] = ("on_enter", "on_exit")
 # and they must not drift apart.
 FIRE_AND_FORGET_ACTIONS: tuple[type, ...] = (
     LogAction, TimerToggleAction, WebhookAction, OscAction, MidiAction,
-    KeysAction,
+    KeysAction, SetValueAction,
 )
 
 # What a step of a `SequenceAction` may be (TODO 33): the primitives, and
@@ -2272,6 +2385,38 @@ def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | No
         target = raw.get("name")
         if isinstance(target, str) and target.strip():
             return SetPositionAction(name=target.strip())
+    elif kind == "set_value":
+        app = raw.get("app")
+        slot = raw.get("slot")
+        op = raw.get("op", "add")
+        value = raw.get("value", 1)
+        if not (isinstance(app, str) and app.strip()):
+            log.error("config: %s.app must name an app - ignored", where)
+        elif not (isinstance(slot, str) and slot.strip()):
+            log.error("config: %s.slot must name a value to write - ignored", where)
+        elif op not in SET_VALUE_OPS:
+            log.error(
+                "config: %s.op must be one of %s - ignored",
+                where, ", ".join(SET_VALUE_OPS),
+            )
+        elif not isinstance(value, (int, float, str, bool)):
+            # The same three kinds a summary carries, and refused for the same
+            # reason: a document holds scalars, and a dict stored as its repr
+            # is a value that reads back wrong forever.
+            log.error(
+                "config: %s.value must be a number, a word or true/false - "
+                "ignored", where,
+            )
+        elif op == "add" and isinstance(value, (str, bool)):
+            # Caught here rather than at write time: "add the word 'five'" is
+            # a mistake the editor should hear about, and discovering it when
+            # somebody presses the button is too late. Same call the osc
+            # branch makes about a malformed address.
+            log.error("config: %s cannot add %r to anything - ignored", where, value)
+        else:
+            return SetValueAction(
+                app=app.strip(), slot=slot.strip(), op=op, value=value,
+            )
     elif kind == "log":
         event = raw.get("event")
         if isinstance(event, str) and event:
@@ -2506,8 +2651,45 @@ def _parse_actions_body(
     return ActionsBehavior(actions=actions, unless_logged_today=unless_logged_today)
 
 
+def _parse_control_positions(
+    raw, where: str, looks: dict[str, object],
+) -> tuple[ControlPosition, ...]:
+    """A control surface's positions, dropping anything unusable rather than
+    the surface.
+
+    `_parse_show_cues` one template over, with its dangling-reference rule
+    intact: a position naming a look that is not in the pool is **kept and
+    warned about**, because a missing look is far more often a rename than a
+    mistake, and dropping the position would renumber a list somebody is
+    looking at. The run loop falls back to the page's own look and says so.
+    """
+    if not isinstance(raw, list):
+        if raw is not None:
+            log.error("config: %s.positions must be a list - using none", where)
+        return ()
+    positions: list[ControlPosition] = []
+    for index, entry in enumerate(raw):
+        at = f"{where}.positions[{index}]"
+        if not isinstance(entry, dict):
+            log.error("config: %s must be an object - skipped", at)
+            continue
+        name = entry.get("name")
+        if not (isinstance(name, str) and name):
+            log.error("config: %s.name must be a non-empty string - skipped", at)
+            continue
+        look = entry.get("look", "")
+        if not isinstance(look, str):
+            log.error("config: %s.look must be a look name - ignored", at)
+            look = ""
+        if look and look not in looks:
+            log.warning("config: %s names look %r, which does not exist", at, look)
+        positions.append(ControlPosition(name=name, look=look))
+    return tuple(positions)
+
+
 def _parse_control_body(
     raw: dict, where: str, name: str, known: set[str] | None = None,
+    looks: dict[str, object] | None = None,
 ) -> ControlBehavior | None:
     """Parse a control surface: the same gesture map as an actions mode, minus
     the long press.
@@ -2515,6 +2697,10 @@ def _parse_control_body(
     A bound `long_press` is dropped with a warning rather than honoured - it is
     how you leave every takeover, and an app that ate it would strand you
     inside itself with no gesture left to say so.
+
+    `positions` is optional and orthogonal to the map: it changes what the
+    page *shows* between commands, never what a gesture does. That is TODO 78,
+    and keeping the two apart is why the light half could ship alone.
     """
     defaults = ControlBehavior(actions={})
     actions: dict[str, Action] = {}
@@ -2537,39 +2723,84 @@ def _parse_control_body(
         actions=actions,
         log_as=_string(raw, "log_as", where, defaults.log_as),
         return_after=_flag(raw, "return_after", where, defaults.return_after),
+        positions=_parse_control_positions(raw.get("positions"), where, looks or {}),
     )
 
 
-def _parse_alarm_body(
-    raw: dict, where: str, actions: set[str] | None = None
-) -> AlarmBehavior:
-    """Parse the flat alarm-template fields, each falling back per-key."""
-    defaults = AlarmBehavior()
-    grace = _nonneg(raw, "grace_minutes", where, defaults.grace_minutes)
-    on_timeout = (
-        _parse_action(raw["on_timeout"], f"{where}.on_timeout", actions)
-        if raw.get("on_timeout") is not None else None
-    )
-    # Each half is useless without the other, and silence about it would be the
-    # worst kind: a dead man's switch that was never armed looks identical to
-    # one that was. Warn, and leave both as written so the fix is one field.
-    if grace and on_timeout is None:
-        log.warning(
-            "config: %s sets grace_minutes but no on_timeout - nothing will "
-            "happen if this alarm goes unanswered", where,
+def _parse_notice_body(
+    raw: dict, where: str, template: str, name: str, actions: set[str] | None = None,
+) -> NoticeBehavior:
+    """Parse the flat notice-template fields, each falling back per-key.
+
+    Also the migration path for the old `alarm` and `reminders` template
+    names (TODO 84): each branch reads its own legacy field names into the
+    same `NoticeBehavior`, so a config written before the merge loads and
+    behaves unchanged. `urgent` and `chime` are not user-configurable when
+    migrating - an alarm always rendered urgently, a reminder never did, and
+    that must stay a fact about which template a mode used to be, not a
+    default that a `timeout_minutes` value could be misread into.
+    """
+    defaults = NoticeBehavior()
+    message = _string(raw, "message", where, defaults.message)
+    label = _string(raw, "label", where, defaults.label)
+    snooze = _nonneg(raw, "snooze_minutes", where, defaults.snooze_minutes)
+
+    if template == "alarm":
+        timeout = _nonneg(raw, "grace_minutes", where, 0.0)
+        urgent = True
+        chime = True
+        explicit_log = _string(raw, "dismiss_event", where, "")
+        on_missed = (
+            _parse_action(raw["on_timeout"], f"{where}.on_timeout", actions)
+            if raw.get("on_timeout") is not None else None
         )
-    if on_timeout is not None and not grace:
-        log.warning(
-            "config: %s sets on_timeout but grace_minutes is 0 - it will never "
-            "fire, because the alarm rings until answered", where,
+        on_cleared = None
+        on_snoozed = None
+    elif template == "reminders":
+        timeout = _nonneg(raw, "timeout_minutes", where, 5.0)
+        snooze = 0.0  # a reminder never offered one - stray key, ignored as before
+        urgent = False
+        chime = _flag(raw, "chime", where, True)
+        explicit_log = _string(raw, "cleared_event", where, "")
+        on_missed = None
+        on_cleared = None
+        on_snoozed = None
+    else:
+        timeout = _nonneg(raw, "timeout_minutes", where, defaults.timeout_minutes)
+        urgent = _flag(raw, "urgent", where, defaults.urgent)
+        chime = _flag(raw, "chime", where, defaults.chime)
+        explicit_log = _string(raw, "log_as", where, "")
+        on_cleared = (
+            _parse_action(raw["on_cleared"], f"{where}.on_cleared", actions)
+            if raw.get("on_cleared") is not None else None
         )
-    return AlarmBehavior(
-        message=_string(raw, "message", where, defaults.message),
-        label=_string(raw, "label", where, defaults.label),
-        snooze_minutes=_nonneg(raw, "snooze_minutes", where, defaults.snooze_minutes),
-        dismiss_event=_string(raw, "dismiss_event", where, defaults.dismiss_event),
-        grace_minutes=grace,
-        on_timeout=on_timeout,
+        on_snoozed = (
+            _parse_action(raw["on_snoozed"], f"{where}.on_snoozed", actions)
+            if raw.get("on_snoozed") is not None else None
+        )
+        on_missed = (
+            _parse_action(raw["on_missed"], f"{where}.on_missed", actions)
+            if raw.get("on_missed") is not None else None
+        )
+
+    # Outcome logging is unconditional (TODO 84) - no opt-in field to remember.
+    # A config that already named its event (dismiss_event/cleared_event/
+    # log_as) keeps that exact name and its history; one that didn't gets the
+    # mode's own name, which is the closest thing to "log it with the alarm's
+    # name" for a mode nobody configured this on.
+    log_as = explicit_log or name
+
+    if on_missed is not None and not timeout:
+        log.warning(
+            "config: %s sets on_missed but timeout_minutes is 0 - it will "
+            "never fire, because this notice rings/flashes until answered", where,
+        )
+
+    return NoticeBehavior(
+        message=message, label=label, log_as=log_as,
+        timeout_minutes=timeout, snooze_minutes=snooze,
+        urgent=urgent, chime=chime,
+        on_cleared=on_cleared, on_snoozed=on_snoozed, on_missed=on_missed,
     )
 
 
@@ -2634,20 +2865,6 @@ def _parse_rungs(entries: list, where: str):
         yield ladder.Rung(every_s=float(every), color=color)
 
 
-def _parse_reminder_body(raw: dict, where: str) -> ReminderBehavior:
-    """Parse the flat reminder-template fields, each falling back per-key."""
-    defaults = ReminderBehavior()
-    return ReminderBehavior(
-        message=_string(raw, "message", where, defaults.message),
-        label=_string(raw, "label", where, defaults.label),
-        chime=_flag(raw, "chime", where, defaults.chime),
-        cleared_event=_string(raw, "cleared_event", where, defaults.cleared_event),
-        timeout_minutes=_nonneg(
-            raw, "timeout_minutes", where, defaults.timeout_minutes
-        ),
-    )
-
-
 def _parse_launcher_body(raw: dict, where: str) -> LauncherBehavior:
     """Parse the flat launcher fields, each falling back per-key.
 
@@ -2696,9 +2913,12 @@ def _parse_stopwatch_body(raw: dict, where: str) -> StopwatchBehavior:
 
 
 def _parse_counter_body(raw: dict, where: str) -> CounterBehavior:
-    """Parse the flat counter-template field, falling back per-key."""
+    """Parse the flat counter-template fields, falling back per-key."""
     defaults = CounterBehavior()
-    return CounterBehavior(event=_string(raw, "event", where, defaults.event))
+    return CounterBehavior(
+        event=_string(raw, "event", where, defaults.event),
+        durable=_flag(raw, "durable", where, defaults.durable),
+    )
 
 
 def _parse_pomodoro_body(raw: dict, where: str) -> PomodoroBehavior:
@@ -3062,10 +3282,8 @@ def _parse_mode(
 
     if template == "actions":
         behavior = _parse_actions_body(raw, where, name, actions)
-    elif template == "alarm":
-        behavior = _parse_alarm_body(raw, where, actions)
-    elif template == "reminders":
-        behavior = _parse_reminder_body(raw, where)
+    elif template in ("alarm", "reminders", "notice"):
+        behavior = _parse_notice_body(raw, where, template, name, actions)
     elif template == "launcher":
         behavior = _parse_launcher_body(raw, where)
     elif template == "stopwatch":
@@ -3085,7 +3303,7 @@ def _parse_mode(
     elif template == "signal":
         behavior = _parse_signal_body(raw, where, actions)
     elif template == "control":
-        behavior = _parse_control_body(raw, where, name, actions)
+        behavior = _parse_control_body(raw, where, name, actions, looks or {})
     elif template == "lightshow":
         behavior = _parse_lightshow_body(raw, where, looks or {})
     else:  # pragma: no cover - allow-list keys and this dispatch stay in sync
@@ -3257,7 +3475,7 @@ def parse_config(raw: dict) -> AppConfig:
     # load, not at the moment nothing happened.
     modes = _parse_modes(raw, looks, set(action_pool))
 
-    return AppConfig(
+    config = AppConfig(
         ble_device_name=_take(raw, "ble_device_name", str, defaults.ble_device_name),
         sounds_enabled=_take(raw, "sounds_enabled", bool, defaults.sounds_enabled),
         database_path=_take(raw, "database_path", str, defaults.database_path),
@@ -3275,16 +3493,61 @@ def parse_config(raw: dict) -> AppConfig:
         scenes=scenes.parse_settings(raw.get("scenes")),
         min_flash_period_s=_parse_min_flash_period(raw),
     )
+    _warn_about_documents(config)
+    return config
+
+
+def _warn_about_documents(config: AppConfig) -> None:
+    """Complain about a `set_value` that names an app or a slot nobody has.
+
+    **Last, because it needs the finished config**: an app-bound action points
+    at a mode, and which slots that mode has depends on its template, so
+    neither question can be answered while the modes are still being parsed.
+    `iter_actions` is what makes it one short pass rather than a second tour
+    of everything.
+
+    **Warned about and kept**, the dangling-reference rule every other named
+    thing here follows: quietly repointing the binding at some other app would
+    be worse, dropping it loses the number's owner, and a rename is a much
+    more likely explanation than a mistake. The runtime writes the slot
+    anyway - a document is keyed by name and needs no mode to exist - so the
+    value is still there when the app comes back.
+    """
+    by_name = {mode.name: mode for mode in config.modes}
+    for where, action in iter_actions(config):
+        if not isinstance(action, SetValueAction):
+            continue
+        mode = by_name.get(action.app)
+        if mode is None:
+            log.warning(
+                "config: %s writes to app %r, which no mode is named", where,
+                action.app,
+            )
+            continue
+        slots = {slot.name for slot in DOC_SLOTS.get(mode.template, ())}
+        if action.slot not in slots:
+            log.warning(
+                "config: %s writes %r on %r, which keeps %s", where, action.slot,
+                action.app,
+                ", ".join(sorted(slots)) if slots else "no values of its own",
+            )
 
 
 def _parse_min_flash_period(raw: dict) -> float:
     """The effective flash floor, with the recommendation as the default.
 
-    Two different failures, told apart on purpose. A value that is not a
-    positive number is *broken* - there is no reading of it, so it falls back
-    like any other bad key. A value that is merely lower than the recommended
-    floor is a *choice*: it is honoured and warned about, because the whole
-    reason this is a setting is that someone may mean it.
+    A value that is not a positive number is *broken* - there is no reading of
+    it, so it falls back like any other bad key.
+
+    **A value merely lower than the recommendation is a choice, and it is not
+    warned about here** (TODO 108). It was, on every load, and that was the
+    mistake: this is a setting precisely because someone may mean it, and a
+    parser that re-states the hazard every time the service starts is not
+    informing anyone by the second time. It is the mirror of the error the
+    flash-floor invariant already names - clamping silently makes a setting a
+    lie, and scolding forever makes it a nag. The hazard is stated where the
+    number is chosen (schema.js's hint, and the first-run question when that
+    exists), which is the only place it can still change a mind.
     """
     value = _take(raw, "min_flash_period_s", float, SAFE_MIN_PERIOD_S)
     if value <= 0:
@@ -3293,13 +3556,6 @@ def _parse_min_flash_period(raw: dict) -> float:
             "using %.3f", value, SAFE_MIN_PERIOD_S,
         )
         return SAFE_MIN_PERIOD_S
-    if value < SAFE_MIN_PERIOD_S:
-        log.warning(
-            "config: min_flash_period_s %.3fs allows flashing at %.1f Hz, above "
-            "the recommended %.1f Hz photosensitivity limit - honoured, but it "
-            "is a seizure risk for some people",
-            value, 1 / value, 1 / SAFE_MIN_PERIOD_S,
-        )
     return value
 
 
@@ -3442,12 +3698,176 @@ def resolve_action(config: AppConfig, action: Action | None) -> Action | None:
     return action
 
 
+# Every action class, read off the `Action` union rather than listed again.
+# A fourth allow-list beside FIRE_AND_FORGET/HOOK/REFLEX_ACTIONS would be a
+# fourth thing to forget when a primitive is added, and this one has no
+# opinion about *which* actions are allowed anywhere - it only needs to
+# recognise one when it walks past it.
+_ACTION_CLASSES: tuple[type, ...] = get_args(Action)
+
+
+def iter_actions(config: AppConfig):
+    """Every action in the config, as `(where, action)` pairs.
+
+    One walk, because "which actions do X?" keeps being a question and each
+    asker was otherwise going to write its own tour of modes, hooks, signal
+    positions, reflexes and the pool - and miss one. `where` is prose for a
+    human reading a log, not a path anything should parse.
+
+    Two rules worth knowing:
+
+    - **A `NamedAction` is yielded as itself and not followed.** The pool
+      entry it names is yielded once, under `actions[...]`, so a shared action
+      is reported where it is *defined* rather than once per binding - which
+      is also where you would go to fix it.
+    - **A sequence yields its steps as well as itself**, flattened, because a
+      step is a real action that really runs. No recursion is needed for that
+      and none is possible: sequences do not nest, by parser and by
+      `resolve_action` both.
+
+    Behaviour fields are found by *shape* rather than by a list of templates,
+    the same move `bound_triggers` makes: an action-valued field, a dict of
+    them (a gesture map), or a tuple of objects carrying one (a signal
+    light's positions). A template written tomorrow is walked for free.
+    """
+    def unpack(where: str, action):
+        if action is None:
+            return
+        yield where, action
+        if isinstance(action, SequenceAction):
+            for number, step in enumerate(action.steps, start=1):
+                if step.action is not None:
+                    yield f"{where} step {number}", step.action
+
+    for name, action in config.actions.items():
+        yield from unpack(f"actions[{name!r}]", action)
+    for reflex in config.reflexes:
+        yield from unpack(f"reflex {reflex.name!r}", reflex.then)
+    for mode in config.modes:
+        for hook in MODE_HOOKS:
+            yield from unpack(f"mode {mode.name!r}.{hook}", getattr(mode, hook))
+        for field_ in fields(mode.behavior):
+            value = getattr(mode.behavior, field_.name)
+            if isinstance(value, _ACTION_CLASSES):
+                yield from unpack(f"mode {mode.name!r}.{field_.name}", value)
+            elif isinstance(value, dict):
+                for key, item in value.items():
+                    if isinstance(item, _ACTION_CLASSES):
+                        yield from unpack(f"mode {mode.name!r}.{key}", item)
+            elif isinstance(value, tuple):
+                for index, item in enumerate(value):
+                    inner = getattr(item, "action", None)
+                    if isinstance(inner, _ACTION_CLASSES):
+                        yield from unpack(
+                            f"mode {mode.name!r}.{field_.name}[{index}]", inner
+                        )
+
+
+def blank_midi_ports(config: AppConfig, outputs) -> tuple[str, ...]:
+    """Where a `midi` action names no port while this machine offers a choice.
+
+    **The failure this exists to name cost an evening** (see TODO's "Smaller,
+    worth doing"): an empty port means *the first output on the machine*, which
+    on Windows is the built-in synth. The DAW hears nothing, the synth hears
+    everything, and nothing reports an error because nothing has failed. The
+    editor's half of the fix shipped the same day - the field is basic-tier and
+    its hint says what blank does - and this is the half that reaches a file
+    somebody edited by hand.
+
+    **Silent when there is only one output**, because then blank is not
+    ambiguous: it is the only thing it could mean, and warning about it would
+    be noise on exactly the machine the default was written for. Pure, and the
+    port list is passed in - enumerating MIDI hardware is I/O, and the parsing
+    half of this module does not do I/O.
+    """
+    if len(outputs) < 2:
+        return ()
+    return tuple(
+        where
+        for where, action in iter_actions(config)
+        if isinstance(action, MidiAction) and not action.port.strip()
+    )
+
+
+def position_reporters(config: AppConfig, mode_name: str) -> tuple[str, ...]:
+    """Every reflex that can put the app called `mode_name` on a position.
+
+    The question behind TODO 77's "says it is guessing": a control surface's
+    positions are only ever set by the world, so a surface with positions and
+    nothing able to report them is showing the first one as if it were a fact.
+    Answering that is a walk over data - reflexes scoped to this app whose
+    action resolves to a `SetPositionAction` - so it lives here with
+    `resolve_action` rather than in the run loop, which cannot be asked a
+    question without being started.
+
+    Names rather than a bare bool: a caller that has to explain *why* a page
+    is guessing needs to be able to say which reflexes it looked for, and
+    truthiness is the only thing the run loop asks of it.
+    """
+    return tuple(
+        reflex.name
+        for reflex in config.reflexes
+        if reflex.while_app == mode_name
+        and isinstance(resolve_action(config, reflex.then), SetPositionAction)
+    )
+
+
+@dataclass(frozen=True)
+class ParseWarning:
+    """One complaint from the parser, with where it came from (TODO 62).
+
+    The editor prints these into a banner that the next Save overwrites, and
+    the reason it cannot do better is that a warning was a plain sentence: it
+    knows which key it is about and the string threw that away. This carries
+    it - `mode` is the index into `modes`, `key` the field on that mode - so a
+    dangling look or a bad ladder rung can mark the field it belongs to.
+
+    **Both may be None, and that is a normal answer, not a failure.** A
+    complaint about a top-level key belongs to no mode; one about the shape of
+    the file belongs to no field. The message alone is what has always been
+    shown, and it is still the thing that must always be right.
+    """
+
+    message: str
+    mode: int | None = None  # index into config["modes"], as written
+    key: str | None = None   # the field on that mode, e.g. "short_press"
+
+
+# What the parser's `where` strings look like, and the only thing read out of
+# them: `modes[3].short_press`, `modes[3].states[0].action`, `modes[3]`.
+#
+# **Derived from the log record's first argument, never from the rendered
+# message.** Every one of these calls passes `where` first and the rest after
+# it, so `record.args[0]` is the location with no formatting in the way -
+# which makes this a lookup rather than the fragile business of parsing back a
+# sentence we just built. A record whose first argument is not a location
+# simply has none, and renders exactly as it always did.
+_WHERE_RE = re.compile(r"^modes\[(\d+)\](?:\.([A-Za-z_][\w]*))?")
+
+
+def _locate(record: logging.LogRecord) -> tuple[int | None, str | None]:
+    """Which mode and which field `record` is complaining about, if any."""
+    args = record.args
+    first = args[0] if isinstance(args, tuple) and args else None
+    if not isinstance(first, str):
+        return None, None
+    found = _WHERE_RE.match(first)
+    if found is None:
+        return None, None
+    return int(found.group(1)), found.group(2)
+
+
 @contextlib.contextmanager
-def _collecting(warnings: list[str]):
+def _collecting(warnings: list, structured: bool = False):
     """Route the parser's per-key fallback complaints into `warnings`.
 
     Both loggers are captured: a scene's own keys are validated in scenes.py,
     and a warning the editor never sees is a warning nobody acts on.
+
+    `structured` decides the shape: plain strings (what every caller has had),
+    or `ParseWarning`s carrying where they came from (TODO 62). One collector
+    rather than two, because a second one is a second thing to keep in step
+    with which loggers matter.
     """
 
     class _Collector(logging.Handler):
@@ -3455,7 +3875,11 @@ def _collecting(warnings: list[str]):
             super().__init__(level=logging.WARNING)
 
         def emit(self, record: logging.LogRecord) -> None:
-            warnings.append(record.getMessage())
+            if not structured:
+                warnings.append(record.getMessage())
+                return
+            mode, key = _locate(record)
+            warnings.append(ParseWarning(record.getMessage(), mode, key))
 
     collector = _Collector()
     loggers = [log, logging.getLogger(scenes.__name__)]
@@ -3466,6 +3890,20 @@ def _collecting(warnings: list[str]):
     finally:
         for logger in loggers:
             logger.removeHandler(collector)
+
+
+def parse_with_details(raw: dict) -> tuple[AppConfig, list[ParseWarning]]:
+    """`parse_with_warnings`, with each complaint's origin attached (TODO 62).
+
+    A second function rather than a wider return from the one below, because
+    six callers depend on that one answering with strings and a warning that
+    stopped being printable would be a regression in the thing that has always
+    worked. The API returns both: the sentences, and these beside them.
+    """
+    warnings: list[ParseWarning] = []
+    with _collecting(warnings, structured=True):
+        cfg = parse_config(raw)
+    return cfg, warnings
 
 
 def parse_with_warnings(raw: dict) -> tuple[AppConfig, list[str]]:
@@ -3494,6 +3932,22 @@ def parse_effect_with_warnings(raw, where: str = "effect") -> tuple[LedEffect, l
     with _collecting(warnings):
         effect = _parse_effect(raw, where, LedEffect())
     return effect, warnings
+
+
+def parse_action_with_warnings(
+    raw, where: str = "action", known: set[str] | None = None
+) -> tuple[Action | None, list[str]]:
+    """One action, through the config parser's own rules.
+
+    `parse_look_with_warnings` for the other half of the editor, and it exists
+    for exactly the same reason: a webhook preview (TODO 65) has to be built
+    from an action the parser would *accept*, or it stops predicting the thing
+    it is previewing. None means nothing usable, and the warnings say why.
+    """
+    warnings: list[str] = []
+    with _collecting(warnings):
+        action = _parse_action(raw, where, known)
+    return action, warnings
 
 
 def parse_look_with_warnings(
@@ -3600,6 +4054,11 @@ def _action_to_dict(action: Action) -> dict | str:
         }
     if isinstance(action, TimerToggleAction):
         return {"action": "timer_toggle", "log_as": action.log_as}
+    if isinstance(action, SetValueAction):
+        return {
+            "action": "set_value", "app": action.app, "slot": action.slot,
+            "op": action.op, "value": action.value,
+        }
     if isinstance(action, WebhookAction):
         return {"action": "webhook", "url": action.url, "payload": action.payload}
     if isinstance(action, OscAction):
@@ -3744,20 +4203,23 @@ def _mode_to_dict(mode: Mode) -> dict:
             entry["unless_logged_today"] = mode.behavior.unless_logged_today
         for trigger, action in mode.behavior.actions.items():
             entry[trigger] = _action_to_dict(action)
-    elif isinstance(mode.behavior, AlarmBehavior):
+    elif isinstance(mode.behavior, NoticeBehavior):
+        # Always the new field names on the way out, whichever legacy
+        # template name it was parsed from (TODO 84) - the same one-way
+        # migration Pomodoro's seconds-only round-trip already documents.
         entry["message"] = mode.behavior.message
         entry["label"] = mode.behavior.label
-        entry["snooze_minutes"] = mode.behavior.snooze_minutes
-        entry["dismiss_event"] = mode.behavior.dismiss_event
-        entry["grace_minutes"] = mode.behavior.grace_minutes
-        if mode.behavior.on_timeout is not None:
-            entry["on_timeout"] = _action_to_dict(mode.behavior.on_timeout)
-    elif isinstance(mode.behavior, ReminderBehavior):
-        entry["message"] = mode.behavior.message
-        entry["label"] = mode.behavior.label
-        entry["chime"] = mode.behavior.chime
-        entry["cleared_event"] = mode.behavior.cleared_event
+        entry["log_as"] = mode.behavior.log_as
         entry["timeout_minutes"] = mode.behavior.timeout_minutes
+        entry["snooze_minutes"] = mode.behavior.snooze_minutes
+        entry["urgent"] = mode.behavior.urgent
+        entry["chime"] = mode.behavior.chime
+        if mode.behavior.on_cleared is not None:
+            entry["on_cleared"] = _action_to_dict(mode.behavior.on_cleared)
+        if mode.behavior.on_snoozed is not None:
+            entry["on_snoozed"] = _action_to_dict(mode.behavior.on_snoozed)
+        if mode.behavior.on_missed is not None:
+            entry["on_missed"] = _action_to_dict(mode.behavior.on_missed)
     elif isinstance(mode.behavior, LauncherBehavior):
         entry["targets"] = list(mode.behavior.targets)
         entry["return_after"] = mode.behavior.return_after
@@ -3767,6 +4229,7 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["ladder"] = _ladder_to_dict(mode.behavior.ladder)
     elif isinstance(mode.behavior, CounterBehavior):
         entry["event"] = mode.behavior.event
+        entry["durable"] = mode.behavior.durable
     elif isinstance(mode.behavior, PomodoroBehavior):
         # Seconds only. A config that came in with the legacy `*_minutes`
         # names is rewritten the first time it is saved, which is the whole
@@ -3832,6 +4295,14 @@ def _mode_to_dict(mode: Mode) -> dict:
             entry[trigger] = _action_to_dict(action)
         entry["log_as"] = mode.behavior.log_as
         entry["return_after"] = mode.behavior.return_after
+        # Omitted when empty, for the reason a Pomodoro's ramp is: every
+        # control surface written before TODO 77 round-trips byte for byte,
+        # and "no positions" is the ordinary remote rather than a setting.
+        if mode.behavior.positions:
+            entry["positions"] = [
+                {"name": p.name, **({"look": p.look} if p.look else {})}
+                for p in mode.behavior.positions
+            ]
     elif isinstance(mode.behavior, SignalBehavior):
         entry["states"] = [
             {

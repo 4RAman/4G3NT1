@@ -44,6 +44,7 @@ from .config import (
     MidiAction,
     OscAction,
     SequenceAction,
+    SetValueAction,
     TimerToggleAction,
     WebhookAction,
 )
@@ -77,6 +78,52 @@ _ORDINAL_SUFFIXES = {1: "st", 2: "nd", 3: "rd"}
 def _ordinal(n: int) -> str:
     suffix = "th" if 11 <= n % 100 <= 13 else _ORDINAL_SUFFIXES.get(n % 10, "th")
     return f"{n}{suffix}"
+
+
+def webhook_payload(
+    action: WebhookAction,
+    trigger: str,
+    mode_name: str | None,
+    session: Mapping[str, object] | None = None,
+    ts: str | None = None,
+) -> dict:
+    """Exactly the JSON body `execute` would POST for `action`.
+
+    **Pulled out of `execute` so it can be shown without being sent** (TODO
+    65). Every colour picker can push a look at the button and say what came
+    back; a webhook had no equivalent, and the one part of it nobody can
+    predict - which keys an app's session summary adds, and who wins when they
+    collide - was visible only to whoever was running a receiver.
+
+    One function, two callers, no second copy of the merge order: identity
+    (`trigger`, `mode`, `ts`) beats an app's summary, and the user's own
+    payload beats both. `summary.merge` owns the first half of that rule and
+    says why; the `**action.payload` last owns the second.
+
+    `ts` is injectable for the same reason a clock always is here - a preview
+    that moved every time it was rendered would be unreadable, and a test
+    asserting on "now" cannot be written at all.
+    """
+    return {
+        **summary.merge(
+            {
+                "trigger": trigger,
+                "mode": mode_name,
+                "ts": ts or datetime.now(timezone.utc).isoformat(),
+            },
+            session or {},
+        ),
+        **action.payload,  # user payload wins on key collisions
+    }
+
+
+def _fmt_value(value) -> str:
+    """A document value as a person would write it: 3 rather than 3.0, and a
+    word or a flag straight through. Cosmetic, and only ever for the status
+    line - the stored value is untouched."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 
 def _press_keys(action: KeysAction) -> ActionResult:
@@ -130,6 +177,7 @@ async def execute(
     trigger: str,
     mode_name: str,
     store,
+    documents=None,
     webhook_transport: httpx.AsyncBaseTransport | None = None,
     session: Mapping[str, object] | None = None,
 ) -> ActionResult:
@@ -157,6 +205,26 @@ async def execute(
         if details:
             message += f" ({', '.join(details)})"
         return ActionResult(True, message)
+
+    if isinstance(action, SetValueAction):
+        # App-bound, and the one primitive that writes something other than
+        # the log (TODO 34). No document store means nothing embedding this
+        # opened one - said plainly rather than silently doing nothing, which
+        # is the failure a counter would take weeks to notice.
+        if documents is None:
+            return ActionResult(False, "nothing here keeps app values")
+        if action.op == "set":
+            written = documents.set(action.app, action.slot, action.value)
+            shape = f"{action.app}.{action.slot} = {_fmt_value(written)}"
+        else:
+            written = documents.add(action.app, action.slot, float(action.value))
+            shape = f"{action.app}.{action.slot} -> {_fmt_value(written)}"
+        if written is None:
+            # The store said no and logged why (a wrong type, a full
+            # document). Reporting the refusal is what stops a gesture that
+            # does nothing from looking like a gesture that worked.
+            return ActionResult(False, f"could not write {action.app}.{action.slot}")
+        return ActionResult(True, shape)
 
     if isinstance(action, TimerToggleAction):
         state, elapsed = store.toggle_timer(action.log_as, mode=mode_name)
@@ -213,7 +281,8 @@ async def execute(
             # this recursion is one deep by construction, not by luck.
             result = await execute(
                 step.action, trigger=trigger, mode_name=mode_name, store=store,
-                webhook_transport=webhook_transport, session=session,
+                documents=documents, webhook_transport=webhook_transport,
+                session=session,
             )
             if not result.ok and failure is None:
                 failure = f"step {index}: {result.message}"
@@ -227,20 +296,7 @@ async def execute(
         return _press_keys(action)
 
     if isinstance(action, WebhookAction):
-        payload = {
-            # The session's numbers merge in flat, between the identity of the
-            # event and the user's own payload: summary.merge says why the
-            # first three win over an app and the last one wins over everything.
-            **summary.merge(
-                {
-                    "trigger": trigger,
-                    "mode": mode_name,
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                },
-                session or {},
-            ),
-            **action.payload,  # user payload wins on key collisions
-        }
+        payload = webhook_payload(action, trigger, mode_name, session)
         try:
             async with httpx.AsyncClient(
                 timeout=WEBHOOK_TIMEOUT_S, transport=webhook_transport

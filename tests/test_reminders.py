@@ -6,6 +6,12 @@ and a unit test of the dataclass would assert nothing anyone cares about.
 
 The clock is pushed to the scheduled minute rather than waiting for it, which
 is what `Clock` exists for.
+
+TODO 84 merged this template into `NoticeBehavior` (`urgent=False`), alongside
+the old alarm template (`urgent=True`) - "reminders" still parses exactly as
+before, so every behavioural assertion below still holds unchanged. Only the
+dataclass name and the bare-default comparisons (a reminder's own defaults,
+not `NoticeBehavior()`'s) needed updating.
 """
 
 import asyncio
@@ -15,7 +21,7 @@ from datetime import datetime
 import pytest
 
 import aibutton.main as main
-from aibutton.config import ReminderBehavior, as_dict, parse_config, parse_with_warnings
+from aibutton.config import NoticeBehavior, as_dict, parse_config, parse_with_warnings
 from aibutton.device import LEDState, MockDevice, TriggerType
 from aibutton.scheduler import due_alarm
 from aibutton.store import EventStore
@@ -211,11 +217,15 @@ def test_every_field_falls_back_on_its_own():
         "cleared_event": "stretched",
     }]})
     behavior = cfg.modes[0].behavior
-    assert isinstance(behavior, ReminderBehavior)
-    assert behavior.message == ReminderBehavior().message
-    assert behavior.chime == ReminderBehavior().chime
-    assert behavior.timeout_minutes == ReminderBehavior().timeout_minutes
-    assert behavior.cleared_event == "stretched"  # the good key survives
+    assert isinstance(behavior, NoticeBehavior)
+    assert behavior.message == ""
+    assert behavior.chime is True
+    # A reminder's own default (5 minutes), not NoticeBehavior()'s bare
+    # default (0, "waits forever") - the two templates disagree here on
+    # purpose, which is exactly what the per-template branch in
+    # `_parse_notice_body` exists to preserve.
+    assert behavior.timeout_minutes == 5.0
+    assert behavior.log_as == "stretched"  # the good key survives, under the new name
 
 
 def test_it_round_trips_through_the_editor():
@@ -247,14 +257,18 @@ def test_a_reminder_may_name_a_look_for_the_state_it_owns():
     assert not warnings
 
 
-def test_the_alarm_template_is_untouched():
-    """Item 11's first instruction: keep the real alarm clock exactly as it
-    was. A reminder is an addition, not a refactor of the alarm."""
+def test_the_alarm_template_still_behaves_like_an_alarm():
+    """Item 11's original instruction was to keep the real alarm clock exactly
+    as it was while adding reminders beside it; TODO 84 later merged the two
+    into one `NoticeBehavior`, so what has to survive now is alarm's own
+    *behaviour* (urgent rendering, snooze) rather than its own class name."""
     cfg = parse_config({"modes": [{
         "name": "Wake", "template": "alarm",
         "activation": {"type": "schedule", "at": "05:00"},
         "snooze_minutes": 9, "dismiss_event": "woke",
     }]})
     behavior = cfg.modes[0].behavior
-    assert behavior.template == "alarm"
+    assert behavior.template == "notice"  # migrated - the canonical name out
     assert behavior.snooze_minutes == 9
+    assert behavior.urgent is True  # an alarm always rings, never breathes
+    assert behavior.log_as == "woke"

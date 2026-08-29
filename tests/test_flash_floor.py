@@ -146,13 +146,20 @@ def test_the_default_is_the_recommended_limit():
     assert SAFE_MIN_PERIOD_S == pytest.approx(1 / 3), "3 flashes/second, per WCAG 2.3.1"
 
 
-def test_going_faster_than_the_recommendation_is_honoured_and_warned_about():
-    """The whole reason this is a setting: someone may mean it. Silently
-    clamping would make the setting a lie; silently accepting would make the
-    hazard invisible."""
+def test_going_faster_than_the_recommendation_is_honoured_in_silence():
+    """The whole reason this is a setting: someone may mean it, and silently
+    clamping would make the setting a lie.
+
+    It used to warn on every load as well, and that was removed (TODO 108).
+    A parser that re-states the hazard every time the service starts is not
+    informing anyone by the second time; the hazard belongs where the number
+    is chosen, which is the editor. This test pins the *silence*, because the
+    warning coming back would be a regression nobody would otherwise notice
+    until it had been in a log for a week.
+    """
     cfg, warnings = parse_with_warnings({"min_flash_period_s": 0.1})
     assert cfg.min_flash_period_s == pytest.approx(0.1)
-    assert any("photosensitivity" in w for w in warnings)
+    assert not [w for w in warnings if "photosensitivity" in w]
 
 
 def test_a_meaningless_floor_falls_back_like_any_other_bad_key():

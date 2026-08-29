@@ -238,8 +238,39 @@ class ButtonPeripheral:
         pull = Pin.PULL_UP if hardware.BUTTON_PULL_UP else None
         pin = Pin(hardware.BUTTON_PIN, Pin.IN, pull)
 
+        # The board's own BOOT button, in parallel with the wired one: either
+        # is a press, and nothing downstream can tell which. **Always on**, so
+        # a board whose switch is unsoldered or broken is still pressable -
+        # which is the whole reason it exists (TODO 89).
+        #
+        # Read through getattr with defaults, the same way led.py reads its
+        # optional pins: hardware.py is the one file people edit and copy
+        # forward, and an older one missing these names must not turn into an
+        # AttributeError at startup, which on a headless board is a dead board.
+        # Skipped when it *is* the wired pin, so a board using GPIO0 for its
+        # only button does not poll one pin twice.
+        boot_num = getattr(hardware, "BOOT_BUTTON_PIN", None)
+        boot_low = getattr(hardware, "BOOT_BUTTON_ACTIVE_LOW", True)
+        boot = None
+        if boot_num is not None and boot_num != hardware.BUTTON_PIN:
+            boot = Pin(boot_num, Pin.IN, Pin.PULL_UP)
+        print("button inputs: GPIO%d%s" % (
+            hardware.BUTTON_PIN,
+            "" if boot is None else " + GPIO%d (BOOT)" % boot_num,
+        ))
+
+        def _low(p, active_low):
+            return (p.value() == 0) if active_low else bool(p.value())
+
         def is_pressed():
-            return (pin.value() == 0) if hardware.BUTTON_ACTIVE_LOW else bool(pin.value())
+            # Either input, ORed *before* the debounce below rather than after:
+            # what is being debounced is "is the button down", and the button
+            # is the pair. Letting go of one and taking hold of the other
+            # inside the debounce window reads as one continuous hold, which
+            # is what a person doing it would mean.
+            if _low(pin, hardware.BUTTON_ACTIVE_LOW):
+                return True
+            return boot is not None and _low(boot, boot_low)
 
         stable = is_pressed()
         candidate = stable

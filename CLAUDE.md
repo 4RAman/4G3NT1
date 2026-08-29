@@ -6,19 +6,38 @@ Read [README.md](README.md) for what it does,
 [ROADMAP.md](ROADMAP.md) for where it is going, and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the design it is going *to* — the last
 two matter more than usual here, because several cheap decisions today are
-expensive ones after hardware ships.
+expensive ones after hardware ships. This file holds the rules that apply
+regardless of what you're touching; [INVARIANTS.md](INVARIANTS.md) holds the
+rest, filed by subsystem (colour & light, actions/reflexes, the nav shell,
+config warnings & fields, readout & events, small gotchas, hardware) — read
+its section for whatever you're about to touch, before you touch it.
 
 ## Commands
 
 ```bash
-.venv/Scripts/python -m pytest -q                       # the whole suite, no hardware needed
-.venv/Scripts/python -m aibutton.main --config config.json          # MockDevice + web UI
-.venv/Scripts/python -m aibutton.main --ble --config config.json    # the real button
-.venv/Scripts/python -m aibutton.control               # the tray control panel
-.venv/Scripts/python -m mpremote cp firmware/*.py : + reset         # flash the firmware
-.venv/Scripts/python tools/ble_probe.py --cycle        # drive the firmware by hand
-.venv/Scripts/python -m aibutton.scenes list|check|activate         # scenes, service stopped
-.venv/Scripts/python tools/build_editor.py             # dist/button-editor.html (offline)
+./.venv/Scripts/python -m pytest -q                       # the whole suite, no hardware needed
+./.venv/Scripts/python -m aibutton.main --config config.json          # MockDevice + web UI
+./.venv/Scripts/python -m aibutton.main --ble --config config.json    # the real button
+./.venv/Scripts/python -m aibutton.control               # the tray control panel
+./.venv/Scripts/python -m mpremote cp firmware/*.py : + reset         # flash (bash)
+./.venv/Scripts/python tools/ble_probe.py --cycle        # drive the firmware by hand
+./.venv/Scripts/python -m aibutton.scenes list|check|activate         # scenes, service stopped
+./.venv/Scripts/python tools/build_editor.py             # dist/button-editor.html (offline)
+```
+
+**The leading `./` is not decoration.** This machine's shell is PowerShell,
+where a command beginning `.venv\...` is not a path at all - it is looked up
+as a command name and fails with "not recognized". `./.venv/Scripts/python`
+is the one spelling both PowerShell and bash accept, so it is the one written
+everywhere here.
+
+**The flash line is the exception, and only because of the glob.** PowerShell
+does not expand `firmware/*.py` for a native executable and mpremote does not
+expand it either, so the literal string reaches the board and nothing copies.
+In PowerShell, let the shell do it:
+
+```powershell
+./.venv/Scripts/python -m mpremote cp (Get-ChildItem firmware/*.py) : + reset
 ```
 
 ## Do not run the tests without being asked
@@ -46,8 +65,10 @@ So:
   command instead.
 - **One explicit "run the tests" authorises one run**, not a run per phase of
   the work.
-- Prefer things that cost nothing: `node --check` on a JavaScript file,
-  `python -c` on one function, reading the code.
+- Prefer things that cost nothing: `python -c` on one function, reading the
+  code, and — for a browser module — a **copy to `.mjs`** before
+  `node --check`. Not `node --check` on the `.js` itself; see below for why
+  that one lies.
 - If you genuinely cannot tell whether something works without executing it,
   **say so and ask** — do not decide on the owner's behalf.
 
@@ -206,6 +227,12 @@ in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
 
 ## Invariants
 
+Cross-cutting rules — the ones any change, regardless of subsystem, tends to
+run into. Topic-specific invariants (colour & light, actions/reflexes,
+the nav shell, config warnings & fields, readout & events, small gotchas,
+hardware) live in [INVARIANTS.md](INVARIANTS.md) — read the section for
+whatever you're touching before you touch it.
+
 - **Mirrored tables are tested, not trusted.** The protocol lives twice
   ([protocol.py](firmware/protocol.py) / [device.py](aibutton/device.py)) and
   so do the tone tables and the LED styles, because one side ships to a
@@ -241,19 +268,8 @@ in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
   app's exit to land before the next app's entry. A spawned hook is **held in
   a set**: asyncio keeps only a weak reference, so a task nobody holds can be
   collected mid-flight and simply not happen — the same trap as the ctypes
-  callback below, a different library.
-- **An app's result is data, and the contract is enforced rather than asked
-  for.** A takeover reports a flat dict of scalars on exit
-  ([summary.py](aibutton/summary.py)) and the `on_exit` hook carries it out -
-  merged flat into a webhook's payload, appended to an OSC message's arguments.
-  `summary.clean` is the single gate (flat, scalars, `MAX_KEYS`), for the
-  reason `flash_safe` is one: a rule each app is trusted to remember is a rule
-  that drifts. A key that breaks it is dropped with a warning and the hook
-  still fires. **An app reports the same keys on every exit, or none at all** -
-  one carrier is positional, so a key that appears only sometimes renumbers
-  every argument after it; report a zero, plus the count that says whether the
-  zero means anything. Nothing to report costs nothing: no key, no empty
-  object, no branch.
+  callback in [INVARIANTS.md](INVARIANTS.md)'s "Small gotchas", a different
+  library.
 - **The host owns state; the device renders it.** The firmware's palette and
   animations are a *fallback* for running with no host attached. Anything
   persistent belongs in `config.json`.
@@ -300,132 +316,6 @@ in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
   the device. What is left after the correction is tens of milliseconds of
   radio and scheduling, and that is the real precision floor: ±150 ms games
   are honest, tight rhythm judgement is Stage 3.
-- **One colour control, used everywhere colour is chosen.**
-  [colorEngine.js](aibutton/web/static/colorEngine.js) is the only thing that
-  edits a `LedEffect`: the Lights tab's system states, the named-look pool and
-  a mode's own look all mount the same component, and it returns the widget
-  contract (`{el, validate}`) so it drops into a form beside any field. It
-  absorbed the test bench rather than replacing it — pushing a look at the
-  hardware is a *capability of every picker* now, and the Diagnostic row is the
-  wiring test README's gotchas depend on. **Live preview is optional by
-  construction** (`api.showLook` may be absent): the offline editor has no
-  device, so a colour control that required one would be the wrong seam. New
-  places that need a colour mount the engine; they do not grow their own.
-- **One control answers "what does this look like", never two.** A state that
-  can wear a named look offers it as the last option in its **Style dropdown**
-  (`o.namedLook`, `__look__`), and the pool picker appears only once it is
-  chosen. It was a second select of its own, and the cost was not tidiness:
-  the row went on summarising, swatching and previewing the *palette entry*
-  while the button wore the look, so a feature that worked read as broken.
-  Whatever the control decides is what its head describes and what "Show on
-  the button" pushes — `shownLook()` is the one answer, used three times.
-  *A new way to colour something appears inside that dropdown or explains
-  why not.*
-- **A look is asserted; a palette entry is stored.** The device holds the
-  palette and re-renders it unasked, so pushing an edited palette is enough.
-  Nothing on the device holds a *look*, so an edited look has to be
-  re-asserted or the light keeps showing the old one until the next press —
-  which is indistinguishable from the edit not working, and was reported as
-  exactly that. `main`'s tick re-asserts **IDLE** when its resolved look
-  changes, alongside the palette push. IDLE alone, because it is the only
-  state the ambient layer rests in; every other state is repainted by the next
-  press anyway.
-- **The Lights tab is the button's vocabulary; a mode's colour lives on the
-  mode.** IDLE/LISTENING/THINKING/SUCCESS/ERROR are edited once, globally.
-  LISTENING is the one dual citizen (TODO 26): the ambient layer wears it
-  with no mode involved, so its global default stays on the Lights tab —
-  *and* a control page may name a look for it, overriding the global colour
-  only while that page is open. Two scopes, one state; every other state
-  belongs to exactly one side.
-  Everything a mode owns (ALERT/TIMING/COUNTING/WORKING/RESTING/METRONOME) is
-  edited on that mode's page, because a mode you configure in two tabs is not
-  modular. Their palette entries **stay in config** as the invisible fallback a
-  mode with no named look renders (`base_look` reads them) — only the editor
-  group went away. Deleting the entries would leave such a mode with nothing.
-  The mode list shows each mode's **first owned state** as a live swatch
-  (`_modeLook`, mirroring `main.app_look`): a mode is a thing you recognise by
-  its light, and a template that owns no state gets an empty ring rather than
-  an invented colour.
-- **The named-look pool is a list; one entry is open at a time.** Every entry
-  used to be an expanded editor, which made six looks six editors and "which
-  one is Ember?" a scrolling problem. A look is identified by its light and
-  its name, so those are the line — with where it is worn, because *editing a
-  shared look changes it everywhere* and that has to be visible before the
-  edit, not after it.
-- **A stop list is the rich form; a palette entry is the fallback form.**
-  A `sequencer.Sequence` shapes each fade (`Stop.curve`), which makes it able
-  to express nearly every look in the system — *except* the one thing that
-  matters most: a palette entry ships to the device and renders with **no host
-  attached**, and a sequence is a schedule only the host can walk. So a
-  sequence never goes in `led_palette`. The system states name one instead
-  (`AppConfig.state_looks`), and resolution runs **explicit effect → the active
-  mode's look → the global state look → None**, where None still means "the
-  device's palette entry". Both layers stay populated on purpose. *Do not
-  "simplify" this by moving sequences into the palette — that is the button
-  going dark when the host does.*
-- **A stop list is walked or sampled, and that decides which function reads
-  it.** `Sequence.drive` is `clock` (walked by `plan_at`, which returns a
-  wait), `progress` or `beats` (sampled by `sample_at`, which returns none —
-  only the app knows when its number moves next). **Sampled fades interpolate
-  continuously; walked ones keep the 50 ms quantisation**, because that
-  stepping models what a radio carries when the host is pushing every frame,
-  and nothing is pushing a sampled one. Which apps can supply which drive is
-  `DRIVE_TEMPLATES` — **keyed by template, not by state**, because `TIMING`
-  belongs to both the countdown and the stopwatch and only one of them has an
-  end to be a fraction of. A drive bound where nothing supplies it is warned
-  about and played on the clock, never dropped.
-- **When more than one thing can colour a state, the more explicit one wins.**
-  Named stop list > ladder > ramp, in `run_countdown`, `run_metronome` and
-  `run_pomodoro` alike: a ramp is the template's own default, a ladder is a
-  checkbox you tick, and a look you had to build, name and point a mode at is
-  the most deliberate of the three. A template that has no ladder simply skips
-  that rung. *A fourth colour source obeys the same ordering or explains why
-  not.*
-- **A ramp is opt-in where the template already speaks in colour.** A
-  countdown's ramp is on by default because TIMING is its only state and it
-  has nothing else to say; a Pomodoro's is **empty** by default because
-  WORKING and RESTING are two colours precisely so you can tell focus from
-  break, and a ramp overrides both. The better answer there is a named stop
-  list, which is chosen *per state* - so a progress-driven look on WORKING
-  leaves RESTING alone. *A new template with more than one state defaults its
-  ramp empty, or says why its states are interchangeable.*
-- **A drive needs an app that both knows the number and repaints.** Knowing is
-  not enough: `run_pomodoro` always knew how far through a block it was and
-  still could not carry `progress`, because `show()` ran only on phase changes
-  and gestures, so nothing sampled the look. The tick is what put it in
-  `DRIVE_TEMPLATES` (TODO 19c). Its progress is through the **current block** -
-  a classic Pomodoro has no end to be a fraction of - so it resets every phase,
-  and `extend` grows the denominator with the deadline or the colour snaps back
-  to the start of the ramp. *Adding a template to `DRIVE_TEMPLATES` means
-  checking it repaints, not just that it could answer.*
-- **A stop is one flat colour, and the movement is the walk between stops.**
-  A stop briefly carried its own `style`/`period_s`, so one node could be
-  "flashing yellow" (TODO 36c, removed in 36e). It went because a list that
-  walks colours *and* animates inside them is two clocks on one light and no
-  layout could say which one you were setting — and because everything it
-  expressed is expressible as more stops: a flash is on, off, on. *Resist
-  putting a rate back on a stop.* The `style`/`period_s` keys are still
-  accepted and ignored in silence — they were ours to write and ours to drop,
-  and warning about a key we put there ourselves is scolding, not a fallback.
-- **`sequence_safe` floors one axis: a stop's dwell.** `hold_s + fade_s`, at
-  half the flash period, exempt for a one-shot of ≤3 stops (a handful of
-  transitions played once sustains nothing — the confirmation-flash rule).
-  There used to be a second axis, a stop's own style period, floored
-  unconditionally because the exemption's reasoning did not reach inside a
-  single stop; stops are flat now, so the dwell is the whole floor. Spelling
-  a flash out as stops does not get round it — three stops 0.05 s apart are
-  three transitions 0.05 s apart. Still one call site, still `main.set_led`.
-- **A rainbow's two colour fields are its brightness and its saturation.**
-  Neither is a hue — a rainbow is all of them — so `color`'s brightest channel
-  is the level and `color2`'s is the colour strength, each **0 meaning full**
-  because that is what an unset field looks like in a config written before
-  the meaning existed. An addition rather than a repurpose (those bytes were
-  discarded for this style), no wire change, and a capability bit each
-  (`CAP_RAINBOW_LEVEL`, `CAP_RAINBOW_SAT`) — without one, a slider doing
-  nothing on un-reflashed firmware is indistinguishable from one that works.
-  `STYLE_USES_LEVEL` / `STYLE_USES_SATURATION` stay disjoint from
-  `STYLE_USES_COLOR` / `STYLE_USES_COLOR2`: one byte, one control, or only
-  one of them is telling the truth.
 - **A gesture holds an action or names one, and the name is resolved at use
   time.** The pool is `AppConfig.actions`; a binding that is a **bare string**
   is a reference into it (`NamedAction`). One resolver,
@@ -441,157 +331,10 @@ in [ARCHITECTURE.md](ARCHITECTURE.md). Three consequences today:
   can still dangle, which is why the parser warns at all. A pool entry may not
   itself be a name — that is where one-level-only is guaranteed, so
   `resolve_action` needs no cycle check.
-- **A sequence is flat, bounded, and its limits live in the parser.**
-  `SequenceAction` (TODO 33) is a list of primitives with optional waits — no
-  loops, no conditionals, **no nesting**, because the on-device runtime has to
-  be able to run it (ROADMAP D2) and an interpreter is exactly what it cannot
-  have. Nesting is refused **twice**, and both are load-bearing: the parser
-  refuses an inline `sequence` step, and `resolve_action` refuses a step that
-  *names* a pooled sequence — the shape the parser cannot see. A step is a
-  fire-and-forget primitive (`SEQUENCE_ACTIONS`); the four the run loop keeps
-  for itself are not steps, for the same reason they are not hooks.
-  `MAX_SEQUENCE_STEPS` and `MAX_SEQUENCE_S` are enforced in `config.py` and
-  mirrored into the editor — a bound only the UI knows is one a hand-edited
-  file walks straight past. Over either, the list is **truncated with a
-  warning**, never rejected. And it **holds the button**: presses made while it
-  runs are dropped by the rule that already drops them during any other action.
 - **A new action shape is resolved in `resolve_action`, not at each dispatch
   site.** Sequences reached all six sites without one of them being edited,
   because that function is where a binding becomes the thing that runs. *If a
   future shape needs unpacking, unpack it there.*
-- **A reflex adds a source of events and no new vocabulary of consequences.**
-  A reflex ([config.py](aibutton/config.py)'s `Reflex`, TODO 70/71) is *a
-  circumstance with an action attached* — a standalone top-level object, not a
-  field on a mode, because most reflexes start no app at all and a field could
-  only ever say "this app starts now". `then` is any action the button already
-  has (`REFLEX_ACTIONS`: the hook set plus `enter_mode`, which a hook may not
-  have because a hook fires *beside* the run loop and a reflex is dispatched
-  *by* it). So **a new source — MIDI in, OSC in, the media keys — puts a name
-  on `main`'s inbound queue and stops there.** If adding one means adding a
-  consequence, the consequence belongs in the action table where every other
-  surface gets it too.
-- **A reflex's test is one field, one operator, one number — and that is the
-  whole language.** `REFLEX_OPS` in [config.py](aibutton/config.py) is the
-  complete operator list, mirrored in schema.js. **The moment it grows an
-  `and`, an `or` or a second condition it is an expression language, and an
-  expression language cannot move onto the device** (ROADMAP D2) — which is
-  the one thing this has to stay able to do. The matcher (`reflex_matches`) is
-  **pure and called from exactly one place**, the run loop, so a later source
-  (MIDI in, OSC in) applies the same test rather than growing a second answer;
-  the endpoint carries the body and never reads it.
-  Two behaviours worth not flipping: **a test whose field is missing does not
-  fire** (firing on missing turns a renamed sensor field into an alarm that
-  never stops), and **a broken test is dropped while its reflex is kept**
-  (silencing it would make a typo look like a sensor that stopped reporting).
-- **A source says which messages reach a reflex; the test says whether they
-  fire it.** That split (TODO 73) is why MIDI in needed no comparison language
-  of its own: `MidiSource` pins the port, the note-or-CC number and optionally
-  the channel, the message becomes a **payload** (`velocity` and `value` are
-  the same number under the two names a DAW uses), and `when` does the rest —
-  *note 95 velocity 127* and *the same note at 0* are one source and two
-  opposite tests. **A new source builds a payload and stops there.** Both
-  halves are pure and live in [config.py](aibutton/config.py) (`reflex_hears`,
-  `reflex_matches`), because the run loop is not a place a question about data
-  can be tested.
-- **A driver callback hands three bytes to the loop and does nothing else.**
-  `asyncio.Queue.put_nowait` is not thread-safe and neither is reading the live
-  config, so `main._on_midi` is one `loop.call_soon_threadsafe` and every
-  decision happens in `_dispatch_midi` on the loop — the same discipline
-  `ClockListener` documents for its ring of timestamps, one step stricter
-  because this one wants the config. **And a MIDI input opens exclusively on
-  Windows**: one listener per port, so a metronome following the clock on the
-  port a reflex listens to falls back to tap-only and says so. Two ports is
-  the answer; loopMIDI makes them free.
-- **A number that arrived is logged whether or not it fired.** `handle_reflex`
-  writes one row per *arrival* that carried a tested value, named after the
-  reflex — so the Events page charts the sensor, not the alarm history, and
-  the group-by-name rule below applies unchanged: one reflex reports one kind
-  of number. No test means no row, because nothing to report costs nothing.
-- **A circumstance is not a press, and never travels as one.** The run loop
-  selects on two queues (`_wait_for_press_or_reflex`): the device's, and
-  `inbound`. Injecting a synthetic press would work and would make every app's
-  log a lie — a session summary would record a press nobody made.
-  **A reflex is not dropped the way a press made while busy is**: a press
-  whose moment has passed is noise, a plant that has gone dry still means it.
-- **A reflex reaches a running app only by naming it** (`while`), and what it
-  hands over is an action, not a keystroke. `wait_in_app` is the takeover's
-  version of `_wait_for_trigger` (TODO 74): it returns a press, or a
-  `SetPositionAction` when a reflex addressed to *this* app says where it should
-  now be, and it runs anything else the reflex carries itself — an ordinary
-  consequence the app has no opinion about, kept off the app's light.
-  A reflex **not** addressed to the running app is *held* and put back when the
-  button is handed over, so a system-wide reflex still fires, just after its
-  turn. Held rather than requeued immediately, which would spin.
-  *An app that wants to hear from the world adopts `wait_in_app`; one that
-  does not simply keeps `_wait_for_trigger`, and reflexes wait for it.*
-- **What the world reports is shown, not announced.** `run_signal` paints a
-  reported position without firing that position's own action, the same rule
-  entering a signal light already followed — and with a DAW it is stronger
-  than politeness: sending "record" back to the thing that just told you it is
-  recording is a feedback loop. **Derived state beats modelled state**
-  (item 25): the position is a fact that arrived, never one the button
-  inferred from its own presses.
-- **A mode names a look; it never owns one.** The pool is `AppConfig.looks`
-  and a mode holds `{state: look-name}`. Which states a mode may colour is
-  `MODE_LED_STATES` in [config.py](aibutton/config.py), mirrored as
-  `ledStates` on each template descriptor in
-  [schema.js](aibutton/web/static/schema.js) —
-  [test_webui.py](tests/test_webui.py) fails on drift. A mode that names
-  nothing resolves to `None`, which is what `set_led` already means by "no
-  override", so the palette stays the fallback and costs no wire traffic.
-- **An app's page reads the store and never writes it.** A takeover's own page
-  shows what that app has done ([appReadout.js](aibutton/web/static/appReadout.js),
-  TODO 51), and everything on it is a *read*: rows through `/api/events`, plus
-  the mode's config. Nothing it computes is written back and nothing the button
-  does depends on it — the moment something here needs storing, that is item 34
-  (app documents), not another view. Which rows an app owns is declared as
-  `readout` on its template descriptor, so a new app that logs gets a history
-  by adding four keys; one that adds a `log_as` field and no `readout` is
-  caught by [test_app_readout.py](tests/test_app_readout.py), which also checks
-  the `nameField` against the **real parser's** dataclass rather than a
-  hand-written map.
-- **`value` is one untyped column, so anything reading it groups by `name`.**
-  A metronome's BPM, a reaction timer's milliseconds, a countdown's minutes and
-  an alarm's 0/1 share that slot and nothing else. Every reader gives each name
-  its **own scale** — `seriesByName` draws a panel per name rather than a chart
-  with several series, and `READOUT_MEASURES` splits `outcome` from `value`
-  precisely so 0s and 1s are counted rather than averaged. *Pooling them
-  produces a chart that renders, looks fine, and is meaningless.*
-- **Two rows can describe one session, and only one of them is the session.**
-  A stopwatch writes both a `timer_stop` and the `mode_exit` that contained it.
-  Anything summing durations takes `mode_exit` alone (`durationTotals`), or it
-  double-counts exactly the app most likely to top the chart — plausibly, which
-  is why it is pinned by a test rather than a comment.
-- **The Events page's aggregations are pure and exported; the drawing is not.**
-  Same split as [rules.py](aibutton/rules.py), for the same reason: every
-  question worth getting wrong (which rows count, which double-count, what
-  "today" means off UTC) is a function over data, checked against a table in
-  [tests/js/](tests/js/). *New chart logic goes in the pure half or it cannot
-  be tested at all.*
-- **A chart is CSS unless geometry forbids it.** Text inside an SVG `viewBox`
-  scales with the box, so an 11px label is 6px on a phone — unreadable rather
-  than overflowing, which no overflow measurement catches. Bars, columns and
-  the heatmap are flex and grid; SVG is kept for the donut arc and the
-  sparklines, and **both keep every label in HTML around the plot**. Anything
-  that cannot shrink past a point scrolls in its own `.scroll-x`, never
-  dragging the panel sideways.
-- **A field that decides whether an action does anything at all is not
-  tinker-tier.** The `midi` action's port was hidden as an advanced option, so
-  a control surface got configured five times with no port - and an empty port
-  means *the first output on the machine*, which on Windows is the built-in
-  synth. The DAW heard nothing, and nothing reported an error, because nothing
-  had failed. *Tier hides detail, never the difference between working and
-  silently going somewhere else.*
-- **A group of fields is as hidden as its fields.** A settings group whose every
-  field is `tier: 'tinker'` is itself tinker-tier, derived from the specs rather
-  than declared — otherwise a basic user gets a heading with nothing under it,
-  which is what the Device page's "Web server" did (TODO 47). *Derived, so a
-  group that gains one basic field starts showing again on its own.*
-- **A field edited as a textarea parses a string as well as a list.** The
-  widget writes a newline-separated string; a parser accepting only a list
-  turns a curated value into the default **on save**, with an error in the log
-  and nothing in the UI. `targets` and `cues` both take either shape now, and
-  that is the rule for the next list-shaped field.
 
 ### When you change the protocol
 
@@ -650,14 +393,6 @@ is the one surface that will exist in someone else's pocket.
   [test_config.py](tests/test_config.py) fails on any module-level
   redefinition in the package. *A "sequence" here is a stop list; check the
   name is free before reusing the word.*
-- **A ctypes callback must be kept alive by something Python can see.**
-  [midi_io.py](aibutton/midi_io.py)'s clock listener parks its `WINFUNCTYPE`
-  object on the closer it returns, because a driver calling a collected
-  callback kills the process outright — illegal instruction, no traceback, no
-  exception to catch. Closing over the object and then `del`-ing it inside the
-  nested function is the trap: `del` makes the name *local to that function*,
-  so the closure never captures it at all. It reads like tidy cleanup and it
-  is the bug.
 - **The JavaScript has tests now, and node is optional.** `node --test` is
   built in, so [tests/js/](tests/js/) costs no dependency;
   [test_js_modules.py](tests/test_js_modules.py) runs it and **skips with a
@@ -667,15 +402,15 @@ is the one surface that will exist in someone else's pocket.
   in a browser, which is the honest split rather than a gap. Pass node the
   **file**, not the directory: `node --test <dir>` resolves the path as a
   module on Windows and dies with `MODULE_NOT_FOUND`.
-- **One home for a shared formatter.**
-  [format.js](aibutton/web/static/format.js) holds how this page writes a
-  duration, a number and a day, because each is shown in two places now (the
-  Events table and an app's readout). Two copies of "how long is 3661 seconds"
-  is a mirrored table with nothing testing it. *`schema.js`'s `fmtLength` is
-  the deliberate exception and says why in its docstring* — a configured
-  length ("25m") and an elapsed measurement ("8:41") round and abbreviate
-  differently, and they shared a name until the editor bundle refused to hold
-  two.
+- **`node --check` on a `.js` file here exits 0 on code that cannot load.**
+  These are ES modules in a directory with no `package.json`, so node treats
+  the extension as ambiguous and a genuine `SyntaxError` comes back as
+  success. It is worse than no check, because it is a check you believed: an
+  unescaped apostrophe inside a `schema.js` hint string passed it and took the
+  whole editor down with one console line. **The extension picks the parser** —
+  copy to a temp `.mjs` and check *that*, which is what
+  `test_a_static_module_parses` does for every file in `web/static` and what
+  any by-hand check should do too. Copy, never rename; those files are served.
 - Tests assert behaviour and name the scenario, not the method. Prefer one
   event-script table over many near-identical cases (see
   [test_trigger_port.py](tests/test_trigger_port.py)).
@@ -695,52 +430,6 @@ is the one surface that will exist in someone else's pocket.
   there is deliberately no AI on the device. A rename is coming
   (ROADMAP **D7**), so don't spread the string further than it already is:
   new user-facing text says "the button", and new identifiers don't embed it.
-- **"Can anything reach this?" is a walk, and it lives in one pure function.**
-  `reachableModes` ([schema.js](aibutton/web/static/schema.js)) starts from the
-  things nobody has to start — a gesture map is live by definition, a clock
-  starts its own apps — and follows `enter_mode` bindings and launcher lists
-  from there. **It is transitive on purpose**: a launcher you cannot open
-  cannot open anything either, so installing one nobody points at fixes
-  nothing, and the App page says so. It resolves **named actions** on the way,
-  which `findEntryPoints` never did. *A new way to open an app is an edge in
-  that walk, or the App page will call working configs broken.*
-- **A mount `menu.js` renders into may be absent, and that is the seam between
-  the two shells.** `mounts.nav` and `mounts.apps` are both optional; a missing
-  one means one section fewer, never a broken menu. **But absent is not the
-  same as unnecessary** — removing the ready-made picker left the offline
-  editor with no way to add an app at all, because its mount resolved to
-  nothing and nobody noticed. *When a capability moves onto a new mount, give
-  the offline editor that mount too rather than a second code path.*
-- **The mode list is the page's navigation, and it lives in the shell.**
-  `menu.js` renders it into `mounts.nav` (the side panel) and the mode editor
-  into `mounts.modes`, and **`mounts.nav` is optional**: absent, the nav falls
-  back inside the panel, which is the only reason the offline editor still
-  works — it is the menu with no shell around it. Selecting a mode has to
-  bring its editor up, and `menu.js` **asks** for that with a
-  `button:show-panel` event rather than reaching for the shell's tab state.
-  *A new destination in the nav is a listener on that event, not a second
-  place that hides panels.*
-- **Below 900px the shell stops being a fixed-height frame.** Two panes in a
-  viewport is a desktop idea; stacked, a wrapped header plus a capped nav plus
-  a wrapped scene bar left the work surface **zero pixels tall**, which looks
-  exactly like the page failing to load and overflows nothing, so no
-  measurement catches it. The narrow layout is an ordinary scrolling document
-  instead: nav capped with its own scroller, panel flowing, save bar sticky.
-  *Check panel height, not just overflow, when you touch the shell.*
-- **An override at equal specificity must come after what it overrides.** This
-  stylesheet has now lost that argument twice — `.inp` under its own variants
-  (TODO 42) and `.tab-panel { position: static }` above `position: absolute`
-  (TODO 45). Both failed **silently**, because a rule that loses still parses.
-  *Put a media query below every rule it reaches into, and verify the computed
-  value rather than assuming the cascade agreed with you.*
-- **An action bound to something that is not a press is still a binding.**
-  `on_timeout` (TODO 44) is offered by the same sub-editor as a gesture and a
-  hook, through a **`bindings`** key on the template descriptor — not a
-  `kind: 'action'` field widget, which would be a second way to edit the same
-  thing. It offers `HOOK_ACTIONS` only, for the reason hooks do: `enter_mode`,
-  `readout` and `standby` change what the mode *loop* does next, and there is
-  no loop left to change once an app has finished. *A new non-gesture trigger
-  declares a binding; it does not grow its own editor.*
 - **Three words in the UI copy: a *menu*, an *app*, a *reflex*** (TODO 46,
   renamed by TODO 75). A menu is a press picking between things — the everyday
   gesture map, a launcher, a control page; an app takes the button over until
@@ -760,38 +449,16 @@ is the one surface that will exist in someone else's pocket.
   describe code.*
 - Firmware changes need a **reflash** before they mean anything. Firmware
   modules import each other by bare name and sit flat on the device.
-- **Keep [TODO.md](TODO.md) current in the same commit as the work.** When an
-  item ships, move it to **Done** and delete the scope the shipped version
-  superseded — a "✔ shipped" banner above the original plan is how that file
-  grew to 1600 lines of instructions nobody should follow any more. Two rules
-  keep the pruning safe: a rule governing *future* code belongs here in
-  CLAUDE.md and TODO.md only records the decision and points at it; and item
-  numbers are never reused or renumbered, because this file, ROADMAP.md and
+- **Keep [TODO.md](TODO.md) current in the same commit as the work, and move
+  finished items out of it.** When an item ships with nothing left open under
+  its number, move its whole write-up to
+  [TODO_FINISHED.md](TODO_FINISHED.md), compressed to the choices that still
+  bind — a "✔ shipped" banner above the original plan is how TODO.md once grew
+  past 4500 lines of instructions nobody should follow any more. An item with
+  *any* open thread — a hardware test not yet run, a "still open"
+  sub-question — stays in TODO.md whole, even if most of it has shipped;
+  don't split one item across both files. Two rules keep the pruning safe: a
+  rule governing *future* code belongs here in CLAUDE.md, and
+  TODO.md/TODO_FINISHED.md only record the decision and point at it; and item
+  numbers are never reused or renumbered, because both files, ROADMAP.md and
   the commit log all cite them.
-
-## Hardware gotchas
-
-- **ESP32-S3, USB-Serial/JTAG.** Entering download mode sets a sticky flag
-  that survives a reset — after flashing, the board sits in the bootloader,
-  silent, until you physically replug. It looks exactly like a bad flash.
-- **WS2812 byte order varies by board, and this build's two LEDs disagree.**
-  The ring is GRB, the onboard one is RGB (`NEOPIXEL_ORDER` /
-  `ONBOARD_NEOPIXEL_ORDER` in [hardware.py](firmware/hardware.py)). Diagnose by
-  pushing *known* colours from any colour picker's Diagnostic row
-  ([colorEngine.js](aibutton/web/static/colorEngine.js)), never by watching
-  the rainbow — every permutation of a rainbow is still a rainbow, so it shows
-  at most a direction reversal and a camera's white balance will happily fake
-  one of those. One LED wrong means that LED's setting is wrong; **both wrong
-  the same way means the two settings are on the wrong LEDs**. Red, green, cyan
-  and magenta are the colours that talk — blue, yellow and white are fixed
-  points of an R/G swap and look perfect while it is broken.
-- **The button's WS2812 runs on 3V3, and that is a trade, not a fix.** Its data
-  threshold is ~0.7×VDD, so a 5 V-powered pixel driven by the S3's 3.3 V sits
-  on the edge and fails as *flicker*, not as silence — the hardest failure here
-  to read as wiring. 3V3 removes that and buys a colour fault instead: the red
-  die runs at ~2 V and the green and blue dies at ~3.2 V, so on a 3.3 V rail
-  only red keeps its current sink in regulation and white renders orange
-  (measured R:G:B ≈ 1.00 : 0.54 : 0.44). Going to 5 V means handling the
-  threshold as well — series diode or level shifter, never 5 V alone. TODO 0c.
-- **`mpremote exec` interrupts `main.py`.** The board stops advertising until
-  you `reset` it.

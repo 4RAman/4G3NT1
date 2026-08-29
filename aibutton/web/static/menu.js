@@ -14,12 +14,17 @@ import {
   SETTINGS_GROUPS, TEMPLATES,
   TEMPLATE_BY_TYPE, danglingTargets, describeAction, describeActivation,
   describeEffect, describeReflex, describeTemplate, findEntryPoints, modeLook,
-  reachableModes,
+  reachableModes, STARTER_BY_KEY, actionRefs, actionUsedBy, readoutStat,
+  startedBy,
 } from './schema.js';
 import { ModeEditor } from './modeEditor.js';
 import { SceneBar } from './scenes.js';
 import { createField } from './widgets.js';
 import { createLookEditor } from './colorEngine.js';
+// The one home for how this page writes a duration, a number and a day
+// (CLAUDE.md) - the Events table and an app's readout already write them this
+// way, and a nav line that rounded differently would be a third answer.
+import { countOf, fmtDay, fmtDuration, fmtValue } from './format.js';
 import { paint as applySwatch, unpaint } from './ledPreview.js';
 
 export class ConfigMenu {
@@ -60,13 +65,57 @@ export class ConfigMenu {
       if (!Array.isArray(this.model.modes)) this.model.modes = [];
       if (!Array.isArray(this.model.reflexes)) this.model.reflexes = [];
       this.dirty = false;
+      this.warningDetails = data.warning_details || [];
       this._render(data.warnings || []);
+      this._loadEventStats();
     } catch (err) {
       for (const mount of this._ownMounts()) clear(mount);
       this.mounts.modes.append(el('p', {
         className: 'menu-result err', textContent: `Could not load configuration: ${err.message}`,
       }));
     }
+  }
+
+  /**
+   * The live half of a nav row's line (TODO 101), fetched once and applied by
+   * re-rendering rather than by patching text in place.
+   *
+   * **Deliberately not awaited.** The config is what the page is for; the
+   * numbers are a garnish, and a slow or missing log must not hold the editor
+   * closed. So this runs beside the render and the nav simply gains a clause
+   * when it lands.
+   *
+   * **And it is optional at the API, which is the whole degradation.** The
+   * offline editor's `FileApi` has no `eventSummary` - there is no service and
+   * no log to summarise - so the check is `typeof`, the promise never happens,
+   * and every row keeps the line it computed from the config alone.
+   */
+  _loadEventStats() {
+    if (typeof this.api.eventSummary !== 'function') return;
+    this.api.eventSummary().then((data) => {
+      this.eventStats = data.rows || [];
+      if (this.modeNavEl) this._renderModeNav();
+    }).catch(() => { /* a log that will not answer costs the nav one clause */ });
+  }
+
+  /** "12 runs · last Aug 12 · best 214 ms", or null. The numbers come from
+   *  `readoutStat`, which is pure and knows nothing about how they read. */
+  _statLine(mode) {
+    const stat = readoutStat(mode, this.eventStats);
+    if (!stat) return null;
+    // "so far" earns its four characters: a reaction timer's config line
+    // already says "3 attempts" (the rounds it is set to) and this one says
+    // how many have been played. Two numbers under one noun, on one row, is
+    // exactly the ambiguity a live line was supposed to remove.
+    const parts = [`${countOf(stat.count, stat.noun)} so far`];
+    if (stat.last) parts.push(`last ${fmtDay(stat.last)}`);
+    if (stat.best !== null) {
+      const best = stat.bestIsDuration
+        ? fmtDuration(stat.best)
+        : `${fmtValue(stat.best)}${stat.unit ? ` ${stat.unit}` : ''}`;
+      parts.push(`best ${best}`);
+    }
+    return parts.join(' · ');
   }
 
   _markDirty() {
@@ -91,6 +140,10 @@ export class ConfigMenu {
   _ownMounts() {
     const owned = [this.mounts.modes, this.mounts.lights, this.mounts.device, this.mounts.bar];
     if (this.mounts.apps) owned.push(this.mounts.apps);
+    // Optional like the rest: without it the two pools stay in the Modes
+    // panel, which is where they were before TODO 102 and is what keeps the
+    // offline editor whole.
+    if (this.mounts.actions) owned.push(this.mounts.actions);
     // Optional, and absent in the offline editor - see _renderModesLayout.
     if (this.mounts.nav) owned.push(this.mounts.nav);
     return owned;
@@ -100,10 +153,14 @@ export class ConfigMenu {
     for (const mount of this._ownMounts()) clear(mount);
     if (this.selectedMode && !this.model.modes.includes(this.selectedMode)) this.selectedMode = null;
 
-    this.mounts.modes.append(
-      this._renderPrimer(), this._renderModesLayout(),
-      this._renderReflexSection(), this._renderActionPoolSection(),
-    );
+    // The named-action pool and the reactions are one page (TODO 102): a
+    // reaction is a circumstance with an action attached, and its whole
+    // vocabulary of consequences *is* that pool, so one is the ingredient
+    // list for the other. Where they land is the mount's answer, not this
+    // method's - absent, they stay under the modes, one section fewer.
+    const pools = [this._renderActionPoolSection(), this._renderReflexSection()];
+    this.mounts.modes.append(this._renderPrimer(), this._renderModesLayout());
+    (this.mounts.actions || this.mounts.modes).append(...pools);
     if (this.mounts.apps) this.mounts.apps.append(this._renderAppsSection());
     this.mounts.lights.append(this._renderPaletteSection());
     this.mounts.device.append(this._renderSettingsSection());
@@ -170,10 +227,16 @@ export class ConfigMenu {
     };
   }
 
-  /** A mode's nature drives which group it lands in. Unknown templates read
-   *  as everyday, which is the harmless default: they answer gestures. */
+  /** A mode's nature drives which group it lands in.
+   *
+   * **A template this page has never heard of has no nature, and saying it is
+   * 'ambient' was a lie with a cost** (TODO 107). It filed the mode under
+   * Menus, where a scheduled Notice looked exactly like a gesture map someone
+   * had mis-added - which is what a stale `/static` module graph did to every
+   * alarm the day `notice` was added. Unknown is its own answer now, and
+   * `_membersOf` gives it its own group rather than guessing. */
   _natureOf(mode) {
-    return TEMPLATE_BY_TYPE[mode?.template]?.nature || 'ambient';
+    return TEMPLATE_BY_TYPE[mode?.template]?.nature || 'unknown';
   }
 
   // --- modes: master/detail --------------------------------------------
@@ -186,24 +249,21 @@ export class ConfigMenu {
   _renderModesLayout() {
     this.modeNavEl = el('div', { className: 'mode-nav scroll-fade' });
     this.modeDetailEl = el('div', { className: 'mode-detail' });
-    // Two verbs, because there are two things to add and they are not the
-    // same act. A menu is a gesture map you write here and now; installing an
-    // app is a choice between twelve of them, with ready-made versions of
-    // several, and that belongs on a page rather than under a dropdown at the
-    // bottom of a list (TODO 49). A *reflex* is a third thing and is added in
-    // its own section - nothing about it is a press.
+    // A menu is a gesture map you write here and now; installing an app is a
+    // choice between twelve of them, with ready-made versions of several, and
+    // that belongs on the Apps tab rather than under a dropdown at the bottom
+    // of a list (TODO 49). Installing used to have a second door here too
+    // ("Manage apps →"), but the Apps tab it pointed at now exists in both
+    // shells (TODO 82) - the served page's `.shell-nav` and the offline
+    // editor's own `.tab-bar` - so the second door onto the same room is gone
+    // rather than kept.
     const addMenu = el('button', {
       type: 'button', className: 'add-mode', textContent: '+ Add menu',
       onclick: () => this._addMode(this._defaultMode()),
     });
-    const manage = el('button', {
-      type: 'button', className: 'add-mode',
-      textContent: 'Manage apps →',
-      onclick: () => document.dispatchEvent(new CustomEvent('button:show-panel', { detail: 'apps' })),
-    });
     const navCol = el('div', { className: 'mode-nav-col' }, [
       this.modeNavEl,
-      el('div', { className: 'add-row' }, [addMenu, manage]),
+      el('div', { className: 'add-row' }, [addMenu]),
     ]);
 
     this._renderModes();
@@ -398,23 +458,24 @@ export class ConfigMenu {
 
   /** Which modes a nav group lists.
    *
-   * **A mode may be listed twice, and that is the point** (TODO 48a). The
-   * groups are not boxes a mode falls into, they are questions: *what does a
-   * press pick between*, *what can the button run*, and *what happens with
-   * nobody pressing anything*. An alarm answers two of them - a clock starts
-   * it without anyone asking, and it is an app while it runs - so it appears
-   * under both, the way LISTENING is a state two layers own.
+   * **A mode is listed once now** (TODO 101). It used to appear twice on
+   * purpose (48a): the groups are questions, not boxes, and an alarm answered
+   * two of them - a clock starts it, *and* it is an app while it runs - so it
+   * sat under both. The starter glyph answers the second question **on the
+   * row**, which is strictly better: one line says what it is and what sets it
+   * off, and the list is shorter by every scheduled app you own.
    *
-   * `startedBy: 'schedule'` is the test for the third rather than a list of
-   * templates, because it is already the descriptor's answer to "does a
-   * person start this?" - and a new template a clock starts joins the
-   * Reflexes list with no edit here.
+   * So the Reactions group holds reactions and nothing else. `_isScheduled`
+   * survives because `startedBy` asks the same question of the descriptor -
+   * a new template a clock starts still needs no edit here.
    */
   _membersOf(group) {
     const isMenu = (m) => MENU_TEMPLATES.includes(m?.template)
-      || this._natureOf(m) === 'ambient';  // an unknown template answers presses
+      || this._natureOf(m) === 'ambient';
+    if (group.key === 'unknown') {
+      return this.model.modes.filter((m) => this._natureOf(m) === 'unknown');
+    }
     if (group.key === 'menus') return this.model.modes.filter(isMenu);
-    if (group.key === 'reflexes') return this.model.modes.filter((m) => this._isScheduled(m));
     return this.model.modes.filter(
       (m) => this._natureOf(m) === 'takeover' && !isMenu(m),
     );
@@ -432,18 +493,26 @@ export class ConfigMenu {
    *  (TODO 69). */
   _renderModeNav() {
     clear(this.modeNavEl);
-    // mode -> [entry, ...]. A list rather than one entry because a scheduled
-    // app is listed under both groups; with a bare entry the second row
-    // silently replaced the first and only one of them ever lit up.
+    // One walk per render, not one per row (TODO 101). Reachability is a
+    // property of the whole config, so it cannot differ between two rows of
+    // one render - and `_renderModeNav` runs on every keystroke that changes
+    // the model, which is where an O(n squared) answer would show up.
+    this.reached = reachableModes(
+      this.model.modes, this.model.actions || {}, this.model.reflexes || [],
+    );
+    // mode -> [entry, ...]. A list rather than one entry: nothing is listed
+    // twice since TODO 101, but the live-dot ticker and the swatch repaint
+    // walk whatever rows a mode has, and a Map of lists is the shape that
+    // stays correct if a second listing is ever right again.
     this.navButtons = new Map();
 
     for (const group of MODE_GROUPS) {
       const members = this._membersOf(group);
-      // Reflexes are the one group whose count is not a mode count: the
-      // reflexes themselves are not modes, and the modes in it are there
-      // because a clock starts them.
-      const loose = group.key === 'reflexes' ? (this.model.reflexes || []) : [];
-      const total = members.length + loose.length;
+      const total = members.length;
+      // The one group that is absent rather than empty: every config has no
+      // unrecognised modes, and a permanent "Unrecognised (0)" heading is
+      // chrome that only ever says nothing.
+      if (!total && group.key === 'unknown') continue;
       const foldKey = `nav-fold:${group.key}`;
       let folded = readFlag(foldKey, false);
 
@@ -454,8 +523,6 @@ export class ConfigMenu {
         body.append(el('p', { className: 'empty mode-nav-empty', textContent: group.emptyText }));
       } else if (group.key === 'apps') {
         this._appendApps(body, members);
-      } else if (group.key === 'reflexes') {
-        this._appendReflexList(body, members, loose);
       } else {
         for (const mode of members) body.append(this._navRow(mode, describeTemplate));
       }
@@ -475,68 +542,6 @@ export class ConfigMenu {
 
       this.modeNavEl.append(el('div', { className: 'mode-nav-group' }, [title, body]));
     }
-  }
-
-  /** The Reflexes list, in two parts, because they are set off by two
-   *  different kinds of thing.
-   *
-   * A reflex proper is fired from outside and its position means nothing. A
-   * scheduled app is here for a related but separate reason - a clock starts
-   * it - and lives under its own label so the list never reads as one queue.
-   * (Before TODO 75 this group held the gesture maps, which *are* a queue;
-   * that is now Menus, and the priority blurb went with them.)
-   */
-  _appendReflexList(groupEl, scheduled, reflexes) {
-    for (const reflex of reflexes) groupEl.append(this._navReflexRow(reflex));
-    if (!scheduled.length) return;
-    groupEl.append(el('div', { className: 'mode-nav-app' }, [
-      el('span', { className: 'mode-nav-app-name', textContent: 'On a schedule' }),
-      el('span', { className: 'mode-nav-app-count', textContent: String(scheduled.length) }),
-    ]));
-    const nest = el('div', { className: 'mode-nav-nest' });
-    for (const mode of scheduled) nest.append(this._navRow(mode, (m) => this._reflexLine(m)));
-    groupEl.append(nest);
-  }
-
-  /** One reflex in the nav. Not a `_navRow`: a reflex is not a mode, has no
-   *  look to swatch and can never be the *running* thing, so it registers
-   *  nothing with the live-dot ticker. Selecting it scrolls its editor into
-   *  view rather than filling the detail pane - the reflex list is one
-   *  section, and two editors for one object is how a page starts lying. */
-  _navReflexRow(reflex) {
-    return el('button', {
-      type: 'button', className: 'mode-nav-item',
-      onclick: () => this._jumpToReflex(reflex),
-    }, [
-      el('span', { className: 'mode-nav-swatch empty' }),
-      el('span', { className: 'mode-nav-name', textContent: reflex.name || '(unnamed)' }),
-      el('span', { className: 'mode-nav-summary', textContent: describeReflex(reflex) }),
-    ]);
-  }
-
-  /** Show the Modes panel and put one reflex's row on screen, marked - the
-   *  same move a failed Save makes for a bad field (TODO 60). */
-  _jumpToReflex(reflex) {
-    this._showModesPanel();
-    requestAnimationFrame(() => {
-      const row = this.reflexWrap?.querySelector(
-        `[data-reflex="${CSS.escape(reflex.name || '')}"]`,
-      );
-      if (!row) return;
-      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      row.classList.add('fld-jump');
-      setTimeout(() => row.classList.remove('fld-jump'), 1600);
-    });
-  }
-
-  /** What a mode says on its *Reflex* line: the thing that sets it off.
-   *
-   * A scheduled app is here to answer "what wakes the button up", so it shows
-   * its trigger; showing the same template summary as its Apps row would make
-   * two listings that read identically and look like a duplicate rather than
-   * two answers. */
-  _reflexLine(mode) {
-    return this._isScheduled(mode) ? describeActivation(mode.activation) : describeTemplate(mode);
   }
 
   /** The Apps list, grouped by template.
@@ -578,8 +583,28 @@ export class ConfigMenu {
    *  every row a mode has. */
   _navRow(mode, summaryFor) {
     const dot = el('span', { className: 'mode-active-dot', hidden: true });
+    // What sets this off, in one character (TODO 101). It sits with the name
+    // rather than becoming a fifth column: a row already carries a live dot, a
+    // look swatch, a name and a summary, and this is a sidebar.
+    const starter = STARTER_BY_KEY[
+      startedBy(mode, this.reached, this.model.actions || {}, this.model.reflexes || [])
+    ];
+    const glyph = el('span', {
+      className: 'mode-nav-starter' + (starter?.key === 'none' ? ' unreachable' : ''),
+      textContent: starter?.glyph || '',
+      title: starter?.title || '',
+    });
     const nameEl = el('span', { className: 'mode-nav-name', textContent: mode.name || '(unnamed)' });
-    const summaryEl = el('span', { className: 'mode-nav-summary', textContent: summaryFor(mode) });
+    // Two halves, one line: what this item *is* (from the config, always
+    // available) and what it has *done* (from the log, only once that has
+    // answered). The config half is written first and alone, which is what a
+    // shell with no service keeps.
+    const summaryEl = el('span', { className: 'mode-nav-summary' });
+    const writeSummary = () => {
+      const stat = this._statLine(mode);
+      summaryEl.textContent = summaryFor(mode) + (stat ? ` — ${stat}` : '');
+    };
+    writeSummary();
     const swatch = el('span', { className: 'mode-nav-swatch' });
     const repaint = () => {
       const look = this._modeLook(mode);
@@ -595,14 +620,17 @@ export class ConfigMenu {
     };
     repaint();
     const rows = this.navButtons.get(mode);
-    const entry = { dot, nameEl, summaryEl, repaint, summary: summaryFor };
+    // `writeSummary` rather than the raw `summaryFor`: the line has two
+    // halves now and an editor rewriting only the config one would drop the
+    // live numbers the moment you touched a field.
+    const entry = { dot, nameEl, summaryEl, repaint, writeSummary };
     if (rows) rows.push(entry);
     else this.navButtons.set(mode, [entry]);
     return el('button', {
       type: 'button',
       className: 'mode-nav-item' + (mode === this.selectedMode ? ' selected' : ''),
       onclick: () => { this._renderModes(mode); this._showModesPanel(); },
-    }, [dot, swatch, nameEl, summaryEl]);
+    }, [dot, swatch, glyph, nameEl, summaryEl]);
   }
 
   /**
@@ -642,12 +670,12 @@ export class ConfigMenu {
     this.detailEditor = new ModeEditor(mode, {
       onChange: () => {
         this._markDirty();
-        // Every row this mode has - a scheduled app is listed under both
-        // groups (48a), and updating only the first left the other showing
-        // the name you had just changed away from.
+        // Every row this mode has. Nothing is listed twice since TODO 101,
+        // but the loop is over whatever rows exist rather than over an
+        // assumption about how many there are.
         for (const entry of this.navButtons?.get(mode) || []) {
           entry.nameEl.textContent = mode.name || '(unnamed)';
-          entry.summaryEl.textContent = entry.summary(mode);
+          entry.writeSummary();
           entry.repaint();
         }
       },
@@ -700,6 +728,7 @@ export class ConfigMenu {
       },
     });
     this.modeDetailEl.append(this.detailEditor.el);
+    this._markWarnings();
   }
 
   // Swap with the nearest neighbour of the same kind. Order is meaningful
@@ -1066,8 +1095,8 @@ export class ConfigMenu {
   _addReflex() {
     if (!Array.isArray(this.model.reflexes)) this.model.reflexes = [];
     const taken = new Set(this.model.reflexes.map((r) => r && r.name));
-    let name = 'reflex';
-    for (let n = 2; taken.has(name); n += 1) name = `reflex ${n}`;
+    let name = 'reaction';
+    for (let n = 2; taken.has(name); n += 1) name = `reaction ${n}`;
     this.model.reflexes.push({ name, then: ACTION_BY_TYPE.enter_mode.defaults() });
     this._renderReflexes();
     this._markDirty();
@@ -1078,11 +1107,11 @@ export class ConfigMenu {
     this.reflexWrap = el('div', { className: 'palette-wrap' });
     this._renderReflexes();
     const add = el('button', {
-      type: 'button', textContent: '+ Add a reflex',
+      type: 'button', textContent: '+ Add a reaction',
       onclick: () => this._addReflex(),
     });
     return el('div', { className: 'action-pool', 'data-tier': 'tinker' }, [
-      el('h3', { className: 'palette-group', textContent: 'Reflexes' }),
+      el('h3', { className: 'palette-group', textContent: 'Reactions' }),
       el('p', { className: 'menu-hint', 'data-help': true, textContent:
         'The button acting with nobody pressing it. Each one has a name and an '
         + 'action, and anything that can make an HTTP request fires it - a '
@@ -1096,13 +1125,14 @@ export class ConfigMenu {
 
   _renderReflexes() {
     clear(this.reflexWrap);
-    // The nav lists these too (TODO 75), so it is rebuilt from here rather
-    // than left to go stale - a reflex renamed in the panel and still under
-    // its old name in the list is two answers to one question.
+    // The nav no longer *lists* reactions (TODO 102), and still depends on
+    // them: an app a reaction opens wears the reaction glyph (TODO 101), so
+    // adding, deleting or repointing one changes what a row over in Apps says
+    // about itself. Rebuilt from here rather than left to go stale.
     if (this.modeNavEl) this._renderModeNav();
     const list = this.model.reflexes || [];
     if (!list.length) {
-      this.reflexWrap.append(el('p', { className: 'menu-hint', textContent: 'No reflexes yet.' }));
+      this.reflexWrap.append(el('p', { className: 'menu-hint', textContent: 'No reactions yet.' }));
       return;
     }
     list.forEach((reflex, index) => {
@@ -1215,13 +1245,17 @@ export class ConfigMenu {
   }
 
   /** The address that fires it. Shown rather than explained: the only thing
-   *  between a reflex and the script that fires it is knowing where to post,
-   *  and this page is served by the host that answers. */
+   *  between a reaction and the script that fires it is knowing where to post,
+   *  and this page is served by the host that answers.
+   *
+   *  `/api/reaction/` since TODO 103, and `/api/reflex/` still answers - see
+   *  webui.py. Only one can be shown, and it has to be the new one, or the
+   *  page teaches a spelling the docs no longer use. */
   _reflexUrl(reflex) {
     const name = reflex.name || '…';
     const origin = typeof location !== 'undefined' && location.origin && location.origin !== 'null'
       ? location.origin : '';
-    return `POST ${origin}/api/reflex/${encodeURIComponent(name)}`;
+    return `POST ${origin}/api/reaction/${encodeURIComponent(name)}`;
   }
 
   /** A picker over the named-action pool - the reflex half of the gesture
@@ -1353,7 +1387,7 @@ export class ConfigMenu {
       el('span', { className: 'fld-hint', 'data-help': true, textContent:
         'A DAW that lights up a control surface is telling you what it is '
         + 'doing - point its feedback at a port the button listens on and a '
-        + 'note becomes a reflex. The value rides along as “velocity” (a '
+        + 'note becomes a reaction. The value rides along as “velocity” (a '
         + 'note) or “value” (a control change), for Only when to test.' }),
       fields,
     ]);
@@ -1432,7 +1466,7 @@ export class ConfigMenu {
       pick,
       el('span', { className: 'fld-hint', 'data-help': true, textContent:
         'Left at "any time" it fires whenever it arrives, and waits if an app '
-        + 'is running. Naming an app is how a reflex reaches *into* one while '
+        + 'is running. Naming an app is how a reaction reaches *into* one while '
         + 'it runs - "Put an app on a position" needs this, and so does '
         + 'anything meant for that app and nothing else.' }),
     ]);
@@ -1480,13 +1514,14 @@ export class ConfigMenu {
         }
         this.model.actions[next] = this.model.actions[name];
         delete this.model.actions[name];
-        for (const mode of this.model.modes || []) {
-          for (const gesture of GESTURES) {
-            if (mode[gesture.key] === name) mode[gesture.key] = next;
-          }
-          for (const state of mode.states || []) {
-            if (state && state.action === name) state.action = next;
-          }
+        // Every slot in one walk (TODO 102). This was a hand-written list -
+        // gestures and a signal light's positions - and it quietly missed
+        // hooks, a Notice's outcomes, a reaction's `then` and a sequence's
+        // steps, so renaming from the editor could dangle exactly the
+        // references the parser then warned about. The list of usages and the
+        // list of things to rewrite are the same list.
+        for (const ref of actionRefs(this.model.modes, this.model.reflexes, this.model.actions)) {
+          if (ref.owner[ref.key] === name) ref.owner[ref.key] = next;
         }
         this._renderActionPool();
         this._renderModes();
@@ -1497,6 +1532,17 @@ export class ConfigMenu {
     const summary = el('span', {
       className: 'menu-hint',
       textContent: describeAction(this.model.actions[name]),
+    });
+
+    // The same thing the look pool's row says, asked of the second pool
+    // (TODO 102): editing a shared action changes it everywhere, and that has
+    // to be visible before the edit. An entry nothing points at is worth
+    // saying too - it is either about to be used or forgotten.
+    const usedBy = actionUsedBy(name, this.model.modes, this.model.reflexes, this.model.actions);
+    const used = el('span', {
+      className: usedBy.length ? 'menu-hint' : 'menu-hint empty',
+      textContent: usedBy.length ? `used by ${usedBy.join(', ')}` : 'not used anywhere yet',
+      title: usedBy.length ? 'Editing this action changes it everywhere it is used.' : '',
     });
 
     const edit = el('div', { className: 'gesture-fields' });
@@ -1544,6 +1590,7 @@ export class ConfigMenu {
     return el('div', { className: 'gesture-row' }, [
       el('div', { className: 'gesture-head' }, [nameInput, kind, remove]),
       summary,
+      used,
       edit,
     ]);
   }
@@ -1707,6 +1754,8 @@ export class ConfigMenu {
     }
     try {
       const res = await this.api.validate(this.model);
+      this.warningDetails = res.warning_details || [];
+      this._markWarnings();
       this._showResult(
         res.warnings.length ? 'warn' : 'ok',
         res.warnings.length ? `Will apply with warnings:\n${res.warnings.join('\n')}` : 'Looks good - ready to save.',
@@ -1724,6 +1773,7 @@ export class ConfigMenu {
     }
     try {
       const res = await this.api.put(this.model);
+      this.warningDetails = res.warning_details || [];
       // Re-seed from the normalized server result so the form shows exactly
       // what was stored (per-key fallbacks included).
       this.model = structuredClone(res.effective);
@@ -1750,6 +1800,22 @@ export class ConfigMenu {
     }
   }
 
+  /**
+   * Put the parser's complaints on the fields they are about (TODO 62).
+   *
+   * The index is the join: a warning carries `modes[3]`, and the editor on
+   * screen renders `this.selectedMode`, so this is the only place that can
+   * pair them - the editor knows nothing about the config it sits in, and the
+   * warning knows nothing about which mode is open.
+   */
+  _markWarnings() {
+    if (!this.detailEditor || !this.selectedMode) return;
+    const index = this.model.modes.indexOf(this.selectedMode);
+    this.detailEditor.showWarnings(
+      (this.warningDetails || []).filter((w) => w && w.mode === index),
+    );
+  }
+
   _showResult(cls, text) {
     this.resultEl.className = `menu-result ${cls}`;
     this.resultEl.textContent = text;
@@ -1769,6 +1835,8 @@ const mounts = {
   // Optional for the same reason: the offline editor has no App page, and a
   // missing mount means one section fewer, not a broken menu.
   apps: document.getElementById('panel-apps'),
+  // The pool page (TODO 102). Optional for the same reason `apps` is.
+  actions: document.getElementById('panel-actions'),
   lights: document.getElementById('panel-lights'),
   device: document.getElementById('panel-device'),
   bar: document.getElementById('menu-bar'),

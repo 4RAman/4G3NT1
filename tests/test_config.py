@@ -6,7 +6,6 @@ import pytest
 from aibutton.config import (
     TRIGGER_TYPES,
     ActionsBehavior,
-    AlarmBehavior,
     AlwaysActivation,
     AppConfig,
     ConfigManager,
@@ -18,19 +17,25 @@ from aibutton.config import (
     LogAction,
     ManualActivation,
     MetronomeBehavior,
+    MidiAction,
     Mode,
     NamedAction,
+    NoticeBehavior,
     PomodoroBehavior,
     ReadoutAction,
     ScheduleActivation,
+    SequenceAction,
     StopwatchBehavior,
     TimerToggleAction,
     WebhookAction,
     WindowActivation,
     as_dict,
+    blank_midi_ports,
     bound_triggers,
+    iter_actions,
     load_config,
     parse_config,
+    parse_with_details,
     parse_with_warnings,
 )
 from aibutton.sequencer import Sequence, Stop
@@ -426,9 +431,12 @@ def test_unless_logged_today_invalid_skips_mode(tmp_path):
     assert [m.name for m in cfg.modes] == ["Good"]
 
 
-# --- alarm template -----------------------------------------------------
+# --- notice template, and the alarm/reminders migration into it (TODO 84) --
 
 def test_alarm_mode_parses(tmp_path):
+    # "alarm" is a migrated template name: it still parses, into the same
+    # NoticeBehavior the "notice" template itself produces, with urgent=True
+    # and chime=True fixed (an alarm had no way to render any other way).
     cfg = load_config(write(tmp_path, {
         "modes": [
             {
@@ -444,12 +452,13 @@ def test_alarm_mode_parses(tmp_path):
         ],
     }))
     mode = cfg.modes[0]
-    assert mode.template == "alarm"
+    assert mode.template == "notice"  # migrated - always the canonical name out
     assert isinstance(mode.activation, ScheduleActivation)
     assert mode.activation.at == time(7, 0)
     assert mode.activation.days == frozenset({0, 1, 2, 3, 4})
-    assert mode.behavior == AlarmBehavior(
-        message="Good morning!", label="Wake up", snooze_minutes=9.0, dismiss_event="woke_up",
+    assert mode.behavior == NoticeBehavior(
+        message="Good morning!", label="Wake up", log_as="woke_up",
+        snooze_minutes=9.0, urgent=True, chime=True,
     )
 
 
@@ -460,7 +469,9 @@ def test_alarm_mode_defaults(tmp_path):
         ],
     }))
     mode = cfg.modes[0]
-    assert mode.behavior == AlarmBehavior()
+    # No dismiss_event was set, so log_as falls back to the mode's own name
+    # (TODO 84) - the only field an alarm's own bare defaults do not produce.
+    assert mode.behavior == NoticeBehavior(log_as="Bare", urgent=True, chime=True)
     assert mode.activation.days is None  # every day
 
 
@@ -476,7 +487,7 @@ def test_alarm_mode_bad_at_is_skipped(tmp_path):
 
 
 def test_alarm_invalid_snooze_falls_back_per_key(tmp_path):
-    # Alarm fields fall back per-key (the mode survives) - unlike an actions
+    # Notice fields fall back per-key (the mode survives) - unlike an actions
     # mode where a bad action is dropped from the gesture map.
     cfg = load_config(write(tmp_path, {
         "modes": [
@@ -488,6 +499,82 @@ def test_alarm_invalid_snooze_falls_back_per_key(tmp_path):
     mode = cfg.modes[0]
     assert mode.behavior.snooze_minutes == 0  # default
     assert mode.behavior.message == "Up"      # kept
+
+
+def test_reminder_mode_parses(tmp_path):
+    # "reminders" is the other migrated template name: same NoticeBehavior,
+    # urgent=False and chime from the old field, fixed regardless of
+    # timeout_minutes - a reminder set to wait forever must still render
+    # gently, not start looping the alarm tone.
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {
+                "name": "Drink water",
+                "template": "reminders",
+                "activation": {"type": "schedule", "at": "10:00"},
+                "message": "Hydrate",
+                "chime": False,
+                "cleared_event": "drank",
+                "timeout_minutes": 0,
+            },
+        ],
+    }))
+    mode = cfg.modes[0]
+    assert mode.template == "notice"
+    assert mode.behavior == NoticeBehavior(
+        message="Hydrate", log_as="drank", urgent=False, chime=False,
+        timeout_minutes=0.0,
+    )
+
+
+def test_reminder_mode_defaults(tmp_path):
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {"name": "Nudge", "template": "reminders",
+             "activation": {"type": "schedule", "at": "06:00"}},
+        ],
+    }))
+    mode = cfg.modes[0]
+    # No cleared_event was set -> log_as falls back to the mode's own name;
+    # the old reminder default of 5 minutes survives the migration exactly.
+    assert mode.behavior == NoticeBehavior(
+        log_as="Nudge", urgent=False, chime=True, timeout_minutes=5.0,
+    )
+
+
+def test_reminder_never_gets_a_snooze_even_if_the_key_is_present(tmp_path):
+    # A reminder never offered a snooze; a stray snooze_minutes key (e.g. from
+    # copy-pasting an alarm) is ignored on migration exactly as it was before.
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {"name": "Nudge", "template": "reminders",
+             "activation": {"type": "schedule", "at": "06:00"},
+             "snooze_minutes": 9},
+        ],
+    }))
+    assert cfg.modes[0].behavior.snooze_minutes == 0
+
+
+def test_notice_mode_parses(tmp_path):
+    cfg = load_config(write(tmp_path, {
+        "modes": [
+            {
+                "name": "Check in", "template": "notice",
+                "activation": {"type": "schedule", "at": "09:00"},
+                "message": "Still there?", "log_as": "checkin",
+                "timeout_minutes": 15, "snooze_minutes": 0,
+                "urgent": True, "chime": True,
+                "on_missed": {"action": "webhook", "url": "http://x"},
+            },
+        ],
+    }))
+    mode = cfg.modes[0]
+    assert mode.template == "notice"
+    assert mode.behavior == NoticeBehavior(
+        message="Still there?", log_as="checkin", timeout_minutes=15.0,
+        urgent=True, chime=True,
+        on_missed=WebhookAction(url="http://x"),
+    )
 
 
 # --- template <-> activation mismatch -----------------------------------
@@ -734,7 +821,9 @@ def test_as_dict_roundtrips_actions_and_alarm(tmp_path):
     assert dumped["modes"][0]["activation"]["between"] == ["22:00", "06:00"]
     assert dumped["modes"][0]["activation"]["days"] == ["sat", "sun"]
     assert dumped["modes"][1]["unless_logged_today"] == "meds_taken"
-    assert dumped["modes"][2]["template"] == "alarm"
+    # Migrated in as "alarm", always written back out as "notice" (TODO 84) -
+    # the same one-way migration Pomodoro's seconds-only round-trip documents.
+    assert dumped["modes"][2]["template"] == "notice"
     assert dumped["modes"][2]["activation"]["at"] == "07:00"
     assert parse_config(dumped) == cfg  # exact round-trip
 
@@ -749,7 +838,7 @@ def test_constructed_mode_roundtrips():
         Mode(
             name="Wake up",
             activation=ScheduleActivation(at=time(7, 0), days=frozenset({0, 1, 2, 3, 4})),
-            behavior=AlarmBehavior(message="Wake up", snooze_minutes=9, dismiss_event="woke_up"),
+            behavior=NoticeBehavior(message="Wake up", snooze_minutes=9, log_as="woke_up"),
         ),
         Mode(
             name="Default",
@@ -1356,3 +1445,205 @@ def test_no_two_top_level_definitions_share_a_name():
                     "silently replaces the earlier one"
                 )
                 seen.add(node.name)
+
+
+# --- one walk over every action in the config -------------------------------
+# `iter_actions` exists so "which actions do X?" is asked once. The tests that
+# matter are about *coverage* - an action hiding in a place the walk forgets is
+# exactly the bug it was written to prevent - and about the two rules that are
+# not obvious: a name is not followed, and a sequence's steps are.
+
+
+def _every_home_for_an_action() -> dict:
+    """One config with a `midi` action in every place a config can hold one."""
+    return {
+        "actions": {"shared": {"action": "midi", "port": "", "number": 1}},
+        "looks": {"red": {"style": "solid", "color": "#ff0000"}},
+        "modes": [
+            {"name": "Home", "template": "actions", "activation": {"type": "always"},
+             "short_press": {"action": "midi", "port": "", "number": 2},
+             "double_tap": "shared"},
+            {"name": "Desk", "template": "control", "activation": {"type": "manual"},
+             "short_press": {"action": "midi", "port": "", "number": 3}},
+            {"name": "Sig", "template": "signal", "activation": {"type": "manual"},
+             "states": [{"name": "On", "color": "#ff0000",
+                         "action": {"action": "midi", "port": "", "number": 4}}]},
+            {"name": "Ring", "template": "alarm",
+             "activation": {"type": "schedule", "at": "07:00"},
+             "grace_minutes": 5,
+             "on_timeout": {"action": "midi", "port": "", "number": 5}},
+            {"name": "Count", "template": "counter", "activation": {"type": "manual"},
+             "event": "habit",
+             "on_exit": {"action": "sequence", "steps": [
+                 {"action": "midi", "port": "", "number": 6},
+                 {"action": "midi", "port": "4G3NT", "number": 7, "wait_s": 0.05},
+             ]}},
+        ],
+        "reflexes": [
+            {"name": "heard", "then": {"action": "midi", "port": "", "number": 8}},
+        ],
+    }
+
+
+def test_the_walk_reaches_every_place_an_action_can_live():
+    """The pool, a gesture map, a control surface, a signal position, an
+    alarm's timeout, a hook, a sequence step and a reflex - eight homes, and a
+    walk that misses one silently under-reports whatever asked it."""
+    config = parse_config(_every_home_for_an_action())
+    found = {where for where, action in iter_actions(config)}
+    assert any("actions['shared']" in w for w in found)
+    assert any("'Home'.short_press" in w for w in found)
+    assert any("'Desk'.short_press" in w for w in found)
+    assert any("'Sig'.states[0]" in w for w in found)
+    # Migrated input ("grace_minutes"/"on_timeout", the old alarm field names)
+    # parses into NoticeBehavior.on_missed - iter_actions walks by the
+    # dataclass field name, not by whatever the raw JSON called it.
+    assert any("'Ring'.on_missed" in w for w in found)
+    assert any("'Count'.on_exit" in w for w in found)
+    assert any("step 1" in w for w in found)
+    assert any("reflex 'heard'" in w for w in found)
+
+
+def test_a_named_action_is_reported_where_it_is_defined_not_where_it_is_used():
+    """A shared action is one thing to fix, in one place. Following the name
+    would report it once per binding and send you to the binding, which is the
+    copy you do not want to edit."""
+    config = parse_config(_every_home_for_an_action())
+    walked = list(iter_actions(config))
+    kinds = {where: type(action).__name__ for where, action in walked}
+    assert kinds["mode 'Home'.double_tap"] == "NamedAction"
+    # ...and the thing it names appears exactly once, under the pool.
+    pooled = [w for w, a in walked if isinstance(a, MidiAction) and a.number == 1]
+    assert pooled == ["actions['shared']"]
+
+
+def test_a_sequence_yields_itself_and_its_steps():
+    """A step is an action that really runs, so anything auditing actions has
+    to see one. It needs no recursion: sequences do not nest."""
+    config = parse_config(_every_home_for_an_action())
+    steps = [w for w, a in iter_actions(config) if "step" in w]
+    assert len(steps) == 2
+    assert any(w.endswith("on_exit") for w, a in iter_actions(config)
+               if isinstance(a, SequenceAction))
+
+
+def test_the_walk_survives_a_template_holding_no_actions_at_all():
+    config = parse_config({"modes": [
+        {"name": "Home", "template": "actions", "activation": {"type": "always"},
+         "short_press": {"action": "log", "event": "x"}},
+        {"name": "Watch", "template": "stopwatch", "activation": {"type": "manual"}},
+    ]})
+    assert [w for w, _ in iter_actions(config)] == ["mode 'Home'.short_press"]
+
+
+# --- an empty MIDI port means "wherever, then" ------------------------------
+
+
+def test_a_blank_midi_port_is_reported_when_the_machine_offers_a_choice():
+    """The evening this cost: five MCU bindings with `"port": ""`, every note
+    going to Microsoft GS Wavetable Synth, and nothing failing."""
+    config = parse_config(_every_home_for_an_action())
+    found = blank_midi_ports(config, ["Microsoft GS Wavetable Synth", "4G3NT"])
+    # Seven blanks; the eighth midi action names a port and is not one.
+    assert len(found) == 7
+    assert not any("step 2" in where for where in found)
+
+
+def test_one_output_means_blank_is_not_ambiguous():
+    """On a machine with one MIDI output, blank is the only thing it could
+    mean - warning there would be noise on exactly the setup the default was
+    written for."""
+    config = parse_config(_every_home_for_an_action())
+    assert blank_midi_ports(config, ["4G3NT"]) == ()
+    assert blank_midi_ports(config, []) == ()
+
+
+def test_a_named_port_is_never_reported():
+    config = parse_config({"modes": [
+        {"name": "Home", "template": "actions", "activation": {"type": "always"},
+         "short_press": {"action": "midi", "port": "4G3NT", "number": 94}},
+    ]})
+    assert blank_midi_ports(config, ["GS Synth", "4G3NT"]) == ()
+
+
+def test_whitespace_is_not_a_port():
+    """A port of spaces matches the same way an empty one does - `match_port`
+    strips - so it has to read as blank here too."""
+    config = parse_config({"modes": [
+        {"name": "Home", "template": "actions", "activation": {"type": "always"},
+         "short_press": {"action": "midi", "port": "   ", "number": 94}},
+    ]})
+    assert blank_midi_ports(config, ["GS Synth", "4G3NT"]) == ("mode 'Home'.short_press",)
+
+
+# --- warnings that know where they came from (TODO 62) ---------------------
+# The editor could only ever print these into a banner the next Save
+# overwrote, because a warning was a plain sentence and the sentence threw the
+# location away. What matters here is that the location is *derived from the
+# log record's first argument* rather than parsed back out of the message -
+# and that a warning it cannot place is still a warning.
+
+
+def test_a_warning_carries_the_mode_and_the_field_it_is_about():
+    _, found = parse_with_details({"modes": [
+        {"name": "Home", "template": "actions", "activation": {"type": "always"},
+         "short_press": {"action": "midi", "channel": 99, "number": 1},
+         "double_tap": {"action": "log", "event": "ok"}},
+    ]})
+    placed = [(w.mode, w.key) for w in found]
+    assert (0, "short_press") in placed
+
+
+def test_the_index_is_the_mode_s_position_as_written():
+    """The join the editor makes: it holds the same list, so an index is the
+    one handle both ends already agree on."""
+    _, found = parse_with_details({"modes": [
+        {"name": "Home", "template": "actions", "activation": {"type": "always"},
+         "short_press": {"action": "log", "event": "ok"}},
+        {"name": "W", "template": "stopwatch", "activation": {"type": "manual"},
+         "log_as": "w", "ladder": {"rungs": "nope"}},
+    ]})
+    ladder = [w for w in found if w.key == "ladder"]
+    assert ladder and ladder[0].mode == 1
+
+
+def test_a_complaint_about_no_mode_at_all_is_still_reported():
+    """`mode: None` is a normal answer, not a failure - and the sentence has
+    to survive, because the Save bar is where it will be read."""
+    _, found = parse_with_details({"nonsense": 1})
+    unplaced = [w for w in found if w.mode is None]
+    assert unplaced and any("nonsense" in w.message for w in unplaced)
+
+
+def test_the_message_is_exactly_what_the_string_form_says():
+    """Two shapes of one complaint, never two complaints - the API returns
+    both from one parse, and a divergence would be a warning that reads
+    differently depending on which half of the page you look at."""
+    raw = {"modes": [
+        {"name": "Home", "template": "actions", "activation": {"type": "always"},
+         "short_press": {"action": "midi", "channel": 99, "number": 1},
+         "double_tap": {"action": "log", "event": "ok"}},
+    ]}
+    _, strings = parse_with_warnings(raw)
+    _, structured = parse_with_details(raw)
+    assert [w.message for w in structured] == strings
+
+
+def test_a_location_is_read_from_the_argument_not_from_the_sentence():
+    """The whole reason this is safe: every one of these calls passes `where`
+    first, so there is no formatted string to parse back. A message that
+    merely *mentions* a mode elsewhere must not be misplaced onto it."""
+    _, found = parse_with_details({"modes": [
+        {"name": "Home", "template": "actions", "activation": {"type": "always"},
+         "short_press": {"action": "enter_mode", "target": "modes[0].nope"}},
+    ]})
+    # Nothing here claims to be about a field of mode 0 by accident.
+    assert all(w.key != "nope" for w in found)
+
+
+def test_parse_with_details_returns_the_same_config():
+    raw = {"modes": [
+        {"name": "Home", "template": "actions", "activation": {"type": "always"},
+         "short_press": {"action": "log", "event": "ok"}},
+    ]}
+    assert as_dict(parse_with_details(raw)[0]) == as_dict(parse_config(raw))

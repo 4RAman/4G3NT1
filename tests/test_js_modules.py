@@ -27,6 +27,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 JS_TESTS = ROOT / "tests" / "js"
+STATIC = ROOT / "aibutton" / "web" / "static"
 
 # Every .test.mjs, named individually rather than handed to node as a
 # directory: `node --test <dir>` resolves the path as a module on Windows and
@@ -61,3 +62,29 @@ def test_javascript_module(name):
     assert result.returncode == 0, (
         f"{name} failed:\n{result.stdout}\n{result.stderr}"
     )
+
+
+# --- does it even parse? ----------------------------------------------------
+# Cheaper than any test here and it caught nothing for the same reason it was
+# never written: the modules with logic are imported by tests/js, and the rest
+# are only ever parsed by a browser. A stray apostrophe in a hint string in
+# schema.js broke the whole editor with one console line and no failing test.
+
+
+@needs_node
+@pytest.mark.parametrize("name", sorted(p.name for p in STATIC.glob("*.js")))
+def test_a_static_module_parses(name, tmp_path):
+    """Every browser module is valid ES, checked as ES.
+
+    **`node --check` on a `.js` file is not this check.** With no package.json
+    saying otherwise node treats the file as ambiguous, and a real syntax error
+    exits 0 - which is how a schema.js that could not load passed its check.
+    The extension is what decides the parser, so the file is copied to `.mjs`
+    first. Copied rather than renamed: these are the files the service serves.
+    """
+    target = tmp_path / (Path(name).stem + ".mjs")
+    target.write_bytes((STATIC / name).read_bytes())
+    result = subprocess.run(
+        [node, "--check", str(target)], capture_output=True, text=True,
+    )
+    assert result.returncode == 0, f"{name} does not parse:\n{result.stderr}"

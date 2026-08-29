@@ -9,12 +9,33 @@ roadmap, not here. **0a** and **0c** are the exceptions: they are Stage-2 work
 A new takeover written as a state machine over `(state, event, now)` will port
 to the on-device runtime; one that awaits the device directly gets rewritten.
 
+Finished items are compressed and moved to
+[TODO_FINISHED.md](TODO_FINISHED.md) — this file stays a list of what's left.
+
 ## Current hardware state
 
-**Flashed to 0.6.1**, re-soldered 2026-08-21 onto **GPIO10** (`BUTTON_PIN`) and
-**GPIO12** (`NEOPIXEL_PIN`) — both plain S3 GPIOs, so holding the button through
-a reset is safe again. Wiring detail is in
+**Flashed to 0.8.0** (2026-08-29), re-soldered 2026-08-21 onto **GPIO10**
+(`BUTTON_PIN`) and **GPIO12** (`NEOPIXEL_PIN`) — both plain S3 GPIOs, so
+holding the button through a reset is safe again. Wiring detail is in
 [firmware/hardware.py](firmware/hardware.py).
+
+**The switch is off the board as of 2026-08-29.** The owner sat on the button,
+it disconnected, and the switch was then removed and desoldered. BLE, the LED
+and the host all work; a physical press does nothing, which is exactly what a
+missing switch looks like — **0c** is the re-solder.
+
+**The board's own BOOT button is a second input as of firmware 0.8.0** (TODO
+**89**, flashed 2026-08-29), always on and in parallel with `BUTTON_PIN`, so
+the button works with nothing soldered to it at all. In PowerShell the glob
+has to be the shell's, because neither PowerShell nor mpremote expands it for
+a native command:
+
+```powershell
+./.venv/Scripts/python -m mpremote cp (Get-ChildItem firmware/*.py) : + reset
+```
+
+Press it while the board is *running*, never while it starts: GPIO0 held low
+at power-on is download mode.
 
 Two things that will otherwise cost you a session:
 
@@ -57,12 +78,18 @@ guessable and all of it is needed again for **77**'s test.
 
 Each numbered item stands alone: context, the files involved, and a definition
 of done, so it can be picked up cold. **Numbers are never reused or
-renumbered** — this file, CLAUDE.md, ROADMAP.md and the commit log all cite
-them, which is why the sprint starts at 0a and has gaps.
+renumbered** — this file, TODO_FINISHED.md, CLAUDE.md, ROADMAP.md and the
+commit log all cite them, which is why the sprint starts at 0a and has gaps.
+A number you're looking for and can't find here is almost always in
+[TODO_FINISHED.md](TODO_FINISHED.md) or the Parking lot below.
 
 A rule governing *future* code belongs in [CLAUDE.md](CLAUDE.md); this file
-records the decision and points at it. Shipped items are compressed to the
-choices that still bind.
+records the decision and points at it. **When an item ships with nothing left
+open under its number, move its whole write-up to
+[TODO_FINISHED.md](TODO_FINISHED.md) in the same commit**, compressed to the
+choices that still bind. An item with any open thread — a hardware test not
+yet run, a "still open" sub-question — stays here whole, even if most of it
+has shipped; don't split one item across both files.
 
 Before touching code: read [CLAUDE.md](CLAUDE.md).
 
@@ -73,7 +100,7 @@ That line is what turned one authorised run into three in a single session, at
 them, hand over the command, and let the person paying decide when to spend it.
 
 ```bash
-.venv/Scripts/python -m pytest -q
+./.venv/Scripts/python -m pytest -q
 ```
 
 Only one instance may run (BLE allows a single central). If you need to restart
@@ -94,9 +121,16 @@ real button.
 | **A naive-user run** | not started; unblocked since **14**, and **47** is the desk-bound rehearsal for it - three personas walked the shell, three dead ends fixed, fifteen improvements as **54-68** |
 | **24-hour soak** | not started. The service has now sat up for 12 h unattended and **an alarm rang for seven of them** with the button disconnected - not a soak, but the first evidence of what one would find |
 
-**Nothing left is blocked on design.** What remains is hardware time (**0c**,
-the soak, walking Signal) and one person sitting down with the button (**14**'s
-naive-user run). No amount of code moves those three.
+**Nothing left is blocked on design** *for Stage 2*. What remains of the gates
+is hardware time (**0c**, the soak, walking Signal) and one person sitting down
+with the button (**14**'s naive-user run). No amount of code moves those three.
+
+**Beyond the gates, that changed on 2026-08-29**: **90** and **97** both turn
+on whether the brain moves onto the device (Stage 3) before a phone app or a
+product exists, and **96** is blocked on a secret store that has not been
+designed. Those are decisions, not work.
+
+*(✔ rows are shipped in full — detail in [TODO_FINISHED.md](TODO_FINISHED.md).)*
 
 ## Six bodies of work, not twenty items
 
@@ -109,201 +143,94 @@ what to do next. This is the other view.
 | **The light as a language** — ladder, stop list, one primitive | 19 ✔, **36** ✔, 41 ✔ | **Done.** 19c closed the last thread; nothing else has a fraction to ramp over until `GESTURE_HOLD` (**29**) |
 | **The gesture engine** — N taps, hold levels | 0b·2 ✔, 28 ✔ | Taps done. Hold levels need firmware — the cheap half of **29** |
 | **Composition** — hooks, session summaries | 23 ✔, **31** ✔, **32** ✔ | Done |
-| **Actions as a first-class idea** | 30a ✔, 33 ✔, **34** | The pool and the sequence shipped; app documents (**34**) are what is left |
-| **Reach and hosting** — launcher, ten apps, remote UI | 0a ✔, 7 ✔, **8**, **40**, 42 ✔, **43** | The page works at phone width (42); reaching it is 8(d), an install not a feature. **40** and **43** are both "where does the host live", answered differently |
+| **Actions as a first-class idea** | 30a ✔, 33 ✔, 34 ✔ | **Done.** The pool, the sequence and app documents with `set_value` - all three halves of **30** |
+| **Reach and hosting** — launcher, ten apps, remote UI | 0a ✔, 7 ✔, **8**, **40**, 42 ✔, **43**, **90** | The page works at phone width (42); reaching it is 8(d), an install not a feature. **40**, **43** and **90** are all "where does the host live", answered differently — and **90** is the one that forces the choice |
+| **Reaching the rest of the world** — integrations, credentials, polling | **96**, **99**, **100**, **93** | New 2026-08-29. **100** is the finding that reorders it: the best first integrations need no credential, so they are not blocked on **96**'s secret store |
+| **Becoming a product** — security, manufacturing, the pitch | **97**, **98**, ROADMAP Stage 4/5 | New 2026-08-29, and the honest answer today is "not yet". **97** is a map with owners missing; **98** says the demo is the spec |
 | **Reaching other software** — OSC, MIDI out, clock in | 22 ✔, 24 ✔, **25** | **The outbound half is proven on real hardware** (2026-08-27): the button drives Studio One's transport. **25**'s remaining half is the DAW's Send To pointed back, which is **77**'s test |
-| **Saying a number** — ambient counting, count readout | 15 ✔, 17 ✔ | Only the human read test, on hardware |
+| **Saying a number** — ambient counting, count readout | 15 ✔, 17 ✔, **83**, **91**, **106** | The two-digit readout works; **91** lifts the 0-99 cap and adds Morse and binary, and **83** is the compiler all three share. **106** (the hour chime) is that compiler's second caller and needs no renderer of its own |
 | **Play** — timing and guessing games | 16 ✔ | Done for forgiving games; tight rhythm needs Stage 3 |
 | **The light as a show** — a playlist app, and the ring itself | 52a ✔, **52b** | The show ships on today's wire and cost no wire code; per-pixel (52b) is still a proposal |
 | **Getting around** — launcher, control surfaces, colour coding | 0a ✔, 26 ✔, 27 ✔, 28 ✔ | Only **26b**, an eyeball test |
-| **Power** — sleep, wake, deliberate off | **29** | Blocked on measuring what it draws |
-| **The shell and its vocabulary** — what things are called, where they sit | 46 ✔, 45 ✔, 48c ✔, 53 ✔, 47 ✔ | **Done.** The Events page grew its charts and the read-back ran against the finished shell; what it found is **54-68** |
+| **Power** — sleep, wake, deliberate off | **29**, **104**, **105** | **Unblocked on one half, 2026-08-29.** **104** splits a host-side *quiet mode* (no firmware, ships now) from 29's device deep sleep (still blocked on measurement), and **105** is what decides which notices may pierce it |
+| **The shell and its vocabulary** — what things are called, where they sit | 46 ✔, 45 ✔, 48c ✔, 53 ✔, 47 ✔, 54-68 ✔, 81 ✔, 82 ✔, 85 ✔, 86 ✔, 87 ✔, 88 ✔, 92 ✔, 101 ✔, 102 ✔, 103 ✔, 107 ✔ | **Done.** The imagined read-back closed with **62** and **65**; then the owner used it, and **81-88** is what that found — all shipped (**88** absorbed into **101**, which with **102** is one change: the Actions destination is what empties the Reflexes group) |
 | **The app paradigm** — an app installed once, holding many items | 48a ✔, 48c ✔, 49 ✔, 50 ✔, 51 ✔ | **Done.** The list groups by app, the page reports reachability, and an app's own page is now the app (51) rather than its settings. Nesting the *format* is parked as **48b**, with the measurement that put it there |
 
-| **Reflexes** — a circumstance, with an action attached | **70**, 71 ✔, 72 ✔, 73 ✔, 74 ✔, 75 ✔, **79** | **Done bar one source, 2026-08-27.** A `reflexes` list, `POST /api/reflex/{name}`, MIDI in, a one-field test on what arrives, dispatch beside the presses, and delivery into a running app. **79** (the media keys) is the only source left, and it is optional |
+| **Reflexes** — a circumstance, with an action attached | 70 ✔, 71 ✔, 72 ✔, 73 ✔, 74 ✔, 75 ✔, **79** | **Done bar one source, 2026-08-27.** A `reflexes` list, `POST /api/reflex/{name}`, MIDI in, a one-field test on what arrives, dispatch beside the presses, and delivery into a running app. **79** (the media keys) is the only source left, and it is optional |
 | **The DAW, both ways** — the button hears what the transport is doing | 22 ✔, 24 ✔, **25**, 73 ✔, **77**, **78**, **80** | **25 stopped being a design problem when 73 landed**: MCU is two-way, so "recording" is a fact the DAW sends rather than a guess, and a signal light already follows it. **77** puts that on a control surface, **78** is the state machine, and **80** asks why a user has to install loopMIDI at all |
 | **Reading it back** — what fifteen minutes as someone else turns up | 42 ✔, 47 ✔, **54-68** | The walk is done and its dead ends are fixed; the improvements are fifteen separate items, none of them blocking |
 
 Outside the table: **0c** is hardware and gates nothing but its own
 verification; **18** (Notion) is process and is parked.
 
+*(✔ entries are shipped in full — detail in [TODO_FINISHED.md](TODO_FINISHED.md).)*
+
 ## Start here next session
 
-Rewritten 2026-08-27 at the end of that session, so a cold one does not have
-to reconstruct it.
+**Rewritten 2026-08-29** after moving every fully-shipped item out to
+[TODO_FINISHED.md](TODO_FINISHED.md). Nothing below is blocked on an
+undecided question — ROADMAP D10 (a reflex is an object, not a field on a
+mode) was the last one, and **70** in TODO_FINISHED.md has the reasoning if
+you need it.
 
-**Nothing is blocked on a decision.** ROADMAP **D10** was the last open
-question and it was answered on 2026-08-26: **a reflex is an object, not a
-field on a mode** — because most reflexes start no app at all, and a field
-cannot express "the DAW began recording, so change the light". Read **70**
-first if reflexes are new to you; it is the umbrella and it explains why the
-rest are shaped as they are.
+### The DAW rig comes first — it's a desk, not an editor
 
-**Six items shipped 2026-08-27** — **71**, **72**, **73**, **74**, **75** and
-**33**. See Done for each. What they leave behind for
-everything below: `main`'s `inbound` queue and `wait_in_app`,
-`REFLEX_ACTIONS`, the pure `reflex_hears`/`reflex_matches` pair,
-`set_position`, `midi.decode`, and `SequenceAction`.
+**77**'s code shipped; what's left is the rig test: a second loopMIDI port,
+the DAW's Mackie Control **Send To** pointed at it, two reflexes on
+`note 95 velocity 127 / 0` scoped to the surface, then arming record *by
+clicking in Studio One* to watch the light go red. Don't start **78** (one
+press meaning record-or-stop, depending on what the DAW reports) before that
+test has run on real hardware — the whole design rests on MCU feedback
+actually arriving, and that's never been tested here. **80** (getting off
+loopMIDI entirely) waits on the same test, for the same reason: it's cheaper
+to debug the protocol conversation over a cable that already works.
 
-**The DAW works, in one direction, on real hardware.** On 2026-08-27 the
-button drove Studio One's transport over loopMIDI — which closes the outbound
-half of **25** and puts the control surface through the 10-apps gate. Two
-findings, both now in [README.md](README.md) and [MANUAL.md](MANUAL.md)
-because they cost an evening between them:
+### Low-hanging fruit
 
-- **An empty MIDI port means the first output on the machine**, which on
-  Windows is the built-in synth. The field is basic-tier now and says so.
-- **A DAW has to be told it has a Mackie Control.** Add the port as a
-  *keyboard* and the notes arrive, show in the monitor, record into tracks and
-  move nothing. This was the whole bug, and schema.js had warned about it in a
-  comment nobody reads while debugging.
-
-### Start with 77b — the code half of item 77
-
-*"77b" is this file's shorthand, not a numbered item: **77** is one item whose
-definition of done needs a real DAW, and this is the part of it that is code.*
-
-**It is small**, because the idea is already built:
-a signal light takes its position from the DAW over MIDI today (**74** +
-**73**). 77 is that on a *control surface* —
-
-- positions on the `control` template, each **naming a look** from the pool
-  (not carrying a colour: one control answers "what does this look like");
-- `run_control` adopting `wait_in_app`, so `set_position` reaches it exactly
-  as it reaches the signal light;
-- `resting()` painting the current position instead of a fixed LISTENING look
-  — *that is the whole rendering change*;
-- and the DoD's "says it is guessing": a surface with positions that **no
-  reflex can set** should say so on entry rather than showing position one as
-  if it were reported.
-
-**Then its test, which is the half code cannot do**: a second loopMIDI port,
-the DAW's Mackie Control **Send To** pointed at it, and a reflex pair on
-`note 95 velocity 127 / 0`. Arming record *by clicking in the DAW* should turn
-the light red. Everything on the button side of that is built and verified
-against a fake port.
-
-**Then 78** — one press meaning record-or-stop depending on the position. It
-is a state machine and should be recognised as one, and it says explicitly:
-do not start before 77 has run on real hardware. **33 removed its other
-blocker** (Stop, Stop is one sequence now).
+Nothing is currently queued here — the pick-up-cold list cleared out on
+2026-08-29 (**81, 82, 84, 85, 86, 92, 101, 102, 103, 107** all shipped and
+moved to TODO_FINISHED.md). Re-populate this at the next checkpoint (**10**).
 
 ### The rest, in the order I would take it
 
-- **80** — *the button should be the MIDI port*. New, and the owner's own
-  question: why does a user have to install loopMIDI? Read it before promising
-  anyone anything; the Windows BLE-MIDI caveat is the crux.
-- **A hardware sitting** closes two Stage-2 gates at once: walk **Signal** (the
-  last app that has never met the button), **26b**'s colour-coding eyeball, and
-  **0c**'s re-solder, at the same desk.
-- **14**'s naive-user run and the **24-hour soak** — neither has moved in four
-  sprints, and no amount of code moves them.
-- **Filler if a session stalls**: **65** (see a webhook's payload without
-  standing up a receiver), **62** (per-field parser warnings — needs structured
-  warnings from the backend first, so not the hour it looks), **79** (media
-  keys as a reflex source, optional), and the empty-port *parse-time warning*
-  under "Smaller, worth doing".
-- **34** (app documents) is the last open half of **30**, and the biggest
-  design-shaped thing left after 80.
+- **104 then 105** — long press at the root means sleep, then the tier that
+  decides what's allowed to interrupt it. 104 is bigger than it reads: three
+  real configs bind long press in a menu today, including the shipped
+  default scene, and all three need rewriting.
+- **84b** — fire or log a missed Notice window on reconnect. Needs its own
+  questions answered first (what counts as "offline", whether a host-only
+  action already fires with no device connected) — not low-hanging fruit.
+- **83 then 91, and 106 comes free after them** — the Morse look, then the
+  counter-as-pool, then the hour chime. One body of work: Morse, place-value
+  colours and binary are all *number → stop list*; 83's compiler is 91's
+  first scheme and 106's only requirement.
+- **99 with 100 in front of it** — a reflex that polls a URL, built to reach
+  the keyless endpoints (calendars, feeds) first since **96**'s secret store
+  doesn't exist yet.
+- **80** — *the button should be the MIDI port*. Waits on the DAW rig test
+  above.
+- **A hardware sitting** closes several threads at once: walk **Signal**
+  (the one app that's never met the button), **26b**'s colour-coding
+  eyeball, **0c**'s re-solder and three-level/load-ladder test, **89**'s
+  open GPIO10 question, and **77**'s rig test.
+- **14**'s naive-user run and the **24-hour soak** — neither has moved in
+  several sprints, and no amount of code moves them.
+- **Small, if a session stalls**: **79** (media keys as a reflex source —
+  its own recommendation is *don't, until something wants it*), **52b**
+  (per-pixel ring, a protocol proposal against a frozen v1), **109** (does a
+  stopwatch have a "fastest" — one field, needs an answer rather than code),
+  and the last crumb of **62** — warnings whose format string holds the key
+  rather than the `where`, one call-site edit each.
 
 **Known live state you may trip over:** the `no-store` header on `/static`
-needs a service restart to take effect — until then a browser will happily run
-a stale ES module graph, which looks exactly like your edit not having
+needs a service restart to take effect — until then a browser will happily
+run a stale ES module graph, which looks exactly like your edit not having
 happened. Priming the HTTP cache with `fetch(url, {cache: 'reload'})` per
 module before reloading is the workaround. And **the offline editor renders
 from a snapshot**: after `tools/build_editor.py`, navigate to the file again
 rather than reloading, or you will test the previous build.
 
-
 ## Sprint
-
-### 70. Reflexes — a circumstance, with an action attached
-
-**Asked for 2026-08-26, and named by the owner: these are reflexes.** Not
-signals, not triggers — and the word is load-bearing rather than decorative,
-because it says what the thing *is*. A reflex is **a circumstance or event with
-an action attached to it**, and the button acts on it without anyone pressing
-anything.
-
-**This is not a new architecture. It is the host-side half of one already
-decided.** [ARCHITECTURE.md](ARCHITECTURE.md)'s app runtime lists its event
-kinds as *"gesture · timer expiry · schedule fire · sync reply · **sensor**"*,
-and `Request` is described as answering "with an **event** the app can
-transition on". Inbound events are in the target design; nothing has ever
-produced one. ROADMAP's Stage 6 table says "sensors as activations, same slot
-as geofencing" in three separate rows, **and there is no such slot.** This
-builds it, on the host, years before any of that hardware.
-
-**Worked examples, the owner's own:** a plant's moisture sensor crossing a
-threshold rings an alarm; a DAW reporting that it has started recording changes
-what the light does (**77**); a script on the PC starts an app; media
-play/pause moves the button into a transport page (**79**).
-
-#### The decision this settles: a reflex is an object, not a field
-
-**ROADMAP D10 is answered, and the owner's definition is what answers it.**
-The earlier draft of this item made an inbound event a new *activation type* —
-a field on a mode, beside `schedule`. That was wrong, and the reason is in the
-word "reflex": *most reflexes do not start an app at all.* "When the DAW starts
-recording, make the light pulse red" enters no mode, logs nothing, and has no
-mode to be a field on. A field can only ever express "this app starts now",
-which is one of the things reflexes do and not the interesting one.
-
-So a reflex is a standalone object:
-
-```
-when    a circumstance — an arriving event, optionally with a test on it
-then    an action — any action the button already has
-```
-
-**And `then` being "any action the button already has" is the whole economy of
-this item.** `resolve_action` and `actions.execute()` already exist; a reflex
-firing `enter_mode` covers everything the activation-field design could do, and
-a reflex firing `osc`, `webhook`, `midi` or a **named action from the pool**
-covers everything it could not. Adding reflexes adds a source of events and
-**no new vocabulary of consequences.**
-
-**Scope: system-wide by default, app-scoped by exception.** The owner's read is
-right — most reflexes are about the button and the world, not about one app. So
-`reflexes` is a top-level list. An optional `while: <app name>` limits one to
-the times that app is open, which is what **77**'s transport lights want and
-what stops a DAW reflex repainting the light in the middle of a Pomodoro.
-
-#### Where a circumstance comes from
-
-Ranked, and the ranking is the recommendation:
-
-1. **HTTP — `POST /api/reflex/{name}`.** ✔ **71**, 2026-08-27. Near-zero code,
-   and it **subsumed almost everything**: anything that can make a request
-   drives the button, so the plant sensor, a cron job, Home Assistant, an
-   iPhone Shortcut (**39**) and any script arrive through one hole.
-2. **MIDI in** (**73**). ✔ 2026-08-27, and it is what item 25 had been waiting
-   for. `ClockListener` was reused rather than doubled: the backends hand over
-   all three bytes now and it reads the first.
-3. **OSC in**, the mirror of the `osc` action. Cheap.
-4. **OS media transport** (**79**) — possible, with caveats worth reading
-   before promising it.
-5. **MQTT** is the home-automation lingua franca and the one that costs a
-   dependency. **Not now** — a bridge posting to (1) is five lines, and the
-   `midi` precedent in CLAUDE.md says check what the platform already has
-   before taking a dependency for one feature.
-
-#### What does *not* change
-
-**Schedules stay where they are.** An alarm at 07:00 is a circumstance with an
-action attached and is therefore a reflex by this definition — and migrating
-`ScheduleActivation` into the reflex list would rewrite every config and scene
-for no new capability. The line to hold: **an activation says when an app may
-run; a reflex says what makes something happen.** An alarm's time is a property
-of that alarm, the way its message is. A reflex is for what a schedule cannot
-express — which is everything not on a clock, and every consequence that is not
-"start this app".
-
-There is real overlap and it is accepted knowingly. *Do not add a clock source
-to reflexes until something wants one an alarm cannot do.*
-
-**Split into build items 71–74, plus 77–79. Do not build the umbrella.**
-(**71**, **72** and **74** are done; the rest still hold.)
 
 ### 77. The DAW tells the button what it is doing, and the light says so
 
@@ -351,26 +278,35 @@ listens on, arming record **by clicking in the DAW, not by pressing the
 button** turns the light red; disarming turns it blue; and with no feedback
 port configured the surface says it is guessing rather than pretending to know.
 
-#### What is already done, as of 2026-08-27
+#### The code shipped 2026-08-28. What is left is the rig.
 
-Most of it. **The only code left is on the control surface**:
+**All four pieces are in** - `ControlBehavior.positions` (each **naming a
+look**, never carrying a colour), `run_control` on `wait_in_app`, `resting()`
+painting the current position, and `config.position_reporters` answering
+"can anything actually set one" so the surface says it is guessing rather
+than showing position one as a fact. Positions are optional and a surface
+without them is byte-for-byte the remote it was.
 
-- `set_position` exists and is delivered into a running app (**74**), and the
-  **signal light already renders a reported position** - shown, not announced,
-  because sending "record" back to the DAW that just told you it is recording
-  is a feedback loop.
-- **MIDI in works** (**73**): `note 95 velocity 127` and the same note at 0 are
-  one source and two opposite tests, verified against a fake port.
-- **The outbound half is verified on real hardware**: the button drives Studio
-  One's transport. What that run also established, and what this item's test
-  depends on, is that **the DAW must have the port added as a Mackie Control
-  device** - as a keyboard, every note arrives and nothing moves.
+Three decisions worth not re-litigating:
 
-So this item is: positions on the `control` template (each **naming a look**,
-never carrying a colour), `run_control` adopting `wait_in_app`, `resting()`
-painting the current position, and the "it is guessing" line when no reflex
-can set one. Then the test above, which needs **a second loopMIDI port** for
-the DAW's Send To - one cable per direction.
+- **A position names a look; it does not carry a colour.** The opposite of a
+  Signal position, because this template already answers "what does this look
+  like" through `MODE_LED_STATES["control"]`, and two controls for one
+  question is what CLAUDE.md forbids. A position with no look wears the page's
+  own LISTENING look - the existing fallback chain, unchanged.
+- **A reported position writes no row.** `log_as` here means "one command
+  sent" and its readout is a tally of those; counting an arrival as a command
+  would inflate the only number this app reports. A Signal logs both because
+  both are "the light was there", and that is a different question.
+- **"Guessing" is a walk over reflexes, not over MIDI ports.** A reflex is the
+  general answer - the HTTP endpoint reaches a position too - so the check is
+  `while == this app` plus an action that resolves to `set_position`.
+
+**What is left is the test, and it is all rig**: a second loopMIDI port, the
+DAW's Mackie Control **Send To** pointed at it, two reflexes on
+`note 95 velocity 127 / 0`, and arming record *by clicking in Studio One*.
+Documented in README ("The other direction") and MANUAL §7 for whoever sits
+down to it.
 
 ### 78. A control surface where the press depends on the position
 
@@ -431,7 +367,6 @@ Whatever is playing the media can already `POST /api/reflex/now_playing`, which
 is one line in a script, works on any OS, needs no hook and no dependency —
 the same argument that parks MQTT in **70**. Revisit if a real use appears that
 a script genuinely cannot serve.
-
 
 ### 80. The button should *be* the MIDI port — getting off loopMIDI
 
@@ -518,33 +453,840 @@ The point of that test is to prove the *protocol* conversation works - which
 notes, which velocities, which device type - and it is much cheaper to debug
 with a cable that already exists than through a new one being written.
 
-### 54-68. What the three-POV read-back found
+**83 and 84b are what's left of the shell read-back's second pass** — raised
+2026-08-29 alongside 81, 82, 84, 85, 86, 87 and 88, all of which shipped the
+same week and now live in [TODO_FINISHED.md](TODO_FINISHED.md).
 
-**Raised 2026-08-26 by item 47** (see Done), which walked the finished shell as
-three fixed personas. The bugs and dead ends it turned up were fixed in the
-same pass; these were fifteen further improvements, five per point of view,
-deliberately *not* one item - each stands alone and several are an hour.
-**54, 55, 56, 57, 58, 59, 60, 61, 63, 64, 66, 67 and 68 shipped 2026-08-26** -
-see Done. Two remain open: 62, 65.
+### 83. A Morse code look — *decided: it is a stop-list generator, not a drive*
 
-Nothing here is a bug. The page works; these are the places where it makes the
-reader do the work.
+**Asked 2026-08-29:** *"I see this fitting in the Sequence 'Driven By' — the
+user selects 'Morse Code Message', types the message, and the light plays it,
+with a playback speed."*
 
-#### (b) The tinkerer - edits JSON when annoyed
+**The message is right and the home is not, and it matters which.** `drive`
+answers *"what moves this stop list along"* — a clock, an app's `progress`, a
+metronome's `beats` — and it is sampled or walked against a number the app
+supplies. Morse supplies no such number: it is a fixed timeline, which is
+precisely what `drive: "clock"` already means. Putting it in `DRIVES` would
+add a fourth thing that is not the same kind of thing as the other three.
 
-- **62. Parser warnings appear once, on load, in the Save bar.** They are
-  per-key and they know which key. A dangling look or a bad ladder rung should
-  mark its own field, not print into a `<pre>` that the next Save overwrites.
-  **Harder than it reads**: `parse_config`'s warnings are plain log strings
-  (`record.getMessage()`), not `{mode, key}` pairs, so marking the right field
-  needs the backend to emit structured warnings first - not a client-side fix.
+**What Morse actually is: a way of writing a stop list.** A dot is on for one
+unit, a dash for three, the gap inside a letter is one, between letters three,
+between words seven — every one of those is a `Stop` with a `hold_s` and no
+fade. So this needs **no runtime at all**: it needs a pure compiler from text
+to `tuple[Stop, ...]`, and everything downstream (the walker, the flash floor,
+the device, the editor's preview) treats the result as the ordinary stop list
+it is. That also means it survives the move onto the device unchanged, which a
+new drive would not.
 
-#### (c) The developer - wiring the button into other software
+The shape:
 
-- **65. A webhook cannot be previewed or tested.** Every colour picker got
-  "Show on the button"; a webhook has no equivalent. An app's summary keys are
-  merged flat into the payload, and there is no way to see the result without
-  standing up a receiver.
+- `aibutton/morse.py` — pure, no imports from the package, like
+  [ramp.py](aibutton/ramp.py) and [ladder.py](aibutton/ladder.py) beside it.
+  `encode(message, unit_s, color) -> tuple[Stop, ...]`, plus the alphabet as
+  data. Unknown characters are **dropped with a warning, not guessed**.
+- A look-pool entry gains a `morse` shape beside `stops`: `{"morse": "SOS",
+  "wpm": 8, "color": "#ff0000"}`, expanded at parse time in `_parse_look`.
+  Stored as written and expanded on load, so the editor shows the message and
+  not two hundred stops.
+- `repeat` is the existing field and already means the right thing: a beacon
+  repeats, a one-shot announcement does not.
+
+**The catch, and it is the reason to write this down before building it.**
+`config.sequence_safe` floors every stop's dwell at half the flash period.
+With `min_flash_period_s` at its 3 Hz default that floor is 0.167 s, and the
+one-shot exemption (≤3 stops) cannot apply to a message. Morse's unit is
+`1.2 / wpm` seconds, so **the floor caps this at about 7 WPM** — and at the
+0.3 s currently configured here, about 8. That is slow for an operator and
+about right for a light a person reads by eye, so the honest answer is to cap
+`wpm` in the parser at what the floor allows, warn when a config asks for
+more, and let anyone who means it lower the flash floor deliberately the way
+that setting already allows. **Do not add an exemption**; the floor is doing
+exactly the job it exists for.
+
+**Done when**: a look can hold a message, the editor previews it on the
+button through the colour engine like any other stop list, the speed is
+capped against the live flash floor with a warning rather than clamped in
+silence, and `tests/` has the alphabet checked against a table.
+
+### 84b. Fire (or at least log) a missed window on reconnect, not just live
+
+**Raised 2026-08-29, while designing 84 above, and deliberately not built
+yet.** Today, if the service or the BLE connection is down at a Notice's
+scheduled time, `scheduler.due_alarm`'s 60-second window (`_FIRE_WINDOW`)
+simply passes and the occurrence is gone - no ring, no flash, and as of 84,
+still no log row, since nothing ever called `ring_notice` for it at all. A
+missed dead-man's-switch check-in during an outage currently looks identical
+to one nobody armed.
+
+The owner's own framing, two options rather than one required design:
+
+- **Catch up on reconnect**: if a window was missed while offline, ring/flash
+  immediately once the button/service is back, and start the miss-timeout
+  clock *then* rather than backdating it to the original time.
+- **Or, if that is turned off, still log/act host-side** even with the
+  *button* unreachable, since a webhook or a log row needs the PC online, not
+  the BLE link - "should be doable if the computer is online, right?"
+
+Real open questions, not yet decided:
+
+- **What counts as "offline"?** The service not running, BLE not connected,
+  or either - these are different failure modes with different recovery
+  points (a service restart replays from a cold `fired` set; a BLE drop
+  leaves the service's clock loop running the whole time).
+- **Does a host-only action fire with no device connected?** `on_missed`
+  today runs through the same `run_action`/`resolve_action` path every other
+  action does, which does not require the device for a webhook/log/OSC action
+  - so this may already work for the "still log/act" half; worth confirming
+  rather than assuming.
+- **How does `due_alarm`/`fired` need to change?** The 60-second window and
+  the per-occurrence `fired` set are sized for "the loop was always running
+  and ticking within a second," not for "the service was down for hours" -
+  catching up needs the scheduler to notice a *missed* occurrence, not just a
+  *due* one, which is a different question the current function was never
+  asked.
+
+**Not low-hanging fruit.** Needs the questions above answered before any code,
+the same way 84 itself needed the outcome-logging question answered first.
+
+### 89. The button stopped answering after the desolder *(hardware triage)*
+
+**Reported 2026-08-29**, after the owner sat on the button and then removed
+and desoldered the switch. BLE reconnects, the light follows the web UI, and a
+physical press does nothing.
+
+**What that already told us**: the firmware is running, the radio is up, the
+LED path is fine and the host is dispatching. The fault is on the **input**
+side alone.
+
+**And the first answer was never code.** `BUTTON_PIN` is 10 with the internal
+pull-up on and `ACTIVE_LOW`, so with no switch across it the pin reads 1 -
+"not pressed" - for ever. A desoldered switch and a button nobody is pressing
+are the same reading, and no firmware change makes a press happen.
+
+#### Shipped 2026-08-29: the BOOT button is a second input, always on
+
+Firmware **0.8.0**. `hardware.BOOT_BUTTON_PIN` (GPIO0, the switch the board
+already has) is polled in parallel with `BUTTON_PIN` and ORed **before** the
+debounce, so the two are one button: either is a press, every gesture works
+from either, and a press can move from one to the other mid-hold without
+becoming two. Nothing downstream knows there are two - no protocol change, and
+no capability bit, because a host would not act differently if it were told.
+
+Three decisions worth not re-litigating:
+
+- **Always on, not opt-in.** The whole value is being there on the day the
+  wired switch is not, which is a day nobody plans for. `None` turns it off.
+- **Read through `getattr` with defaults.** hardware.py is the one file people
+  edit and carry forward; an older copy missing these names must degrade to
+  "no BOOT button" rather than raising at startup, which on a headless board
+  is indistinguishable from a dead board.
+- **Deduped when it *is* the wired pin**, so a board whose only switch is on
+  GPIO0 opens one input rather than two.
+
+**The caveat ships with it and is in three places now**: GPIO0 held low at
+power-on or reset enters download mode, and the board then sits silent in the
+bootloader until it is physically replugged. Press it while the board is
+running, never while it starts.
+
+**Flashed to the real board 2026-08-29.** The code landing in the repo and the
+board actually running it were two separate steps - this closes the second
+one. The board is on 0.8.0 and the BOOT button works as a second input.
+
+#### Still open: is GPIO10 alive?
+
+The spare makes the button usable; it does not say whether the pin survived
+being sat on. Answer it at the same desk as **0c**'s re-solder:
+
+1. **Is a switch on GPIO10 at all?** If not, this is **0c**, not a bug.
+2. **Prove the pin.** With `main.py` interrupted (`mpremote exec` does that -
+   `reset` afterwards, see [CLAUDE.md](CLAUDE.md)), read
+   `Pin(10, Pin.IN, Pin.PULL_UP).value()` while shorting pin 10 to GND with a
+   jumper. 1 -> 0 proves the pin, the pull-up and the config in one move.
+3. **If it never reads 0**, `BUTTON_PIN` is one line and a reflash; any plain
+   S3 GPIO will do, and the header of
+   [hardware.py](firmware/hardware.py) says which are safe.
+
+**Done when**: the answer to (2) is written here.
+
+### 90-100. The whiteboard, 2026-08-29
+
+**Filed in one sitting by the owner**, and they are not one body of work: two
+are product strategy, two are integration policy, three are app-shaped, and
+one is a second client. What they share is that most of them are **bigger than
+they look**, so each says up front which part is decided and which is not.
+
+### 90. The iOS app — and the question it forces
+
+**Asked 2026-08-29**, with Xcode installed and the whiteboard cleared: an iOS
+app (Swift, yes - SwiftUI plus CoreBluetooth) that mirrors the current
+interface, talks to the button over BLE, and adds camera switching, Shortcuts,
+texts, incoming information and a find-my-phone.
+
+**Read 40, 43, 38 and 39 first.** This is item **40** ("a portable host")
+arriving with a name, and half of what is asked for is already scoped in 38
+and 39 and needs no app at all.
+
+#### The question, and it decides everything else
+
+**Every decision in this system is host-side.** The device detects and
+renders; rules, scheduler, modes and actions all live in
+[main.py](aibutton/main.py) and [config.py](aibutton/config.py). So an iOS app
+that talks BLE to the button is not a *view* of the button - it is a **second
+brain**, and writing it means reimplementing the parser, the mode machine and
+every action in Swift, then keeping the two in step for ever. That is the
+single largest fact about this request.
+
+Three ways out, and **the recommendation is (a) now and (c) as the real
+answer**:
+
+- **(a) A thin client over HTTP.** The app is a window onto the running
+  service - the web UI already works at phone width (**42**), and the REST API
+  is already the whole surface. Days, not months, and it needs no second
+  brain. **The cost is honest and must be said out loud: it does nothing when
+  the PC is off**, which is exactly the complaint 40 exists about.
+- **(b) A second host in Swift.** The button works with no PC. Also forks the
+  brain, permanently, and every future item ships twice.
+- **(c) Wait for Stage 3.** ARCHITECTURE.md's whole design is that the runtime
+  moves onto the device and the phone holds preferences and does the heavy
+  lifting. After that, an iOS app is a preferences editor plus a `Request`
+  fulfiller - which is a normal app, not a second implementation.
+
+So: **(a) is worth building now** (it is genuinely useful and nothing is
+wasted - the REST API is the same API the phone will use later), **(b) should
+not be built**, and (c) is what makes the app small.
+
+#### What the native capabilities actually cost, checked rather than assumed
+
+- **Camera shutter** is **38**, and needs no app: BLE HID volume-up is the
+  universal shutter on iOS. *Switching* front/back is not a HID key, so that
+  part does need the app and its own camera view.
+- **Shortcuts** is **39** and already works through a webhook. The native
+  route is **App Intents**, which is nicer and is a small addition once an app
+  exists.
+- **Sending a text: not possible from a third-party app.**
+  `MFMessageComposeViewController` pre-fills a message and the *user* taps
+  Send; there is no background or silent send on iOS, at any entitlement
+  level. Design around it (a pre-filled draft is still one tap) or use a
+  webhook to a service that can send.
+- **Find My iPhone: no public API.** Nothing third-party can trigger it.
+  What *is* achievable is our own app playing a loud sound when the button
+  reaches it, which needs the `bluetooth-central` background mode and state
+  restoration and works while iOS keeps the app alive. Useful, and **not the
+  same promise** - do not call it Find My.
+- **Receiving information** is the easy half: a CoreBluetooth central
+  subscribing to the gesture characteristic is the same conversation
+  [ble_device.py](aibutton/ble_device.py) already has.
+
+**Done when**: there is a decision recorded here about (a) vs (c), and if (a),
+an app that shows the config and fires a gesture. Not before the decision.
+
+### 91. The counter stops being an app
+
+**Asked 2026-08-29, and it is right:** *"Counter feels wrong. It is an app but
+I do not know what I would launch it for. Count should be an action -
+`counter_name` counts by x, x defaults to 1."*
+
+**Half of this shipped on 2026-08-29 and the ask may already be met.**
+`set_value` (**34**) is exactly "counter_name counts by x": name the app, name
+the slot, add 1 (or any number, negative included), from any gesture in any
+mode without entering anything. **Check that first** - the remaining question
+is whether the *template* should still exist.
+
+**The recommendation is a pool, not a template.** Counters become a top-level
+`counters` object beside `looks`, `actions` and `reflexes` - a name, a colour
+scheme for its readout, and nothing else - and `set_value` names one. That
+removes a takeover nobody launches, and it removes the oddity that a durable
+counter's number lives in a document keyed by a mode that exists only to hold
+it. It also fits **88**: an app kind with no items under it should not be in
+the nav.
+
+**Keep the takeover as a preset if anything wants it.** "Open a tally and
+press it up thirty times" is a real use (**15**); it just is not what the app
+list should lead with.
+
+#### The readout, which is the interesting half
+
+`sequencer.readout` today is tens-as-slow-pulses and units-as-quick, **capped
+at 0-99** (`_READOUT_MAX`). The ask is three schemes and no cap:
+
+1. **Morse.** Numbers are five symbols each and unambiguous - and this is
+   **83**'s compiler, reused. If 83 is built first this costs almost nothing.
+2. **Place-value colours.** A colour per decimal place (1s blue, 10s cyan,
+   100s green, 1000s yellow, user-editable and extendable), each place blinking
+   its digit 1-9 times, on a steady strobe. 1021 is yellow, cyan, cyan, blue.
+   **This is the existing scheme generalised** - two fixed places become N
+   configurable ones - so the shape is already right.
+3. **Binary**, two colours for 0 and 1. Cheap, and the third option.
+
+**All three are stop-list generators, which is the unifying point** and the
+same conclusion **83** reached about Morse: a number and a scheme go in, a
+`tuple[Stop, ...]` comes out, and everything downstream treats the result as
+the ordinary stop list it is. So this is one pure module with three functions,
+not three features. **The flash floor applies to all of them** - `readout`
+today is written to clear `SAFE_MIN_PERIOD_S / 2` by construction rather than
+lean on the clamp, and any new scheme has to do the same or say why.
+
+**Done when**: a number of any size can be read back in any of the three
+schemes, the scheme and its colours are configured on the counter rather than
+on each binding, and the tests are tables of `(value, scheme) -> stops`.
+
+### 93. DMX — *decided: Art-Net over UDP is an action, wired DMX is hardware*
+
+**Asked 2026-08-29: "DMX integrations possible?"** Yes, and the split is
+clean.
+
+- **Art-Net and sACN (E1.31) are DMX over UDP**, which is the shape
+  [osc.py](aibutton/osc.py) already has: a datagram that either leaves or does
+  not, no dependency, no reply. Every serious lighting desk, QLab, Resolume,
+  Chamsys and a £30 Art-Net node speak it. **This is an action, and it is the
+  same size as `osc` was.**
+- **Wired DMX512 is RS-485** and needs a transceiver on the ESP32 or a USB
+  interface on the host. Real, but hardware, and Art-Net nodes are cheap
+  enough that it is hard to justify.
+
+The interesting idea underneath, worth naming and not building yet: **the
+button's own look driving DMX channels**, so the room follows the light in
+your hand. That is a `Sequence` sampled into channel values, which the
+sequencer can already do - but it is a second renderer, and renderers are
+where this system keeps its discipline. Decide it deliberately.
+
+**Done when**: an `artnet` action sends a universe's worth of channels to a
+host and port. The room-follows-the-button idea gets its own number if it is
+ever wanted.
+
+### 94. One "Lights" app out of Light Show and Signal
+
+**Asked 2026-08-29**, and it is the same observation **84** makes about the
+alarm family: two templates, one machine.
+
+Both wear one of N looks. The only difference is what advances them:
+
+| | Signal | Light show |
+|---|---|---|
+| Advances on | a press | a clock (`dwell_s`), or a press when `auto` is off |
+| Holds | always (it *is* a status) | double tap freezes it |
+| Set from outside | `set_position` (**74**) | no |
+| Each entry is | a name + an inline colour + an optional action | a look **named** from the pool |
+
+So: one template, an `advance` setting (`press` / `clock`), and a list of
+entries. Both existing behaviours fall out, and `set_position` reaching a
+show for free is a bonus nobody asked for.
+
+**The one decision that contradicts something written down.** CLAUDE.md
+currently says a Signal position *carries* its colour "because a look is bound
+to an `LEDState` and these are not states", and `ShowCue`'s docstring calls
+naming the *opposite* choice for the opposite reason. Merging forces one
+answer, and **the answer is naming**: the look pool did not exist when Signal
+was written, a named look is the rich form, and the control surface's
+positions (**77**) already went that way. Inline colours stay accepted so
+every existing signal loads - but the rule in CLAUDE.md gets rewritten in the
+same commit rather than quietly broken.
+
+**Done when**: one template, both presets, every existing `signal` and
+`lightshow` config loads and behaves the same, and CLAUDE.md's rule says the
+new thing.
+
+### 95. Colour themes — *check whether scenes already are this*
+
+**Asked 2026-08-29:** a theme the whole button follows, rather than colours
+set one at a time.
+
+**Do not build a new config layer before checking the one that exists.** A
+scene is a partial config merged over `config.json` before parsing, so a scene
+carrying only `led_palette`, `looks` and `state_looks` **is a colour theme
+already** - it changes every colour on the button and nothing else. If that is
+true, this item is a *UI* item ("apply a palette set") and not a data item,
+which is an order of magnitude cheaper.
+
+The reason to be strict about it: **there is one parser and scenes merge
+before it**, and a second overlay mechanism with its own precedence is exactly
+the thing that rule exists to prevent.
+
+What might still be missing after that check: shipped themes worth having
+(one high-contrast, one warm, one that is legible on the 3V3 ring's colour
+cast - see **0c**), and a way to preview one without committing.
+
+**Done when**: either a handful of theme scenes ship with a picker, or there
+is a written reason why a theme is not a scene.
+
+### 96. Pre-built integrations — *and the secret store that has to come first*
+
+**Asked 2026-08-29:** a growing catalogue of API integrations - Alpaca, Google
+Calendar, Slack - where you paste a key and choose an endpoint.
+
+**This cannot be built as described, and the blocker is not the integrations.**
+API keys would live in `config.json`, and `config.json` is: returned in full
+by `GET /api/config`, editable by anyone who can reach the web UI (**which has
+no authentication at all**, by its own docstring), written into scene files,
+and - as of **92** - committed to git. Putting a brokerage key in there is a
+credential leak by construction, not by accident.
+
+So this is **two items in a trench coat**:
+
+- **(a) A secret store.** Values that live outside `config.json`, are never
+  returned by the API, are referenced by name from an action, and are absent
+  from every scene and export. This is the prerequisite, it is a real piece of
+  design, and it is what makes the rest safe.
+- **(b) The catalogue**, which is mostly data once (a) exists: the webhook
+  action already reaches anything, and "pick a service and it fills in a
+  template" already exists for IFTTT and Make. Each integration is a
+  descriptor - base URL, auth style, a few endpoints - which is
+  [schema.js](aibutton/web/static/schema.js)'s whole pattern.
+
+**And read 100 before picking the first integrations.** Several of the most
+wanted ones need no key at all, which means they can ship before (a) does.
+
+**OAuth is a third thing again** (Google, Slack): it needs a redirect URI, a
+token refresh loop and an app registration per provider, which is a service
+and not a button feature. ARCHITECTURE.md already says heavy lifting belongs
+on the phone or the cloud; this is that, exactly.
+
+**Done when**: (a) exists and one keyed integration uses it. Not before.
+
+### 97. Could this be a product? — *the honest answer today is no, and here is the list*
+
+**Asked 2026-08-29:** could we mass-produce this with ESP32s, printed
+enclosures and ordered buttons, as it stands?
+
+**No, and the gaps are specific rather than vague.** ROADMAP Stage 4 and
+Stage 5 hold most of them; this item is the security half, which is thinner
+than the rest and needs to stop being.
+
+**Security, as it actually is today** - each of these is a deliberate,
+documented choice that is correct for a workshop and wrong for a product:
+
+- **The web API has no authentication.** It can rewrite the whole config,
+  fire any action, and stop the service. Its docstring says so and says "front
+  it with a reverse proxy" - which is not an answer a shipped product can give
+  its user.
+- **BLE is unauthenticated and unbonded.** Anything in range can connect and
+  drive the LED, and read every gesture. Pairing with bonding is the fix and
+  it is a protocol-adjacent change, so it wants doing before units exist.
+- **The `keys` action types on the host** and the `sequence` action can chain.
+  On a shared machine that is a remote keyboard.
+- **No OTA path.** `OTA_CONTROL` is claimed in the protocol and unimplemented,
+  and ROADMAP Stage 4 already says: do not ship a unit to anyone, including a
+  friend, without field update working end to end.
+- **No secret store** (**96**), so any integration a user adds is stored in
+  clear and served over that unauthenticated API.
+
+**Manufacturing, briefly** - the roadmap has this and it is worth restating in
+one place: no enclosure, no battery or charging, no sleep (**29**, blocked on
+measuring draw), no 32.768 kHz crystal on a BOM that does not exist, no
+regulatory work for a radio product, and MicroPython on a dev board is right
+for tens of units and not for thousands.
+
+**And the topology is the biggest one.** A button whose brain is a Python
+service on a PC is not a product anybody can unbox. That is Stage 3, and it is
+the reason Stage 3 exists.
+
+**Done when**: this list has owners and numbers. It is a map, not a task.
+
+### 98. What the pitch has to be able to show
+
+**Asked 2026-08-29:** *"a small, almost gimmicky, cheap keychain button you'd
+find in a dollar store - then show off its most powerful features."*
+
+**That framing is the product, and it is worth writing down because it decides
+what gets finished.** The demo is the spec:
+
+- **It has to work with nothing attached.** A demo that begins "first, start
+  the service on my laptop" tells the room this is a script, not a product.
+  Stage 3, again, and this is the strongest argument for it.
+- **The first thirty seconds must be dumb.** Press, light, beep. The gimmick
+  has to land before the power does, or the reveal has nothing to reveal.
+- **The reveal should be one press doing something nobody expects a keychain
+  toy to do** - the DAW transport is already the best candidate here and it is
+  already verified on real hardware (**25**, **77**).
+- **Then breadth, fast**: the same button as a timer, a counter, a status
+  light, a remote. The launcher is what makes that a single object rather
+  than five.
+- **Then it has to survive being handed over.** Someone else presses it and it
+  does the right thing. That is **14**'s naive-user run, which has not moved
+  in four sprints and is the single cheapest thing on this list.
+
+**What a room of investors will ask, and what we can answer today**: what
+stops anyone cloning it (nothing yet - see Stage 5's IP note), what it costs
+to make (unknown, no BOM), how it updates in the field (it does not - **97**),
+and who it is for (undecided, and the demo above quietly assumes three
+different people).
+
+**Done when**: there is a demo script, and every step in it works without a
+laptop.
+
+### 99. A reflex that goes and looks — "check this every hour"
+
+**Asked 2026-08-29**, alongside "when x signal is received - MIDI, keyboard,
+or something else".
+
+**The signal half is mostly built and may just be undiscoverable.** A reflex
+already fires from an HTTP POST (**71**) or a MIDI message (**73**), with a
+one-field test on the value (**72**), and reflexes are already add/edit/remove
+in the editor's panel. **Check that UI before building anything** - if the ask
+is really "I could not find it", that is **88**'s problem, not a feature.
+Keyboard in is **79**, which recommends against a global hook and says why.
+
+**The new thing is a reflex with a clock and a URL**: fetch this every N
+minutes, and hand what comes back to the ordinary `when` test. That fits the
+architecture exactly as written - *"a new source builds a payload and stops
+there"* - because the comparison language already exists and the consequence
+vocabulary does not grow. `MidiSource` gains a sibling; nothing else changes.
+
+Three things to get right, all of them the kind that bite later:
+
+- **A poll is not a press**, so it goes on `main`'s `inbound` queue like every
+  other reflex and never becomes a synthetic gesture.
+- **Failure has to be quiet and visible**: a server that is down must not fire
+  the reflex, must not spam the log every minute, and must be findable when
+  somebody asks why nothing happened.
+- **Authenticated polling needs 96(a)**, so the first ones should be the
+  endpoints that need no key - see **100**.
+
+**Done when**: a reflex can name a URL and an interval, its reading is logged
+under the reflex's own name exactly as a posted one is, and a dead endpoint
+costs one log line rather than sixty an hour.
+
+### 100. Prefer a URL to an API — *decided: it changes what 96 builds first*
+
+**Asked 2026-08-29:** *"Are APIs always the best way? Would iCal or similar
+make things better? Could there be a user-friendly non-API integration with
+Google, Microsoft or Apple?"*
+
+**No, they are not, and this is the most useful finding in the batch.**
+
+Google Calendar, Outlook and iCloud all publish a **secret `.ics` URL** for a
+calendar: a plain HTTPS GET, no OAuth, no app registration, no API key, no
+consent screen, no token refresh. Fetch it and parse it. For *"what is my next
+meeting"* that is one HTTP request against several hundred lines of OAuth
+plumbing and a Google Cloud project. The same shape exists elsewhere:
+**RSS/Atom** for feeds, **CalDAV** for two-way calendar, **IMAP** for mail,
+and a great many services publish a read-only token URL.
+
+Where a real API still wins: **writing** data, anything real-time, and
+anything that must be per-user with revocable access.
+
+Two consequences, and they are the point of writing this down:
+
+- **96 should ship its keyless integrations first.** They need no secret
+  store, so they are not blocked on 96(a) at all - a calendar reflex ("my next
+  meeting starts in 10 minutes") can be built the day **99** lands.
+- **"Paste a URL" is a better user experience than "authorise this app"** for
+  the non-technical user this product is aiming at, which is the opposite of
+  what the integration catalogue would have assumed.
+
+**Done when**: 96 and 99 both say which of their targets need a credential and
+which need a URL, and the first one built is a URL.
+
+### 101-108. The sidebar as a map, and what came with it
+
+**Raised by the owner 2026-08-29**, the evening after 90-100, from actually
+living with the finished nav. **101, 102, 103 and 107 shipped** and now live
+in [TODO_FINISHED.md](TODO_FINISHED.md). What's left:
+
+### 104. Long press at the root means sleep - and sleep is host-side first
+
+**Asked 2026-08-29.** *"Long press should be removed from Actions. If it is
+the outer-most menu, let's make long press 'sleep'. Then long press again
+wakes the device."*
+
+**This does not break CLAUDE.md's invariant, it completes it.** Long press
+means *up one level, everywhere*. At the root there is no level above, and the
+honest answer to "up" there is **off**. One sentence, no exceptions added.
+
+#### The split that makes this shippable now
+
+**Quiet mode is host-side and needs no firmware.** LED off, every gesture
+except the wake one ignored, no app entered, and **schedules and reactions
+keep being evaluated** - the host is awake, it simply stops speaking. Zero
+protocol change, testable end-to-end against `MockDevice`.
+
+**Deep sleep is the device, and that is 29**, which is blocked on measuring
+what the board actually draws and needs `GESTURE_HOLD`. Do not wait for it.
+The two share a name in the UI and nothing else; write quiet mode so that 29
+can later make it *also* cut power, without the meaning changing.
+
+#### What it costs today, and it is not nothing
+
+`long_press` stops being bindable in an `actions` mode, which is the same move
+`_parse_control_body` already makes for a control surface: **dropped with a
+warning, not rejected.** Precedent exists and is in CLAUDE.md's invariants.
+
+**Three real configs bind it and all three must be rewritten:**
+
+| File | Mode | Currently |
+|---|---|---|
+| `config.json` | Main Menu | `enter_mode` to Pomodoro 2 |
+| `scenes/default.json` | Home | `enter_mode` to Pomodoro |
+| `scenes/personal.json` | Main Menu | `readout` of "Habit" |
+
+`scenes/default.json` is a **shipped artefact** (**92**), so this is a change
+to what a new user opens, not a scratch edit. Move both `enter_mode` bindings
+onto a triple tap or a launcher, and decide where the Habit readout goes.
+
+#### Four decisions, three of them recommended here
+
+- **Only a long press wakes.** A short press would wake it in a pocket, and
+  the gesture should be the same one on the way in and out.
+- **The wake press is swallowed.** 29 already names this; without it, the
+  first thing waking does is fire whatever short press is bound.
+- **Going down is visible.** 29's own words: *off must be distinguishable from
+  broken.* Fade to black over about a second rather than snapping - that is a
+  three-stop one-shot sequence and costs nothing.
+- **There is nothing to return to.** Sleep is bound at the root, so waking
+  lands at the root. That is the reason it is bound there rather than being a
+  gesture apps have to opt out of.
+
+**Done when**: a long press with no app running turns the light off and the
+button stops answering; a long press turns it back on without firing anything;
+the shipped default scene no longer binds long press in a menu.
+
+### 105. A notice says how far it is allowed to interrupt
+
+**Asked 2026-08-29, alongside 104**, and it is the question sleep forces:
+*"some notices should take over no matter what, even when asleep. Some notices
+take over only when idle or in a menu."* **Settled the same day at four tiers,
+not three** - the owner's completion was that *"While Awake"* has to be
+distinguishable from *"Always"*, and it does: they behave identically while
+the button is awake and differ only in whether they are allowed to wake it.
+
+| `interrupts` | Wakes a sleeping button | Interrupts a running app | Shows at the root |
+|---|---|---|---|
+| `always` | **yes** | yes | yes |
+| `while_awake` | no | yes | yes |
+| `when_free` | no | no | yes |
+| `never` | no | no | **no** |
+
+#### It is a ladder, and that is the property to protect
+
+Read the table down any column: **each tier is strictly weaker than the one
+above it**, and every tier's permissions are a subset of its predecessor's. So
+this is *one ordered enum*, not two orthogonal flags dressed as four names -
+which is why it is a single four-way choice in the editor rather than a pair
+of checkboxes whose sixteen combinations include twelve that mean nothing.
+
+**The rule that falls out, and it is the reason to write this down: a proposed
+fifth tier either slots into that order, or it is not a tier.** Something that
+is not simply more-or-less permissive than its neighbours is a *second axis*
+and belongs on its own field - exactly the argument that keeps `urgent`
+separate below.
+
+#### Waiting is one rule, shared by both middle tiers
+
+A notice that arrives but is not allowed to show yet **waits**, and its own
+`timeout_minutes` decides whether waiting turns into a miss - logged 0,
+`on_missed` fires, exactly as **84** already does. `when_free` waits for the
+running app to exit; `while_awake` waits for the button to be woken. Same
+machinery, same field, no new concept.
+
+**Which makes `always` easy to state precisely**: it is the tier that does not
+wait.
+
+**`never` is not a degenerate case, it is a gap being filled.** "At 9 AM, POST
+this webhook, no light" is not expressible today: a schedule can only start an
+app, and every app owns the button. This makes a Notice able to be a *silent
+scheduled action*, which several people will want before they want bells.
+
+**The default must be `when_free`.** If new notices default to `always`, sleep
+means nothing within a week - and `while_awake` is the wrong default for the
+same reason one rung down: a reminder that interrupts a Pomodoro is a reminder
+people turn off.
+
+**Keep it off `urgent`, and expect pressure to merge them.** `urgent` (from
+**84**) is *how loud* - loop the tone, hard flash. `interrupts` is *whether it
+is allowed to speak at all*. They look mergeable and are not: a gentle chime
+that must still pierce sleep is `urgent: false, interrupts: always`, and 84
+already rejected deriving one such field from another for the same reason.
+
+**Where this generalises, and the trigger to lift it**: a *reaction* firing
+`enter_mode` while asleep asks the identical question. Do not build for that
+yet - ship `interrupts` on Notice, and lift it to the dispatch site the first
+time a reaction needs it, which is the point at which one flag in one place
+beats two fields.
+
+**Done when**: the four tiers exist on a Notice as one ordered field,
+`when_free` is the default, an `always` notice wakes a sleeping button and puts
+it back, a `while_awake` notice waits for a wake instead of forcing one, and a
+`never` notice fires its action with the light untouched.
+
+### 106. The hour chime - church bells, and 91's compiler finding its second caller
+
+**Asked 2026-08-29.** *"Every hour, the light could fade to white over 10s,
+then flash to indicate what hour it is, then fade back to whatever menu the
+device was in. Choose between 1-12 flashes colour-coded per hour, the
+colour-coded number system we already have, or binary."*
+
+**The finding that makes this cheap: it is not a new feature.** It is three
+things this project either has or has already designed:
+
+1. **A Notice** - shipped, **84**.
+2. **A number rendered as a stop list** - that is **91**'s compiler exactly
+   (`number + scheme` gives `tuple[Stop, ...]`), and **83**'s. The owner names
+   three schemes and they are 91's three; "a colour per hour, 1-12" is a
+   fourth, and it is the same shape.
+3. **A recurring schedule** - and this is the only genuinely new part.
+
+**So the triage is: build 91's compiler once, and the chime is its second
+caller.** Do not write a bell renderer.
+
+#### The one new part, and the thing missing from the sketch
+
+`ScheduleActivation` is `at: "HH:MM"` plus days. Hourly needs a repeat, and the
+cheapest honest shape is `every: 'hour'`. **But the sketch has no window, and
+nobody wants bells at 3 AM** - so `between: ["08:00", "22:00"]` is not a
+refinement, it is the difference between this being usable and being turned
+off on the first night.
+
+#### Two things worth knowing before anyone promises it
+
+- **"Fade back to whatever it was" is not expressible today.** A stop list is
+  a schedule of colours and does not know what the light was doing before it
+  started. Two options: end on black and let the host re-assert IDLE, which
+  snaps; or let a stop name **the resting look** as a token the loop
+  substitutes from `base_look`. **Recommend the token** - it is one value in
+  the parser, and it makes *every* one-shot sequence able to land softly
+  rather than just this one.
+- **The flash floor decides how long noon takes.** At 3 Hz, twelve flashes is
+  four seconds, plus a ten-second fade each way: **about 25 seconds of bells at
+  midday.** That is a long time for a light on a desk, and it is the honest
+  argument for the alternative schemes rather than a taste one - noon in
+  binary is four symbols, not twelve. It is also an argument that **108**
+  should be settled first.
+
+**Done when**: a Notice can repeat hourly within a window, the hour is rendered
+by 91's compiler in a scheme chosen on the notice, and the light returns to
+what it was showing.
+
+### 108. The flash floor is a setup decision, not a warning on every save
+
+**Asked 2026-08-29**: *"The epilepsy warning is a little jarring and I'm not
+sure it's really relevant. I'd love the light to flash much faster, especially
+in the metronome / light-shows. I have a single neo-pixel LED. Is this really
+something that could cause seizures on a consumer product?"*
+
+#### The honest answer: for one small LED the floor is over-applied
+
+Photosensitive epilepsy affects roughly 1 in 4,000 people, and the provocative
+band is about 3-60 Hz with sensitivity peaking near 15-20 Hz - so 3 Hz sits at
+the very bottom edge of it. **The decisive variable is not rate, it is how much
+of the visual field the stimulus fills.** WCAG 2.3.1, ITU-R BT.1702 and the
+Harding test are all written for *displays*, and WCAG's own exemption is a
+flashing area below roughly 25% of the central 10 degrees of vision. A single
+5 mm pixel at desk distance is far under that threshold. Bicycle lights, hazard
+lamps, smoke-alarm indicators and strobing toys all flash in this band, sold to
+consumers, without warnings.
+
+**So the 3 Hz constant was borrowed from a standard that does not describe this
+device**, and the code has always half-known it: `main.py` calls it *"the
+default for `config.min_flash_period_s` rather than a law - one button on one
+desk, and its owner may decide it can go faster."*
+
+**Three caveats that are worth keeping, none of which is "keep the floor":**
+
+1. **It stops being one small pixel.** A ring (**52b**) bounced off a white
+   wall in a dark room is a different stimulus, and the light-show app is aimed
+   at exactly that. Whatever replaces the floor should be a decision about
+   *what is lit*, not a constant that assumed a dot.
+2. **There is no safe harbour.** Today "we follow WCAG 2.3.1" is a sentence
+   that defends itself; "we removed the limit" needs its own paper trail. That
+   matters at Stage 4/5 (**97**), not on this desk.
+3. **Brightness matters as much as rate**, so a floor on rate alone was never
+   the whole answer even on its own terms.
+
+#### What is actually jarring, and it is not the limit
+
+The owner's config already sets `min_flash_period_s: 0.300`. That is 3.33 Hz -
+a 10% change - and it prints this on **every load**:
+
+> `min_flash_period_s 0.300s allows flashing at 3.3 Hz, above the recommended
+> 3.0 Hz photosensitivity limit - honoured, but it is a seizure risk for some
+> people`
+
+A warning that fires on a setting the user deliberately chose, every single
+time, on a 10% deviation, is not information - and it is the mirror of the
+mistake CLAUDE.md's own rule already names: clamping silently makes a setting a
+lie, and scolding forever makes it a nag. **Same error, opposite face.**
+
+#### And it costs the metronome real behaviour, measurably
+
+`metronome_flash` divides the flash rate to stay above the floor, so **above
+180 BPM the light flashes every other beat**:
+
+| BPM | Today | With no floor |
+|---|---|---|
+| 180 | every beat | every beat |
+| 200 | **every 2nd beat** | every beat |
+| 240 | **every 2nd beat** | every beat |
+| 300 | **every 2nd beat** | every beat |
+
+That is probably the actual motivation behind the ask, and it is a bug the user
+can feel rather than a preference.
+
+#### The recommendation - move the decision, do not delete the mechanism
+
+1. **Keep `min_flash_period_s` and both pure functions.** `flash_safe` and
+   `sequence_safe` stay, still one call site each in `main.set_led`. What
+   changes is who decides the number, not where it is enforced.
+2. **Ask once, at first run.** The new-user setup flow the owner is planning is
+   the natural home: one screen, two choices, remembered. That is a genuine
+   informed opt-out, which the current design is only pretending to be.
+3. **Delete the parser warning.** Warn at the moment it is *lowered in the
+   editor* - once, with a confirm - and never again from `parse_config`. The
+   sentence should also stop implying a cliff at 3.0 Hz that the evidence does
+   not support at this stimulus size.
+4. **Then let the metronome and the light show run unfloored**, and drop
+   `metronome_flash`'s division when the effective floor allows it.
+
+**Blocked on nothing but the setup flow existing**, and step 3 alone can ship
+today - it is the half that is actually annoying.
+
+#### Step 3 shipped 2026-08-29
+
+`_parse_min_flash_period` no longer warns for a value below the
+recommendation; a value that is not a positive number is still an error and
+still falls back, because that is broken rather than chosen. The hazard now
+lives where the number is chosen - schema.js's hint, rewritten to say what the
+guideline actually covers ("written for screens filling much of your vision,
+not for one small LED on a desk") instead of asserting a seizure risk.
+`tests/test_flash_floor.py` pins the **silence**, because a warning creeping
+back is a regression nobody notices until it has been in a log for a week.
+
+**Steps 1, 2 and 4 remain**: the number is still edited on the Device page
+rather than asked once at setup, and `metronome_flash` still divides above
+180 BPM whatever the effective floor is.
+
+**Done when**: no warning fires on load for a deliberately chosen floor, the
+choice is made once at setup, and a 240 BPM metronome flashes on every beat.
+
+### 109. Does a stopwatch have a "fastest"?
+
+**Raised 2026-08-29 while building 101(b), and it is a one-word change with a
+real question under it.** The sidebar sketch asked for *Fastest: 7:57* under a
+"Mile Run" stopwatch. What shipped is *12 runs so far · last Aug 20*, because
+the stopwatch's readout descriptor sets `better: null` and the note above that
+field says why: set it *"only where best is a fact about the app rather than a
+guess about the person using it."*
+
+A stopwatch is the case that tests that rule. The same template times a mile
+run, where quicker is better, and a loaf of bread, where it is not.
+
+Three options, and the second is the recommendation:
+
+- **Set `better: 'low'` on the stopwatch.** One word. Every stopwatch then
+  advertises its fastest, including the ones where that is meaningless.
+- **Let the *item* carry it** - a `better` field on the mode, defaulting to the
+  template's. Honest, and it is what "Mile Run" and "Cake" actually differ by.
+  Costs a config key, a parser fallback, a schema.js field and a mirror test,
+  which is why it is an item rather than a word.
+- **Leave it.** The count and the recency are true of every app and cost
+  nothing; "fastest" was one line of a sketch rather than a stated need.
+
+**The same question reaches the countdown and the metronome**, which also set
+`better: null` for the same reason - so whichever way this goes, it goes for
+all three at once.
+
+**Done when**: a stopwatch either shows a best, or is recorded here as
+deliberately not showing one.
 
 ### 52b. Per-pixel ring patterns *(a protocol proposal, not a decision)*
 
@@ -995,17 +1737,27 @@ certbot, add a docker-compose service and a reverse-proxy vhost.
 
 ### 10. Checkpoint — review and re-triage
 
-**Last run: 2026-08-26**, at the end of the sprint that shipped **44, 45, 46,
+**Last run: 2026-08-29** — a context-cost pass, not a feature sprint. Moved
+every fully-shipped item (whole items only, per "How to work this list") to
+the new [TODO_FINISHED.md](TODO_FINISHED.md), rewrote the Sprint list's
+navigation sections so they only describe what's left, and folded **21** and
+**18** back into the Parking lot now that they're both ⏸-parked like
+everything else there. [CLAUDE.md](CLAUDE.md) got the same treatment: split
+into it and the new [INVARIANTS.md](INVARIANTS.md), topic-specific rules
+moved out so a session not touching that topic doesn't pay to read it.
+Nothing here changed status; this pass only changed what it costs to find.
+
+Previous run: 2026-08-26, at the end of the sprint that shipped **44, 45, 46,
 48a, 48c, 49, 50, 51, 52a, 53** and ran the **47** read-back. It compressed
 those into **Done**, rescored the gates, deleted the launcher-`targets` note
 that got fixed, and created **54-68** (the read-back's findings) and **69-75**
 (signals, and what the mode list is called). Decision **D10** was opened.
 
-Previous run: 2026-08-19, which shipped **5, 9, 14, 15, 17, 19b, 26, 27, 28**,
+Before that: 2026-08-19, which shipped **5, 9, 14, 15, 17, 19b, 26, 27, 28**,
 the MIDI port dropdown, the item-23 design and **D9**, and created **31-34**.
 
-**Nothing in either sprint has met the button.** Eleven items of host-side work
-now sit between the last hardware sitting and this line.
+**Nothing in either feature sprint has met the button.** Eleven items of
+host-side work now sit between the last hardware sitting and this line.
 
 **Next checkpoint: after the next hardware sitting.** That sitting now has
 a queue worth doing in one go: **0c** (re-solder + the 5 V rework), the
@@ -1015,8 +1767,12 @@ residue). One session at the bench clears every open hardware residue;
 checkpoint after it.
 
 The standing job: re-read this file against what actually shipped, move
-finished items to Done, prune what the shipped version superseded, and score
-the roadmap's exit gates.
+whole finished items to [TODO_FINISHED.md](TODO_FINISHED.md), prune what the
+shipped version superseded, and score the roadmap's exit gates. Do the same
+skim over [CLAUDE.md](CLAUDE.md) and [INVARIANTS.md](INVARIANTS.md) while
+you're at it — a rule that's gone stale or a bullet that grew a paragraph
+nobody needs any more is paid for by every session after this one, not just
+by whoever's reading this list.
 
 ### 12. Look into analytics/tracking — scope first, this is vague as given
 
@@ -1034,31 +1790,6 @@ performance": (a) *habit* analytics for the user (mode usage, streaks,
 time-of-day patterns — a dashboard over `EventStore`), (b) *device* telemetry
 (BLE reconnect frequency, gesture-to-feedback latency, dropped presses), or
 (c) *hosting* metrics once item 8 exists. **Ask which.**
-
-### 34. App documents, and app-bound actions
-
-**Split out of 30c (D9 decided — ARCHITECTURE.md "Apps own data" is the
-design; this is build).** A bounded named-value document per app instance,
-host-side first: storage beside the event store, slots declared per template
-(the manifest's precursor), a `Set`-shaped action any mode can bind
-("Smoking +1" without entering the Counter — TODO **15**), and the Counter
-reading its number from its document instead of a local integer. Keep the
-log separate — history and current value are different jobs. App-bound
-actions are offered **only while the target app is in the list**.
-
-### 30. Actions as a first-class idea — a pool, a taxonomy, and the data under it
-
-**Conceptualised 2026-08-19. Design before code; the UI last.** The full
-write-up is ROADMAP **3d** and decision **D9** — read those, this is the sprint
-view.
-
-**D9 is decided (2026-08-19)** — ARCHITECTURE.md "Apps own data" is the
-design, ROADMAP 3d the taxonomy (System / Custom / App-bound). The build
-halves are numbered: **(a) the named action pool shipped 2026-08-20 and (b)
-the `SequenceAction` on 2026-08-27 — see Done**; (c) app documents and
-app-bound actions are item **34**, the last one open.
-
-Nothing is left open under this number itself.
 
 ### 25. A transport app that knows what the DAW is doing
 
@@ -1183,160 +1914,9 @@ back on 2026-08-21 (**0c**), so "wake on a button press" is testable again -
 **once the board has been reflashed onto the new pins**, which is what makes a
 physical press reach the host at all.
 
-### 21. WiFi as an alternative transport ⏸ parked, with a trigger
-
-**Decided 2026-08-18: not now. BLE is adequate, and the reason to wait is not
-cost — it is that waiting makes this cheaper *and* more useful.**
-
-**The motivation is real.** Range, and flexibility; and the S3 already has the
-radio, so the BOM cost is zero and the capability is sitting there unused. That
-is a genuine argument and it is why this is an item rather than a line in the
-parking lot.
-
-**What it would cost today.** A second transport in the firmware — note that
-`ButtonDevice` abstracts only the *host* half, so the device half doubles with
-nothing to hide behind. One shared 2.4 GHz radio, so coexistence adds jitter to
-the budget ARCHITECTURE.md pins at ≤50 ms. RAM: MicroPython plus BLE plus lwIP
-on an S3FH4R2 is tight. Power is the decisive one — BLE connected is
-single-digit mA, WiFi associated is an order of magnitude more with 100–300 mA
-bursts, which is a different battery and therefore a different enclosure
-(Stage 4).
-
-**Why later is genuinely better, not just cheaper.** ROADMAP's old reason for
-parking this — "don't build a transport before deciding where the brain lives"
-— has expired: **D1 is decided.** But deciding it changed what WiFi *is* here.
-While the host owns the brain, WiFi is a second way to do exactly what BLE
-already does, and it must coexist with a live link. After the runtime moves
-onto the device, the button needs **occasional sync, not a live link** — and
-periodic wake → connect → sync → sleep is precisely WiFi's good case, with no
-coexistence problem because there is no live BLE session to share the radio
-with. The same feature is expensive now and natural later.
-
-**The trigger.** Revisit when any of these is true: the button must reach a
-host that is not in the room (a real complaint, not a hypothetical); the
-Stage-3 spike (ROADMAP **3c**) reports RAM headroom that makes it comfortable;
-or Stage 4 picks a battery that can carry it.
-
-**The shape, if it is ever built.** A **config-time either-or, never
-concurrent** — one transport per boot, chosen like `--ble` is. Measure first
-(3c's idle/TX current and RAM numbers), build second. Do not start with a
-Dockerfile or a protocol change: the wire vocabulary is transport-agnostic
-already and should stay that way.
-
-### 18. Move project management into Notion ⏸ parked
-
-**Deferred deliberately, not dropped.** Nothing is created in Notion and
-nothing should be until the split is chosen.
-
-**The risk is not the migration, it is ending up with two sources of truth.**
-Most of this file is *reasoning*, and the fresh-session pickup property lives
-in prose. Notion is not better at prose. What Notion *is* better at: status,
-priority, what is in flight, sequencing, and seeing the whole thing without
-scrolling.
-
-**Decide the split before creating anything:**
-
-- **A — Notion tracks state, TODO.md keeps reasoning.** One card per item
-  (status / priority / gated-by / body-of-work), each linking to its heading
-  here.
-- **B — migrate wholesale**, CLAUDE.md repoints at Notion, this file becomes an
-  archive.
-
-**Recommend A**, because the fresh-session property is load-bearing and B puts
-it behind a network call and an auth prompt.
-
-**Definition of done.** The chosen split written into
-[CLAUDE.md](CLAUDE.md) — one sentence saying which document a fresh session
-reads for what — and the items loaded. Without that sentence this is just a
-second backlog.
-
-### 19. The light as a language — sequencer, one-offs, and where colour is edited
-
-Part (a), the subdivision ladder, shipped — see **Done**. **b and c are done
-too**; this item is closed, and what is below is the record of what it decided.
-
-#### b) The sequencer — a stop list, and one-offs — **core shipped 2026-08-19**
-
-The Python half is in: [sequencer.py](aibutton/sequencer.py) (a pure leaf —
-`Stop`/`Sequence`/`plan_at`, table-tested), a `stops` key parsing anywhere a
-*look* parses (per-stop fallback; the system palette stays plain effects,
-because palette entries ship to the device), `as_dict` round-tripping, and a
-driver in `main.set_led` that walks the planner and pushes each step as a
-plain solid — cancelled by the next `set_led`, so a sequence lasts exactly as
-long as an ephemeral effect. `repeat: false` is the play-once mode; a
-finished one-shot falls back to the palette (`set_led(state, None)`), which
-is what makes it the readout primitive **15**/**17** want.
-
-**The floor is settled and is now a CLAUDE.md invariant**: `sequence_safe`,
-applied at the same single point as `flash_safe`, floors each stop's dwell at
-half the floor (a stop is one transition; a period is two). A one-shot of
-≤3 stops is exempt — the confirmation-flash rule, decided rather than
-inherited. The ladder was **not** unified with it: a ladder tick floors at
-the *full* period and a stop's dwell at *half*, different multiples for
-different shapes, so sharing the constant would have changed one behaviour
-rather than deduplicating code. Both docstrings say so.
-
-**The UI half shipped the same day.** The colour engine edits stop lists
-(`allowSequence`, opt-in — on for the named-look pool and the mode page's
-inline pool editor, off by construction for the system palette, whose
-entries ship to the device); `describeEffect` and ledPreview's `colorAt`
-both know the shape, so a sequence look summarises and animates correctly
-in every swatch, with fades quantised to the same 50 ms steps the host
-pushes — the preview keeps its never-disagree-with-hardware rule, except
-that a one-shot previews looping, because a swatch that goes dark looks
-broken.
-
-**The animated device-side preview shipped in 41.** It needed no
-cancellable task in webui.py after all - mirroring main.py's driver there
-would have been a second flash-floor gate. `WebContext.show_look` is main's
-own `set_led`, which already owns both the task and `sequence_safe`; with no
-driver attached the endpoint still degrades to the first stop and says so.
-
-**15 and 17 are now unblocked; Simon-says (16's parked half) too.**
-
-#### c) Reuse the ramp widget wherever a gradient makes sense — **shipped 2026-08-23**
-
-Pomodoro was the only real candidate and it cost what this item predicted: a
-template field, plus the repainting tick `run_pomodoro` did not have. Hot/cold
-and reaction already offered a ramp and already walked it; the countdown's is
-where the pattern came from. Nothing else has a fraction to ramp over — hold
-levels still need `GESTURE_HOLD` (item **29**).
-
-**The ramp is empty by default here**, unlike the countdown's, and that is the
-decision worth keeping: this template says work-versus-rest *with colour*, and
-a ramp overrides both states. The rule is in [CLAUDE.md](CLAUDE.md).
-
-**The tick turned out to be worth more than the field.** A drive needs an app
-that knows the number *and* repaints often enough for it to move, so the tick
-is what let `pomodoro` join `DRIVE_TEMPLATES["progress"]` — and a named stop
-list is chosen per state, so WORKING can be driven while RESTING keeps a plain
-colour. That is the better answer for this template, and the ramp is the
-one-field version of it.
-
-Progress is through the **current block**, not the session (a classic Pomodoro
-has no end), so it resets at every phase change and `extend` grows the
-denominator along with the deadline.
-
 ---
 
 ## Smaller, worth doing
-
-- **An empty MIDI port still means "the first output", and now it says so.**
-  Found 2026-08-27, the hard way: a DAW Control surface with five MCU bindings
-  had `"port": ""` on every one, so every note went to *Microsoft GS Wavetable
-  Synth* - output 0 on this machine - while the DAW sat waiting on a loopMIDI
-  port. The field was `tier: 'tinker'`, so the setup path that produced it
-  never showed the field at all.
-
-  **Fixed the same day**: the port is a basic-tier field now, and its hint
-  says what blank does. The rule it stands for is in
-  [CLAUDE.md](CLAUDE.md) - a field that decides whether an action does
-  anything at all is not an advanced option.
-
-  **Still open, and worth doing when the parser is next touched**: warn at
-  load when a `midi` action has an empty port *and* the machine has more than
-  one output. That is the fallback-with-a-warning pattern used everywhere else
-  here, and it is the half that reaches a hand-edited file.
 
 - **Presses dropped while busy.** The loop runs one action at a time and
   discards presses during the 2 s SUCCESS display. Deliberate, but it makes
@@ -1398,12 +1978,83 @@ denominator along with the deadline.
   how a config format grows a level nobody uses. Reopen with that setting as
   the reason, and the cost above as the budget.
 
+  **Asked again on 2026-08-29, and it is still parked** - because what was
+  asked for is the *nav* becoming a tree, which is **88**. Grouping a flat
+  list by `template` for display costs nothing here and changes nothing the
+  runtime reads. If 88 is ever tempted to nest `modes` to make itself easier,
+  that is this item, and this measurement.
+
+- **21. WiFi as an alternative transport.** ⏸ Decided 2026-08-18: not now.
+  BLE is adequate, and the reason to wait is not cost — it is that waiting
+  makes this cheaper *and* more useful.
+
+  **The motivation is real.** Range, and flexibility; and the S3 already has
+  the radio, so the BOM cost is zero and the capability is sitting there
+  unused. That is a genuine argument and it is why this got its own
+  write-up rather than a one-line entry.
+
+  **What it would cost today.** A second transport in the firmware — note
+  that `ButtonDevice` abstracts only the *host* half, so the device half
+  doubles with nothing to hide behind. One shared 2.4 GHz radio, so
+  coexistence adds jitter to the budget ARCHITECTURE.md pins at ≤50 ms. RAM:
+  MicroPython plus BLE plus lwIP on an S3FH4R2 is tight. Power is the
+  decisive one — BLE connected is single-digit mA, WiFi associated is an
+  order of magnitude more with 100–300 mA bursts, which is a different
+  battery and therefore a different enclosure (Stage 4).
+
+  **Why later is genuinely better, not just cheaper.** ROADMAP's old reason
+  for parking this — "don't build a transport before deciding where the
+  brain lives" — has expired: **D1 is decided.** But deciding it changed
+  what WiFi *is* here. While the host owns the brain, WiFi is a second way
+  to do exactly what BLE already does, and it must coexist with a live
+  link. After the runtime moves onto the device, the button needs
+  **occasional sync, not a live link** — and periodic wake → connect → sync
+  → sleep is precisely WiFi's good case, with no coexistence problem
+  because there is no live BLE session to share the radio with. The same
+  feature is expensive now and natural later.
+
+  **The trigger.** Revisit when any of these is true: the button must reach
+  a host that is not in the room (a real complaint, not a hypothetical);
+  the Stage-3 spike (ROADMAP **3c**) reports RAM headroom that makes it
+  comfortable; or Stage 4 picks a battery that can carry it. This is also
+  what would change the calculus on item **8**.
+
+  **The shape, if it is ever built.** A **config-time either-or, never
+  concurrent** — one transport per boot, chosen like `--ble` is. Measure
+  first (3c's idle/TX current and RAM numbers), build second. Do not start
+  with a Dockerfile or a protocol change: the wire vocabulary is
+  transport-agnostic already and should stay that way.
+
+- **18. Move project management into Notion.** ⏸ Deferred deliberately, not
+  dropped. Nothing is created in Notion and nothing should be until the
+  split is chosen.
+
+  **The risk is not the migration, it is ending up with two sources of
+  truth.** Most of this file is *reasoning*, and the fresh-session pickup
+  property lives in prose. Notion is not better at prose. What Notion *is*
+  better at: status, priority, what is in flight, sequencing, and seeing
+  the whole thing without scrolling.
+
+  **Decide the split before creating anything:**
+
+  - **A — Notion tracks state, TODO.md keeps reasoning.** One card per item
+    (status / priority / gated-by / body-of-work), each linking to its
+    heading here.
+  - **B — migrate wholesale**, CLAUDE.md repoints at Notion, this file
+    becomes an archive.
+
+  **Recommend A**, because the fresh-session property is load-bearing and B
+  puts it behind a network call and an auth prompt.
+
+  **Trigger to revisit.** The chosen split written into
+  [CLAUDE.md](CLAUDE.md) — one sentence saying which document a fresh
+  session reads for what — and the items loaded. Without that sentence
+  this is just a second backlog.
+
 - Battery + deep sleep — the one thing that might justify a C++/NimBLE rework.
   **Now written up as item 29**, which was asked for directly; this line stays
   because the *battery* half is still parked and 29 says to measure first.
 - Offline buffering of presses while disconnected (needs a time sync)
-- WiFi transport, which would remove the host-must-be-awake constraint (and
-  would change the calculus on item 8)
 - Phone app over the existing REST API
 - A second control surface (an MCP server over the store and config was the
   original Phase 4). Dropped for now: the web UI and the `webhook` action cover
@@ -1431,1337 +2082,7 @@ denominator along with the deadline.
 
 ## Done
 
-Compressed to the decisions that still bind. Where a rule governs future code
-it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
-
-- ~~**33. `SequenceAction` — a flat list with delays**~~ - 2026-08-27. The
-  action item **25** has wanted since it was written: Mackie has no
-  return-to-zero, so "stop and rewind" is *Stop, a beat, Stop* - two messages
-  one gesture has to send.
-
-  ```json
-  { "action": "sequence", "steps": [
-      { "action": "midi", "port": "4G3NT", "kind": "note_on", "number": 93, "value": 127 },
-      { "action": "midi", "port": "4G3NT", "kind": "note_on", "number": 93, "value": 0, "wait_s": 0.05 } ] }
-  ```
-
-  The rules that bind are in [CLAUDE.md](CLAUDE.md) — *flat, bounded, and its
-  limits live in the parser*, and *a new action shape is resolved in
-  `resolve_action`, not at each dispatch site*. The decisions worth keeping:
-
-  - **The two edges the item said to decide first.** It **holds the button**
-    (presses during it are dropped by the existing rule, and the editor hint
-    says so), and the parser — not the editor — enforces
-    `MAX_SEQUENCE_STEPS = 8` and `MAX_SEQUENCE_S = 10`, truncating with a
-    warning rather than rejecting. Both numbers are mirrored into schema.js so
-    the editor stops you where the parser would.
-  - **`wait_s` is written on the step it delays**, not after the previous one:
-    "wait, then do this" is the order a person reads, and a sequence's whole
-    job is the gap *between* two messages.
-  - **A step may name a pooled action; a named step has no delay.** A bare
-    string has nowhere to put one, and inventing a wrapper object for that case
-    would be a second step shape to read and write.
-  - **Nesting is refused twice.** Inline, by the parser; by name, by
-    `resolve_action` - the shape the parser cannot see, since a pool entry may
-    itself be a sequence. Both drop the step and keep the rest.
-  - **Every step runs even after one fails**, and the first failure is what the
-    status line reports. A sequence is a script, not a transaction: if the
-    webhook is down, the MIDI note that was going to follow it is still what
-    the button was asked to send.
-  - **The editor got one new widget, not one new page** (`kind: 'steps'` in
-    [widgets.js](aibutton/web/static/widgets.js)): numbered rows with the
-    action's own fields, a wait box, reorder arrows and a remove. It lives with
-    the field system rather than with one page because a sequence binds
-    anywhere an action binds.
-
-  **What this unblocks:** **78** (a control surface where the press depends on
-  the position) wanted this for the Stop-Stop case and can now have it, and a
-  DAW that expects a *press and a release* rather than a bare trigger is one
-  two-step sequence away.
-
-- ~~**73. MIDI in as a reflex source — and what item 25 was waiting for**~~ -
-  2026-08-27. A listened port turns notes and CCs into reflexes, which is the
-  half of item **25** that was never a design problem so much as a missing
-  input.
-
-  ```json
-  { "name": "rec_on",
-    "from": { "midi": { "port": "Button", "note": 95 } },
-    "when": { "field": "velocity", "op": "==", "value": 127 },
-    "while": "Transport",
-    "then": { "action": "set_position", "name": "Recording" } }
-  ```
-
-  The rules that bind are in [CLAUDE.md](CLAUDE.md) — *a source says which
-  messages reach a reflex; the test says whether they fire it*, and *a driver
-  callback hands three bytes to the loop and does nothing else*. What is worth
-  keeping here:
-
-  - **It needed no new comparison language.** The message becomes a payload
-    (`{note, velocity, value, channel}`) and **72**'s one-field test does the
-    rest, which is what makes *note 95 velocity 127* and *the same note at 0*
-    one source and two opposite tests — the exact ambiguity item 73 was
-    written to point at.
-  - **A note-off reads as value 0** (`midi.decode`). The only thing that sends
-    notes *to* a button is a control-surface protocol using them as lamps, and
-    a DAW that spells the dark half as a note-off means the same thing. One
-    test catches both spellings.
-  - **`listen` now hands over all three bytes**, both backends. `ClockListener`
-    reads the status byte and defaults the rest, so the single-byte clock
-    messages it exists for are unchanged.
-  - **One listener per port, opened on the tick.** The wanted set is derived
-    from the config, so a reflex added in the editor starts listening without a
-    restart, and a port that only exists once loopMIDI or the DAW is running is
-    retried on a slow timer (`_MIDI_RETRY_S`), warning only when the reason
-    changes.
-  - **`from` is additive.** A MIDI reflex keeps its URL, so it is testable with
-    `curl` while the DAW is closed — which is how most of this was verified.
-
-  **Verified end to end against a fake backend**: the service opened the port,
-  a CC fired a top-level reflex, note 95 velocity 127 moved a *running* signal
-  light to Recording and velocity 0 moved it back (**74** + **77**'s light half
-  in one line), readings were attributed to the app while it ran and to nothing
-  before it, a note nobody named and a clock byte did nothing, and the listener
-  closed on shutdown. **Not yet run against a real DAW** — that is **77**'s
-  definition of done and needs the Send To pointed at a loopMIDI port.
-
-- ~~**74. A reflex can change what a running app is doing**~~ - 2026-08-27.
-  The invasive one, and it went in as the recommended **second queue** rather
-  than as a synthetic press.
-
-  ```json
-  { "name": "rec_on", "while": "Transport",
-    "when": { "field": "velocity", "op": "==", "value": 127 },
-    "then": { "action": "set_position", "name": "Recording" } }
-  ```
-
-  The rules are in [CLAUDE.md](CLAUDE.md) - *a reflex reaches a running app
-  only by naming it*, and *what the world reports is shown, not announced*.
-  The four decisions:
-
-  - **`wait_in_app` is the takeover's `_wait_for_trigger`.** Same contract
-    (press, or None on shutdown/timeout) plus one more answer: a
-    `SetPositionAction`. Anything else the reflex carries it runs itself, so an
-    app never grows a second `execute()` path and the app's light is left
-    alone. **An app opts in by calling it**; one that does not keeps
-    `_wait_for_trigger` and reflexes wait for it, exactly as under **71**.
-  - **The timeout is a deadline, not a fresh clock per arrival.** A ringing
-    alarm's grace period must not be extended by traffic nobody asked for -
-    the bug you only find at 3 a.m.
-  - **A reflex for somebody else is held, not requeued.** Requeueing
-    immediately spins (take, put back, take); acting on it now would let the
-    world interrupt an app it was not addressed to. It goes back on the queue
-    when the app hands the button over, in arrival order, which is exactly the
-    "waits its turn" behaviour 71 shipped.
-  - **`set_position` is the third loop-owned action**, after `enter_mode` and
-    `standby`, and the narrowest: only a *running* app can perform it. Marked
-    `appOnly` in schema.js so a gesture is never offered it - a gesture is
-    answered at the ambient layer, where there is no app to have a position -
-    and `handle` says so plainly if a hand-written config binds one anyway.
-
-  **The consumer today is the signal light**, which already had named states:
-  a reflex moves it between them, paints it, and logs the position the same
-  way a press does - so a day's chart mixes reported and pressed changes
-  without lying about either. It does **not** fire that position's own action,
-  the rule entering already followed, and with a DAW that is the difference
-  between a light and a feedback loop. **This is 77's design prototyped on the
-  template that already had positions**; what 77 adds is the same on a control
-  surface, fed by MIDI (**73**) instead of by HTTP.
-
-  Verified end to end over HTTP against a throwaway service: a press opened
-  the app, then `rec_on`/`rec_off` moved the light with nobody touching the
-  button, a velocity failing its test left the position alone but still logged
-  the reading, an unknown position was reported rather than guessed, and an
-  unscoped reflex sat waiting until the app was left and then fired.
-
-- ~~**72. A reflex can test the value it arrived with**~~ - 2026-08-27, the
-  same day as **71**, because a reflex that cannot look at what it was told is
-  a doorbell rather than a sensor.
-
-  ```json
-  { "name": "moisture_low", "when": { "field": "moisture", "op": "<", "value": 30 },
-    "then": { "action": "enter_mode", "target": "Water me" } }
-  ```
-
-  ```bash
-  curl -X POST localhost:8080/api/reflex/moisture_low -d '{"moisture": 12}' -H 'content-type: application/json'
-  ```
-
-  The rules that bind are in [CLAUDE.md](CLAUDE.md) - *one field, one
-  operator, one number*, and *a number that arrived is logged whether or not
-  it fired*. What is worth keeping here:
-
-  - **`REFLEX_OPS` is the whole language**, six comparisons, mirrored in
-    schema.js and pinned by [test_schema_mirror.py](tests/test_schema_mirror.py).
-    There is deliberately no "add another condition" in the editor: two
-    conditions is an expression parser, and an expression parser never moves
-    onto the device (**D2**).
-  - **The loop evaluates, the endpoint carries.** `reflex_matches` is pure and
-    has one call site, so **73**'s MIDI source applies the same test instead of
-    growing its own. The HTTP reply still says *accepted*, never *matched* -
-    it is a queue, and the button may be busy.
-  - **A missing field does not fire.** The alternative - firing when the field
-    is absent - turns a renamed sensor key into an alarm nobody can stop,
-    which is the failure people unplug the device over.
-  - **A broken `when` is dropped and the reflex is kept**, firing
-    unconditionally and warning. A silenced reflex is indistinguishable from a
-    sensor that stopped reporting; a noisy one is at least visible.
-  - **The reading is logged on arrival, under the reflex's name**, so 88 and 12
-    both land in `value` and the Events page charts the sensor for free. The
-    action's own rows are separate and unchanged.
-
-  Verified end to end over real HTTP against a throwaway service (MockDevice,
-  its own port and database): 12 fired and logged, 88 logged only, a wrong
-  field did neither, a pooled action fired by name, a typo answered 404 naming
-  the reflexes that exist, and `enter_mode` put the button in the app.
-
-- ~~**75. What the mode list is called, now that reflexes are real**~~ -
-  2026-08-27, straight after **71**, because the word collided the moment a
-  real reflex existed. Three groups, the owner's own table:
-
-  | Group | What it means | Holds |
-  |---|---|---|
-  | **Menus** | a press picks between things | the everyday gesture map, launchers, control pages |
-  | **Apps** | takeovers that do a job | the other ten |
-  | **Reflexes** | the button acts with nobody pressing it | reflexes (**71**), and the apps a clock starts |
-
-  The vocabulary rule is in [CLAUDE.md](CLAUDE.md) - three words, and the
-  tokens still do not move. What is worth keeping here:
-
-  - **`MENU_TEMPLATES` is UI-only grouping** (`actions`, `launcher`,
-    `control`), beside `MODE_GROUPS` in schema.js. A launcher's `nature` is
-    still `'takeover'`, because that mirrors `TAKEOVER_BEHAVIORS`; what
-    changed is which *heading* it is listed under, and that was never a
-    mirrored fact.
-  - **A group is keyed by `key`, not by `nature`** - there are three groups
-    and two natures now, which is exactly why the old code could not express
-    this.
-  - **The Reflexes group lists things that are not modes**, so it does not go
-    through `_navRow`: a reflex has no look to swatch and can never be the
-    running thing. Selecting one scrolls its row in the Reflexes section into
-    view and marks it (`_jumpToReflex`, the move TODO 60 built) rather than
-    filling the detail pane - **two editors for one object is how a page
-    starts lying**.
-  - **The duplication 69 complained about is fixed for the new half by
-    construction**: a reflex is its own object, so *"moisture_low → Water me"*
-    is a row in Reflexes and the alarm is a row in Apps - two things, listed
-    once each. Only a *scheduled* app still appears twice, which is **70**'s
-    decision not to migrate schedules; folding (**69**) is the mitigation that
-    already shipped for it.
-
-- ~~**71. A reflex fires an action, and HTTP is the first source**~~ -
-  2026-08-27. The cheap half of **70**, and the one that makes the plant alarm
-  real: a top-level `reflexes` list, `POST /api/reflex/{name}`, and dispatch
-  through the action machinery that already existed.
-
-  ```json
-  "reflexes": [
-    { "name": "moisture_low", "then": { "action": "enter_mode", "target": "Water me" } },
-    { "name": "deploy_done",  "then": "celebrate", "while": "Focus" }
-  ]
-  ```
-
-  What still binds is in [CLAUDE.md](CLAUDE.md) — *a reflex adds a source of
-  events and no new vocabulary of consequences*, and *a circumstance is not a
-  press and never travels as one*. The four decisions behind them:
-
-  - **`then` is any action, from a list.** `REFLEX_ACTIONS` is the hook set
-    plus `enter_mode` — mirrored in schema.js, tested in
-    [test_schema_mirror.py](tests/test_schema_mirror.py). `readout` and
-    `standby` stay out: both change what the loop does with the *next gesture*,
-    and nobody is standing at the button to see the answer. A bare string is a
-    pool reference, so `handle_reflex` is the fifth `resolve_action` site
-    CLAUDE.md predicted.
-  - **A second queue, not a synthetic press.** `_wait_for_press_or_reflex`
-    selects on the device's queue and `inbound`; a press wins a tie and
-    whichever getter also fired is put back rather than dropped. `run()` takes
-    the queue as an argument the way it takes the device, which is how the
-    tests post a circumstance with no web server up.
-  - **Presses made while busy are dropped; reflexes are not.** A press whose
-    moment passed is noise; a plant that has gone dry still means it. Bounded
-    at `_INBOUND_MAX = 16` so a script in a loop cannot queue an hour of them,
-    and the endpoint answers 503 rather than waiting.
-  - **`while` was enforced from the first version and could not match yet.**
-    A takeover is awaited inside `handle`, so nothing drained `inbound` while
-    an app ran. Enforced anyway so the field would never mean one thing and
-    later another - and **74**, later the same day, made it fire.
-
-  **The App page learned about it** (`reachableModes`, `findEntryPoints`,
-  `danglingTargets` all take reflexes): an app opened only by a reflex now
-  reads *"the reflex “moisture_low”"* rather than "unreachable", and a reflex
-  pointing at no mode is named in the same warning a gesture gets. Verified in
-  the offline editor.
-
-  **Where you edit one**: the Modes tab, above the named-action pool, each row
-  carrying the URL that fires it — a reflex has no press to watch for, so the
-  config is the only place it can be seen at all.
-
-  **Standby does not mute a reflex** - standby puts the *ambient layer* to
-  sleep, and a plant that has gone dry has not stopped meaning it because
-  nobody is at the desk. Said in a comment at the one place it is decided.
-
-  **Not built, on purpose**: no event row per fire (that arrives with **72**'s
-  value, which is what the `value` column is for) and no clock source (**70**
-  says not until something wants one an alarm cannot do). The endpoint accepts
-  a JSON body and ignores it, so a script written today survives **72**.
-
-- ~~**A named look built from a preset arrived empty**~~ - 2026-08-26.
-  Reported as "it always defaults to selecting single colour, which removes the
-  other colours in a sequence, and they don't come back".
-
-  **`modeEditor.js` read `preset.effect`, and most presets do not have one.**
-  105 of the 142 look presets are sequence-only and carry `stops` instead, so
-  `.effect` was `undefined`, `_addLook` spread it into `{}`, and the new look
-  was genuinely empty - which is why the editor showed *single colour* (an
-  empty object has no stops) and why the colours never came back (they had
-  never been copied anywhere). It now goes through `presetLook`, which is
-  `sequence || effect` **deep-copied** - and the copy matters as much as the
-  fallback, because handing over the preset's own object would have shared its
-  stops array with the module-level table and let editing your look rewrite the
-  preset for the rest of the session. Every other preset consumer in the app
-  already used that helper; this was the one that did not.
-
-  **Merely looking at an existing sequence never corrupted it** - checked
-  against the real component, which mutates nothing on mount. The damage was
-  only ever at the moment of creating one from the dropdown, which is why it
-  read as "always".
-
-  The destructive toggle underneath it was **76**, fixed below.
-
-- ~~**76. Switching a look to "single colour" destroyed it, silently**~~ -
-  2026-08-26. `switchShape` in
-  [colorEngine.js](aibutton/web/static/colorEngine.js) `delete`d every key on
-  a flip with nothing kept, so one accidental click on *Single colour*
-  discarded a stop list you had spent ten minutes on, with no confirmation and
-  nothing to recover from.
-
-  **Fixed by parking, not by asking.** Each shape now parks the exact fields
-  it is leaving in the widget's own closure - never written to the model, so
-  it costs the saved config nothing - and a flip back restores them rather
-  than rebuilding from the one carried colour. Only the first flip into a
-  shape (nothing parked yet) falls back to that reconstruction, same as
-  before. A confirm dialog would have been noise for the direction that loses
-  nothing; parking fixes the direction that does.
-
-- ~~**69. The mode list needed to fold**~~ - 2026-08-26. With eleven modes the
-  side panel ran longer than the screen, and the group you were not working in
-  was pure scrolling. Each group's title in
-  [menu.js](aibutton/web/static/menu.js) is a button now; a click folds that
-  group's body, remembered per browser via `nav-fold:<group>` in
-  [prefs.js](aibutton/web/static/prefs.js) - a view preference, so it costs
-  `config.json` nothing and does not survive to a scene.
-
-  **The item's second complaint - Alarm and its kind listed twice - is
-  deliberately untouched.** That is **48a** working as designed, and the real
-  fix was **75**'s taxonomy, which has since landed: a reflex is its own
-  object and is listed once, and only a *scheduled* app still appears twice -
-  **69** is still the answer to that half.
-
-- ~~**56. The App page led with a warning a novice could not act on**~~ -
-  2026-08-26. "4 installed apps have nothing that can reach them" sat above
-  every app in [menu.js](aibutton/web/static/menu.js)'s `_renderAppsSection` -
-  the best line on the page for a tinkerer, a wall of alarm for someone who
-  had installed one thing.
-
-  **Deleted, not moved.** The diagnosis it was aggregating already sits beside
-  the app it is about: the "Unreachable" pill on the card (`_appStatus`) and,
-  per copy, exactly why (`_howReached`, "nothing opens it - bind a gesture to
-  ‘Launch an app’…"). The count was reporting nothing those two did not already
-  say, one level up and with less specificity. The dangling-target warning
-  stays - it names a gesture pointing at an app that does not exist, which has
-  no card to sit beside and is directly actionable ("Install it below").
-
-- ~~**57. Nothing said what a press would do right now**~~ - 2026-08-26. The
-  nav's live dot already knew - `active_modes` from `/api/status`, the same
-  ambient resolution the dot's hover title used - but seeing it meant hovering
-  a dot in a list you might not have open.
-
-  **A line under the header's "Last: …"** (`aibutton/web/index.html`) now says
-  it without being asked: `Right now: short press → Coffee count · long press
-  → Focus`, one entry per bound gesture, in `GESTURES` order. No backend
-  change - `active_modes` already carried exactly this, one poll away.
-
-- ~~**55, 63, 64, 68 - four small read-back fixes**~~ - 2026-08-26, a
-  low-hanging-fruit pass done on Sonnet between sessions.
-
-  - **55.** Header no longer counts modes - "11 modes" was the one number
-    nobody could act on, left over from the vocabulary item 46 retired.
-    Dropped rather than recomputed, since nothing needed the exact split.
-  - **63.** The flash floor's readout says `Floor: 0.30s (3.3 flashes/sec)`
-    now (`schema.js`) - the word was previously only in tinker-tier help text,
-    for the one setting that is *honoured and warned about* rather than
-    clamped.
-  - **64.** The Web server settings group carries a line pointing at `/api/`
-    and webui.py's own docstring for the endpoint list - zero mentions of the
-    REST API existed anywhere in the UI before. Gated the same as the rest of
-    that group (Tinker-tier): the fields it sits beside already are, and one
-    visibility rule beat a special case for one paragraph.
-  - **68.** `DeviceInfo.names_absent` (`device.py`) mirrors `.names` - what a
-    device does *not* claim, from the same `CAPABILITY_NAMES` table, so no
-    second list to drift. `/api/status` carries it as `capabilities_absent`
-    and the header shows `(missing: …)` when non-empty - the half that
-    decides whether a developer's feature will work, previously invisible.
-
-- ~~**58, 60, 66, 67 - four more read-back fixes**~~ - 2026-08-26, another
-  low-hanging-fruit pass done on Sonnet between sessions.
-
-  - **58.** The header's pane toggle (`index.html`) relabels itself "◧ Press
-    the button" and picks itself out in amber whenever the real button is
-    connected but not `mock` and not `device_connected` - exactly the case
-    that sends someone here. Not opened automatically - `sidepane.js`'s
-    "only appears when asked" still holds - just made obvious that asking is
-    the way in.
-  - **60.** A failed Check/Save (`menu.js`) now switches to the first error's
-    panel and mode, re-validates the freshly selected mode so its `.fld-err`
-    spans populate, and scrolls the bad field into view with a brief `.fld-jump`
-    outline. `_collectErrors` returns `{text, panel, mode}` per error instead
-    of a bare string; the Save bar's text is unchanged.
-  - **66.** Each app that reports something on exit now carries
-    `summaryKeys` on its template descriptor (`schema.js`) - key names sorted
-    the way `summary.clean` will actually send them over OSC, not the order
-    the Python happens to build the dict in - shown as a hint under "Around
-    the session" (`modeEditor.js`). Covers the five apps that report anything:
-    Stopwatch, Counter, Intervals, Hot/Cold, Reaction. **Not yet mirror-tested**
-    against `main.py`'s real `tally()`/summary dicts the way `readout` is
-    (`test_app_readout.py`) - a manual read of the source as of 2026-08-26,
-    and CLAUDE.md's own rule says that should not stay true for long.
-  - **67.** A short client-side history (`index.html`, `#press-log`, 5 deep)
-    keeps the last few `last_message`s in the Test panel's Press section
-    instead of only the header's one line, which the next action overwrote
-    before a DAW-wiring session could read it. No backend change - polls the
-    same `/api/status` and appends on every value change.
-
-  **Found in passing, not fixed**: testing 60 against the live config turned
-  up three pre-existing validation failures already sitting in the saved
-  file - Pomodoro's ramp colour and both Alarm/Work Alarm's "Give up after" -
-  none related to this session's edits and none saved over. Worth a look next
-  time that page is open; `Check` on the Modes tab will jump straight there.
-
-- ~~**The launcher offered Alarm modes and `enter_mode` did not**~~ -
-  2026-08-26. Found 2026-08-22, resolved the same low-hanging-fruit pass.
-  `main.py`'s `enter_takeover` dispatches `AlarmBehavior` through the same
-  `ring_alarm` either way a mode is entered - by its schedule or by hand - and
-  `launcher_targets` (filtering on `TAKEOVER_BEHAVIORS`) already offered Alarm
-  as a manual target on that basis. The `enter_mode` action's own target
-  picker (`schema.js`) was the odd one out: it filtered on
-  `startedBy: 'gesture'`, a field describing a mode's *default* activation,
-  not whether a gesture can enter it - which happened to exclude Alarm too.
-
-  **Fixed by widening the picker to match what `enter_takeover` actually
-  dispatches**, not by narrowing the launcher: `enter_mode`'s options are now
-  every `TAKEOVER_TEMPLATES` entry except `reminders`, the one template with
-  no `enter_takeover` branch at all (it would fail clean with "not a takeover
-  mode" if targeted, which is why it stays excluded rather than the
-  inconsistency going the other way). Verified live: Alarm and Work Alarm now
-  appear in a gesture's "App to launch" picker; Reminder still does not.
-  No backend change - `enter_mode`'s dispatch already accepted an Alarm
-  target, the UI just never offered it.
-
-- ~~**54. The Lights tab opened five colour editors at once**~~ - 2026-08-26.
-  The named-look pool got a collapsed row years ago for exactly this reason;
-  the five system states still rendered fully expanded, the same problem in
-  the first place a novice lands.
-
-  `_renderStateRow` (`menu.js`) mirrors `_renderLookEntry` exactly - swatch,
-  name, summary, one **Edit**/**Done** toggle, one open at a time
-  (`_expandedState`) - minus Duplicate/Delete, which a fixed system state
-  does not have.
-
-- ~~**59. There was no way to see the JSON**~~ - 2026-08-26. Export downloads
-  a scene and Import replaces one; neither answers "what does this control
-  actually write" without leaving the page.
-
-  A **View raw JSON** toggle on the Device tab (`_renderRawJson`, `menu.js`)
-  shows the working copy as formatted, read-only JSON, plus **Copy**. Nothing
-  new to load - it stringifies `this.model`, the same object every other
-  control already edits.
-
-- ~~**61. The named-action pool was invisible until you knew it existed**~~ -
-  2026-08-26. An empty picker under a gesture's "Use a named action" described
-  in prose where the pool was, on a page that already scrolled.
-
-  A **Make one** button (`modeEditor.js`'s `_namedActionField`) creates a pool
-  entry and points the gesture at it in one click, through the same
-  `_addAction` the pool's own "+ Add" button now calls
-  ([menu.js](aibutton/web/static/menu.js)) - one path to a new entry, not two.
-
-- ~~**A control surface's DAW commands appeared wiped on reload**~~ -
-  2026-08-26. Reported as settings that "save and appear to update the button
-  but when I re-open the page, the settings appear wiped".
-
-  **Nothing was ever wiped, and no config on disk was damaged** - the notes,
-  channels and ports were correct the whole time. `daw_command` is a *preset
-  inserter*: it fills in the real fields and is deliberately not round-tripped,
-  which is the right lifetime for "this is how the number got there". But the
-  widget recovered its selection only by reading that dropped key, and **every
-  raw MIDI field is Tinker-tier and hidden** - so after any save the dropdown
-  was the only control on screen for that gesture, and it reverted to
-  "- start from… -" while the button went on sending the right note.
-
-  Fixed by making the preset recognisable again from what it wrote: a `derive`
-  hook on the field spec, pointed at `dawCommandFor` - the reverse lookup
-  `describe()` had been using all along to show "Play" beside note 94.
-
-  **The MIDI numbers were also doubted and are correct.** The MCU table is
-  internally consistent, has no duplicate note numbers across 60+ entries, and
-  every gesture's label matches its own number. The doubt was almost certainly
-  caused by this bug: with the labels blanked there was no way to confirm at a
-  glance what each gesture sent. If a DAW still ignores a command, README's
-  note applies - the port has to be added as a **Mackie Control**, not as a
-  new keyboard.
-
-- ~~**47. Read the menu back from three points of view**~~ - 2026-08-26. Three
-  personas walked the finished shell. **Fifteen improvements are items 54-68**;
-  what follows is only what got fixed on the way.
-
-  **Three dead ends, and the third had been live for seven hours.**
-
-  - **A curated launcher menu could not survive being looked at.** `targets` is
-    a textarea, so the editor writes a string; `_parse_launcher_body` accepted
-    only a list, so opening a launcher in the web UI and saving reverted it to
-    "offer every app" - error in the log, nothing in the UI. `cues` had taken
-    both shapes since 52a *and said so in a comment pointing at this bug*.
-    Now a rule in CLAUDE.md rather than a comment.
-  - **A heading with nothing under it.** All three "Web server" settings are
-    tinker-tier, so a basic user got the title and blank space. A group is now
-    tinker-tier when every field in it is - derived from the specs, so a group
-    that gains a basic field starts showing again on its own.
-  - **A ringing alarm could be seen and not acted on.** The badge pulses red,
-    the only presses live behind a toggle labelled *Test panel*, and the button
-    was disconnected - so there was nothing in the room to press either. Found
-    with a real alarm that had been ringing since 07:00. There is a **Dismiss**
-    button in the header now, shown for `ALARMING` and nothing else: any press
-    dismisses an alarm, so it is an ordinary short press rather than a new
-    endpoint. Every other takeover is something you chose to open and can leave
-    with a long press, and a page-wide "get me out" would compete with the
-    button itself.
-
-  Also fixed, found by the suite rather than the walk: the **5AM alarm preset
-  was unsaveable**. It hand-listed its fields and predated `grace_minutes`, so
-  the editor's own check refused it the moment it was added. It spreads the
-  template defaults now, like every other preset.
-
-  **What it did not cover, deliberately:** touch targets. 42 already settled
-  that they need a hand and a real phone.
-
-- ~~**53. The Events page grows sub-tabs and charts**~~ - 2026-08-26. The table
-  keeps its place as the default view and gains three sibling pages - Overview
-  & Activity, Mode & Time, Patterns & Metrics - carrying nine charts. Verified
-  against the live log (380 rows): zero overflow at 375 and 1280, every view.
-
-  **The two decisions the item pre-answered held.** No library: every chart is
-  hand-rolled, no build step, no runtime dependency. Aggregation is client-side
-  and there are no new endpoints - the same grouping logic in Python *and*
-  JavaScript would be a mirrored table with no test behind it.
-
-  **The open question is answered: the offline editor gets none of it.** It has
-  no service and therefore no events, so `eventCharts.js` is simply not in
-  build_editor's entry list - the seam `sidepane.js` already sits on. Verified
-  by serving the bundle and driving it.
-
-  **Mostly not SVG, which is where this departs from the item's own
-  recommendation.** Text inside a `viewBox` scales with the box, so an 11px
-  label is 6px on a phone - unreadable rather than overflowing, which no
-  measurement catches. Rule now in CLAUDE.md.
-
-  **Two things the data would have got wrong**, both now pinned by tests:
-  summing `timer_stop` *and* `mode_exit` double-counts a stopwatch, and
-  `toISOString().slice(0, 10)` files evening events under tomorrow for everyone
-  not on UTC.
-
-  The fetch bug the item named is fixed: `/api/events` defaults to 50, so every
-  caller now states its own limit. The table draws 200 of them and says "200 of
-  380 rows" when that bites.
-
-- ~~**51. Apps with real interfaces**~~ - 2026-08-26. An app's page is the app
-  now, not just its settings: what it has done sits above the knobs. **Zero
-  Python** - it reads `/api/events` and the config, which is exactly the line
-  the item drew.
-
-  **Two halves.** A stopwatch shows its runs compared against each other -
-  bars, best and worst, and each run's delta against the one before it. And an
-  app with more than one item lists its siblings, so you move between your two
-  alarms from inside the alarm. Two or more, like the nav's grouping: a row of
-  chips holding only the item you are looking at says nothing.
-
-  **Declared as data, so it is not a stopwatch feature.** Thirteen templates
-  carry a `readout`, and a new app gets a history by adding four keys.
-  `measure` has four values because `value` is one untyped column - and the
-  reason `outcome` exists is that an alarm's 0/1 must be counted, never
-  averaged into "0.86 alarms".
-
-  **`better` is null far more often than not**, and that is the point of it
-  being nullable: a tempo has no good end and neither does a countdown's
-  length. Only a game declares one.
-
-  **The exact-name filter is client-side on purpose.** `/api/events?name=` is a
-  substring match - right for a search box, wrong for "this counter's rows",
-  where a counter called `water` would quietly absorb `water_reminder`.
-
-  Found while walking it: `noun + 's'` gave "presss", "guesss" and "launchs".
-  One `plural()` in format.js, because a `plural` key on twelve descriptors to
-  fix three of them is a field nobody reads.
-
-- ~~**48c. The editor reads as an app and its items**~~ - 2026-08-25. The nav
-  groups by app and the App page lists the copies; a mode's own page was the
-  last screen still calling one of them a mode. Its head now names the app
-  (ALARM, INTERVALS) and the name field says what it is naming.
-
-  **Delete says the item's name, not its kind.** "Delete this alarm" was fine
-  and "Delete this intervals" and "Delete this hot / cold" were not - a label
-  built from a template name has to survive every template. `Delete "Wake up"`
-  survives all twelve and says exactly what is about to go.
-
-  Vocabulary only. No data changed, which is the whole point of it being
-  separable from **48b**.
-
-- ~~**44. Dead man's switch - an alarm that acts when you *don't* answer**~~ -
-  2026-08-25. Two fields on `AlarmBehavior`: `grace_minutes` and `on_timeout`.
-  With no grace period it is today's alarm, byte for byte - the switch is
-  opt-in, and a test pins that.
-
-  **The mechanism was already next door, inverted.** `run_reminder`'s timeout
-  branch says a timeout is not a clear, *because nobody saw it*; this is that
-  sentence turned around - nobody saw it, so tell someone. It hangs off the
-  alarm rather than the reminder because the alarm **insists** (it loops, it
-  snoozes) where a reminder gives up.
-
-  **A preset, not a template**, which is the whole point: the alarm already
-  rings and already waits, so the switch is two fields. What the preset buys is
-  **findability** - nobody looking for a dead man's switch would think to open
-  an alarm and read its fields.
-
-  **`on_timeout` is a binding, not a field.** There is no `kind: 'action'`
-  widget and there should not be one: an action bound to something that is not
-  a press is exactly what a hook already is, so it reuses that sub-editor
-  through a new **`bindings`** key on the descriptor. It offers `HOOK_ACTIONS`
-  only - `enter_mode`, `readout` and `standby` change what the mode loop does
-  next, and there is no loop left to change once the alarm has given up.
-
-  **Every outcome is logged, not just the dismissal.** `dismiss_event` now
-  writes `value: 1` when answered and `value: 0` when not - same event name,
-  both outcomes, one place to look. A switch that fires while nobody is
-  watching is only worth having if the record says what happened.
-
-  **It depends on this host being awake and its whole point is firing while
-  nobody is watching.** Service stops, machine sleeps, Bluetooth drops - it
-  does not fire, and cannot know it did not. Said plainly in the editor hint,
-  commented at the dataclass, and the reason for the logging above. *It is a
-  nudge, not a safety device.*
-
-  Verified through `main.run` with the clock parked on the alarm's minute:
-  answered runs nothing, unanswered runs the action, it stops ringing once it
-  has given up, and `grace_minutes: 0` still rings forever.
-  [test_dead_man_switch.py](tests/test_dead_man_switch.py).
-
-- ~~**52a. A light show app**~~ - 2026-08-25. A playlist of named looks,
-  walked on a clock. Short press is the next cue, **double tap holds** it on
-  the one you liked, long press leaves.
-
-  **Why it earned a template rather than a preset**, which was the first thing
-  triage checked: everything else about a show is already data - a look can be
-  a stop list, and a stop list already fades, holds and loops. What no existing
-  template can do is **advance on its own**. A Signal light waits for a press;
-  a look, however long, is one look. The clock is the only new thing, and the
-  clock is the code.
-
-  **A cue names a look; it never carries one** - the opposite of a Signal
-  position, for the opposite reason. A position is a status you invented and
-  nothing else could mean it, so it carries its colour inline. A cue wants the
-  *rich* form, which only exists in the pool, and naming one means retuning
-  "Ember" retunes every show using it.
-
-  **It owns no `LEDState`**: each cue is pushed as an ephemeral effect over
-  LISTENING, exactly as a Signal position is, so the whole app cost **no wire
-  code** and stores nothing on the device.
-
-  **The dwell has a floor of its own (1s), and needed one.** `sequence_safe`
-  governs how fast a look flashes *inside itself*; nothing watched how fast the
-  show swaps between looks, so a `dwell_s: 0.05` would have been a strobe the
-  existing guard could not see.
-
-  **Verified against a real run loop**, not just the dataclass: enters on the
-  first cue, short press advances, **advances on the clock with no press**,
-  double tap holds it through a full dwell, long press returns to IDLE, and an
-  empty show reports an error instead of spinning. [test_lightshow.py](tests/test_lightshow.py)
-  covers the same six plus the parser rules.
-
-  **(b), per-pixel ring patterns, remains a proposal** and is unchanged by
-  this: the ring is still one lamp, and (a) is what says whether it needs to
-  stop being one.
-
-- ~~**50. A colour on the app pickers**~~ - 2026-08-25. "Launch an app" is a
-  button and a list of buttons now, not a `<select>`: each option carries the
-  same live swatch the nav and the App page paint, plus what that app does.
-  A `<select>` could never do it - an `<option>` holds text, and the half of a
-  look that identifies it is the **movement**. "The slow blue one" is how
-  anyone actually refers to a mode.
-
-  **A widget kind (`modeSelect`), not a special case in the picker**, because
-  capability is declared as data here: anything that comes to pick a mode asks
-  for that kind and gets the swatch. The options are real buttons, so Tab and
-  Enter work without a listbox implementation; Escape closes and hands focus
-  back.
-
-  **`modeLook` moved into [schema.js](aibutton/web/static/schema.js)** and the
-  nav's private copy became a call to it - three places now answer "what
-  colour does this run in?" with one function, which is the rule the colour
-  engine already sets. A target naming a mode that no longer exists shows as
-  **"(missing)"** in amber rather than as unset, because the parser warns
-  about exactly that and the editor must not disagree with it.
-
-  **Fixed while here, and it was a live bug**: 48a made `navButtons` a list of
-  rows per mode, and the rename handler still treated it as one row - typing in
-  a mode's name threw. Each row now also remembers *which line it shows*, so a
-  rename cannot swap a Reflex row's trigger for a template summary.
-
-  **The web UI's own assets are served `no-store`.** There is no build step and
-  no hashed filenames, so an edited module keeps its URL - and a browser that
-  caches it runs last week's editor against this week's service. An ES module
-  graph is cached per URL, so a reload will not shift it, which makes the
-  failure look exactly like the edit not having happened. It cost real time
-  twice in one session. Needs a service restart to take effect.
-
-  **Not done, deliberately:** the launcher's target list. It is a textarea of
-  free-typed names, and turning it into a multi-select is a different job from
-  putting a colour on a picker.
-
-- ~~**49. An App management page**~~ - 2026-08-25. A fourth destination
-  listing every app as **Available**, **Installed** or **Unreachable**, with
-  each installed copy showing *how* it is reached ("Triple tap → Home", "at
-  07:00 Mon-Fri") or what to do if it is not.
-
-  **Reachability is a walk, not a filter, and that is the whole value.** Roots
-  are the things nobody has to start - a gesture map is live by definition, a
-  clock starts its own apps - and everything else is reachable only by being
-  pointed at. It is **transitive**, because a launcher you cannot open cannot
-  open anything either. `reachableModes` is pure over data
-  ([schema.js](aibutton/web/static/schema.js)), so it is the same kind of
-  function as `rules.py`, and it resolves **named actions** on the way -
-  `findEntryPoints` never did, so a gesture holding a pool entry read as going
-  nowhere.
-
-  **It found four real faults in the live config the moment it rendered**:
-  Counter, Metronome, Intervals and Reaction stranded with nothing able to
-  open them, and a long press pointing at a "Launcher" that does not exist.
-  That is the case for the page in one screenshot - none of it is visible from
-  any single mode's card.
-
-  **Installing a launcher nobody can open fixes nothing, and the page says
-  so.** Verified both ways: install it and the four stay stranded; point one
-  gesture at it and all four flip to reachable as the walk runs through it.
-
-  **Two verbs under the mode list, not one.** "+ Add mode" became **"+ Add
-  reflex"** and **"Manage apps →"**, because writing a gesture map and choosing
-  between twelve apps are not the same act. The ready-made picker went with it:
-  its fourteen presets are now what **Install** offers, so choosing an app and
-  choosing which *kind* of it you want stopped being two controls in two
-  places.
-
-  **The offline editor got the page too, rather than a second code path.**
-  Removing the picker had quietly left it with no way to add an app at all -
-  the mount is optional, and it was resolving to nothing. It now has the panel,
-  the tab, and the `button:show-panel` listener that makes "Manage apps"
-  more than a dead button there.
-
-- ~~**48a. Alarms stop looking like five apps**~~ - 2026-08-25. Presentation
-  only: no `config.py`, no `main.py`, no wire. Two alarms now read as
-  **"Alarm (2)"** with both nested under it, and grouping starts at two -
-  a header over a single child doubles the list to say nothing, and one
-  stopwatch really is one stopwatch.
-
-  **A mode may be listed twice, and that is the point.** The two groups
-  stopped being boxes a mode falls into and became two questions - *what
-  wakes the button up*, *what can it run* - so an alarm answers both and
-  appears under both. `startedBy: 'schedule'` is the test rather than a list
-  of templates, because it is already the descriptor's answer to "does a
-  person start this?", so a new clock-started template joins the Reflexes list
-  with no edit to the nav.
-
-  **The two listings must not read identically**, or the second looks like a
-  duplicate rather than a second answer: the Reflex row shows the *trigger*
-  ("at 07:00 Mon-Fri"), the Apps row shows the template summary.
-
-  **Reflexes is two sections, because only one of them is a queue.** A gesture
-  map is read top-to-bottom, first match wins, and its order is a setting the
-  blurb tells you to use. A scheduled app's position means nothing. Run
-  together they read as one priority list and someone would reasonably drag an
-  alarm up the page expecting it to matter - so anything a clock owns sits
-  below its own **"On a schedule"** label, and the blurb now says so. *The
-  blurb was the bug: it promised priority ordering over a list that had just
-  stopped being one.*
-
-  `navButtons` maps a mode to a **list** of rows, not one row. Both consumers
-  walk it; with a bare entry the second row silently replaced the first and
-  only one of a mode's two rows ever lit its live dot.
-
-- ~~**45. The modes list is the side panel; the page opens on Events**~~ -
-  2026-08-25. The tab bar is gone. The side panel is the whole navigation -
-  Events, Lights, Device, then every mode under **Reflexes** and **Apps** -
-  and the main pane shows whichever one you picked. **One nav, not two**: the
-  mode list used to be a second 250px nav *inside* one of four tabs, so
-  reaching a mode was two choices and the list vanished the moment you looked
-  at anything else.
-
-  **`mounts.nav` is optional, and that is what keeps the offline editor
-  alive** - with nowhere to put the nav it renders inside the panel exactly as
-  before. `menu.js` **asks** the shell to show the modes panel
-  (`button:show-panel`) rather than reaching for its tab state; rule in
-  [CLAUDE.md](CLAUDE.md).
-
-  **The test panel is a popover** hanging off the header, not remembered
-  between loads - appearing unasked is the column it replaced. Closes on
-  Escape, the toggle, or a click outside; clicks *inside* keep it up, because
-  pressing the simulated button four times running is the main thing anyone
-  does in there.
-
-  **The narrow layout was rebuilt, and the bug it had was invisible.** Stacked,
-  the fixed-height frame gave the work surface zero height - nothing
-  overflowed, so 42's measurement passed while the page rendered empty. Below
-  900px the shell is a scrolling document now. The override that fixed it
-  *also* failed silently first, sitting above `.tab-panel { position:
-  absolute }` at equal specificity - the second time this stylesheet has lost
-  that argument. Both rules are in CLAUDE.md.
-
-  Left for **47**: the Actions pool still sits at the foot of the mode page
-  rather than having a destination of its own, which is a thing to look at
-  once someone reads the nav cold.
-
-- ~~**46. What the two kinds of mode are called**~~ - 2026-08-25.
-  **Takeover → App, Everyday → Reflex.** Half of it was decided elsewhere
-  already: the product line is "a button that runs swappable apps", so using
-  the word now avoids renaming twice. The other group needed a word for
-  *always on, fires instantly, never seizes the button* - a reflex fires
-  without thinking, an app takes over. Rejected: **Hotkeys / Apps** (no
-  flair), **Daemons / Apps** (accurate, asks too much of someone who has never
-  met the word). The `enter_mode` action reads **"Launch an app"** and
-  describes as `Launch “X”`, which is what makes the group name land - the
-  gesture that starts one now says the same word the group does.
-
-  **The copy changed and no token did.** `nature: 'takeover'`, the dataclass
-  names, `TAKEOVER_BEHAVIORS`, the config key `modes` and the wire are
-  untouched, so the mirrored-table tests were never in play; comments and
-  docstrings keep the old words where they describe code. Files:
-  `schema.js`, `menu.js`, `modeEditor.js`, README, MANUAL.
-
-  **"Mode" survives as the umbrella noun** in generic chrome - Add mode, Mode
-  name, Delete mode - because a reflex and an app are two kinds of one config
-  object and the key is literally `modes`. Whether the umbrella needs its own
-  word is a question for **45**, which replaces the tab bar that carries it.
-
-- ~~**41. The colour menus say what the button will actually do**~~ -
-  2026-08-23. Seven reports from using it, one cause under most of them: the
-  Lights tab was describing the *palette entry* while the button wore the
-  *named look*, so a working feature read as broken. The runtime was right
-  throughout (`look_for` resolved it; a test now drives it end to end).
-
-  **A named look is an option in the Style dropdown** (`__look__`), with the
-  pool picker appearing only when it is chosen and the palette entry folded
-  into a "what it shows with nothing connected" drawer beneath. That removes
-  the second select, and with it the divider that used to sit between a state
-  and its own second setting - the thing that made that setting look like it
-  belonged to the next state down. The head swatch, the summary and "Show on
-  the button" all follow `shownLook()`.
-
-  **"Show on the button" plays a sequence** instead of flashing its first
-  colour. `/api/dev/led` gained no driver of its own: `WebContext.show_look`
-  is main's `set_led`, which already owns the cancellable task and the
-  `sequence_safe` gate. With no driver attached it degrades to the first
-  colour and says so.
-
-  **A stop lost its `style`/`period_s`** (36e). Two clocks on one light, and
-  no layout could say which one you were setting; everything it expressed is
-  more stops, and the eight presets that used it were rewritten as stop lists -
-  Rainbow Chase is better for it. The keys parse and are ignored in silence.
-  `sequence_safe` is down to one axis as a result.
-
-  **The fade moved into the gap between the two colours it crosses**, named
-  from both ends - including the first gap, which is the only place the editor
-  can say that a one-shot arrives out of black and a loop out of its own last
-  stop.
-
-  **The named-look pool is a list**: swatch, name, where it is worn, and Edit /
-  Duplicate / Delete, with one editor open at a time.
-
-  **A rainbow got a saturation**, riding `color2` exactly as its brightness
-  rides `color` - no wire change, `CAP_RAINBOW_SAT`, zero means full. Needs a
-  reflash to show on hardware.
-
-  **The mode list shows each mode's colour** (`_modeLook`, mirroring
-  `main.app_look`); a template owning no LED state gets an empty ring.
-
-  **One fix was not a UI fix**: a look is *asserted*, not stored on the device
-  like a palette entry, so an edited look sat behind the old one until the next
-  press. The tick re-asserts IDLE when its resolved look changes. That rule,
-  and the rest, are in [CLAUDE.md](CLAUDE.md).
-
-- ~~**37. A `keys` action - the button types, clicks, and runs macros**~~ -
-  shipped 2026-08-23, the day it was triaged. A new action, not a template: no
-  protocol change, no reflash, and it joins the named-action pool and the
-  lifecycle hooks for free.
-
-  **No dependency**, which is the `midi` precedent applied a second time:
-  `user32.dll`'s `SendInput` through `ctypes` does chords and clicks, so
-  Windows costs nothing to support. **There is deliberately no Linux/macOS
-  backend** - uinput needs root or a udev rule and macOS needs an
-  Accessibility grant, and neither belonged in this change. The action is
-  absent rather than broken without one.
-
-  **The vocabulary is declared, not passed through** ([keys.py](aibutton/keys.py)):
-  modifiers, media keys, navigation, letters, digits, F1-F24. A name outside it
-  is a *config* error caught at load, because "type this string" is a much
-  larger promise than "press this chord" - one the parser could not bound and
-  the editor could not offer a picker for. Media keys are listed first and for
-  a reason: they are the only ones that work with no window focused.
-
-  **One chord, not a sequence.** A list with delays is **33**, and `keys`
-  becomes a step inside it rather than growing its own second implementation.
-
-  **Permanently host-local**, which matters for **40**: moved to a Pi it types
-  into the Pi. That is what synthesizing input means, not a bug to fix.
-
-- ~~**32. Session summaries**~~ - 2026-08-22, on 31's exit hook. Reporting:
-  pomodoro, stopwatch, counter, reaction, hotcold; the other seven return
-  `None` and add no key. `summary.py` is pure and `clean` is the single
-  enforcement point - *flat* means a nested value is **dropped**, not
-  flattened, and non-finite floats go too (`nan` has no JSON spelling and would
-  fail the whole body over one key). Over eight keys it truncates. Webhook
-  precedence is identity > session > user payload. The rule enforcement cannot
-  check is in [CLAUDE.md](CLAUDE.md): same keys every exit, or none at all.
-
-- ~~**31. Lifecycle hooks - `on_enter`/`on_exit` on `Mode`**~~ - 2026-08-22.
-  On `Mode`, not per behaviour, so all eleven takeovers gained them with zero
-  per-template code; fired from `enter_takeover` **and `fire_alarm`**, because
-  a mode reached by schedule and by gesture must not differ. Entry is spawned
-  and exit awaited ([CLAUDE.md](CLAUDE.md) says why).
-  `enter_mode`/`readout`/`standby` are refused as hooks - `enter_mode` on entry
-  is the recursion "bounded by construction" exists to forbid. `fire_hook` is
-  the fourth action dispatch site, so it resolves named actions.
-
-- ~~**The web UI cannot simulate a four- or five-tap**~~ - 2026-08-22, and
-  **not by adding two buttons**: the Press row was hard-coded markup, which is
-  why it never noticed a data change, and is now generated from `GESTURES`. A
-  second private copy of the table behind the "Last: ..." line had been
-  rendering a real `tap_4` as its raw key. The guard asserts index.html names
-  **no** gesture in markup, so hand-written buttons fail the test.
-
-- ~~**36. One colour primitive**~~ - 2026-08-21, owed tests closed
-  2026-08-22. `LOOK_PRESETS` became effect-*or*-sequence, plus `Stop.curve`, a
-  style per stop (**removed again in 41** - it was two clocks on one light),
-  and `drive`. **Walked versus sampled turned out to be the
-  real distinction, not the unit**: `plan_at` walks and returns a wait,
-  `sample_at` samples and returns none. Precedence is named stop list > ladder
-  > ramp. The rules are in [CLAUDE.md](CLAUDE.md).
-  **That last thread closed in 19c** (2026-08-23): `run_pomodoro` has a
-  repainting tick now, so it supplies `progress` too - per state, which is
-  what lets WORKING be driven while RESTING keeps a plain colour.
-
-- ~~**35. A freshly seeded scene fails its own Check**~~ - 2026-08-22. The
-  `duration` widget hard-coded `seconds <= 0` and now honours `spec.min`.
-  **`log_as` went the opposite way to the one this item predicted**: the
-  descriptor was right and the Python default wrong, because `run_stopwatch`
-  logs unconditionally, so `""` does not log nothing - it files every unnamed
-  stopwatch into one bucket. `CounterBehavior.event` carried the identical bug.
-  The generalising test is that every seeded mode passes the validators the
-  editor would apply - and the from-scratch seed lives in
-  `tools/build_editor.py`, not `scenes.py`.
-
-- ~~**MANUAL.md's reference tables had fallen behind**~~ - resynced
-  2026-08-22, with README. One **factual** error rather than a stale count: a
-  paused Pomodoro was documented as showing LISTENING, and it actually freezes
-  the phase colour into `waiting_style`. §7's recipes were rebuilt rather than
-  patched, because four of them taught the reader to build what the shipped
-  config already does, which reads as "my button is broken".
-
-- ~~**30a. A named action pool**~~ - 2026-08-20. `AppConfig.actions`,
-  referenced from any gesture by a **bare string**, which is free by
-  construction: every binding ever written is an object, so a string can only
-  mean this. Resolved at *use* time. A name with nothing behind it warns and
-  **keeps the reference**; a pool entry may not itself be a name, which is
-  where the one-level guarantee replaces a cycle check. Rename rewrites every
-  reference, delete deliberately does not. The rule is in
-  [CLAUDE.md](CLAUDE.md).
-
-- ~~**The on/off toggle's action**~~ - 2026-08-20 as `standby`, which is what
-  the 5-tap gesture had been waiting for. **Ambient-only**: takeovers are
-  untouched, so a scheduled alarm still rings - an alarm you set is not a thing
-  a stray five-tap should cancel. Not persisted, because an "off" surviving a
-  restart is a button that comes back dead with nothing on it saying why.
-
-- ~~**17. A number you can read off one light**~~ — shipped 2026-08-19 as
-  `sequencer.readout(value, tens_color, units_color)`: tens as slow pulses
-  (0.5 s on / 0.35 s off), a 0.7 s group gap only when both digits have
-  pulses, units quick (0.18 s / 0.18 s), zero as one dim neutral blink;
-  one-shot, 0–99, every dwell clears the flash floor by construction.
-  Blinks not hues, exactly as designed — it survives the ring's colour cast
-  and a colourblind user, and hue stays free to mean *which thing*. **The
-  human test remains**: someone who has not been told the rule reads a
-  two-digit number correctly — that needs the button, same sitting as 26b.
-
-- ~~**15. Counting without entering an app**~~ — shipped 2026-08-19. The
-  `readout` action is ambient data: bind it to any gesture and it counts
-  today's rows for an event and plays the number — it bypasses the SUCCESS
-  flash on purpose (the readout *is* the feedback) and any next press
-  cancels it, so it never holds the button. The Counter now reads its
-  session number from the store (`count_today`), so counting from Home and
-  continuing in the Counter agree by construction. The concurrency decision
-  lives in ARCHITECTURE.md ("Composition: an app's edges"); the app-bound
-  "+1 without a log row" generalisation is item **34**.
-
-- ~~**The MIDI port dropdown**~~ (from "Smaller, worth doing") — shipped
-  2026-08-19. `GET /api/midi/ports` (in and out listed separately, graceful
-  when no backend), a generic `suggest:` datalist on the text widget, free
-  text still first-class, offline editor degrades to the plain box by
-  construction — the colour engine's optionality rule, applied again.
-
-- ~~**26. Colour-coded Actions pages, and the launcher's fate**~~ -
-  2026-08-19; the eyeball check on hardware split off as **26b**. A control
-  page owns its colour at zero new code by claiming LISTENING, which made that
-  the system's one **dual citizen** (see [CLAUDE.md](CLAUDE.md)). **Both
-  survive:** the launcher stays the fresh-config front door because it is
-  self-maintaining and a fresh config cannot know what pages its user wants.
-
-- ~~**14. Tinker mode**~~ — shipped 2026-08-19, built exactly like Tips:
-  `tier: 'tinker'` on ~36 field descriptors (default basic when absent),
-  `widgets.js` marks `data-tier`, `help.js` owns the toggle and its
-  localStorage flag beside Tips's. Two axes kept separate — Tips explains,
-  Tinker reveals. The toggle is built at runtime beside whatever Tips button
-  the shell has, because the served page and the offline editor have
-  different headers and Tips is the one anchor both share. The naive-user
-  gate is now unblocked. Tier judgement calls live in schema.js; argue with
-  them there.
-
-- ~~**9. Tips content, tightened**~~ — shipped 2026-08-19. Fragments, `->`
-  for consequence, every fact and safety number kept — which is why the cut
-  is an honest ~21%, not the 50% hoped for: the hints were already dense
-  with load-bearing costs and gotchas, and shorter-than-the-facts was not on
-  offer. The app's actual emoji (header indicator, `main.py` status strings)
-  were out of scope and stay put pending a user decision.
-
-- ~~**5. The floor mode is permanent, named "Home"**~~ - 2026-08-19.
-  Protection is **structural, not a stored flag**: the invariant is "at least
-  one Always-ambient mode exists", and the parser seeds Home whenever a config
-  would violate it - so scenes are covered for free, by merging before the one
-  parser. The editor refuses only the edit that would leave zero. Double tap
-  enters the *launcher*, not the stopwatch: double tap is the launcher's
-  gesture by rule, and no launcher binding would fail the reachability gate.
-
-- ~~**28. Four taps**~~ — shipped 2026-08-19, and it cost exactly what
-  protocol v1 promised: **nothing on the wire**. Firmware already names
-  `tap_4`..`tap_9` generically, so this was a `TriggerType` member, a
-  `GESTURES` entry whose hint states the honest cost (shorter taps wait
-  longer), and a new drift test pinning schema.js's gesture list to
-  `TriggerType`. The control surface's budget grew to five gestures — the
-  five-option page the request wanted. **Not yet walked on hardware**, same
-  standing as Signal and the control surface.
-
-- ~~**27. Every slider also accepts a typed number**~~ — shipped 2026-08-19.
-  `range` and `level` grew a number box bound to the same key, one shared
-  `set()` path for drag and type. Out-of-range typing **clamps per
-  keystroke**, matching the slider's ends — chosen so an unsafe flash period
-  can never sit in config even momentarily; blur reconciles the box's text
-  with the committed value. No schema change, by design: one field, richer
-  widget.
-
-- ~~**23. Composition — apps that fire actions at their edges**~~ — designed
-  2026-08-19, which was the whole deliverable. ARCHITECTURE.md "Composition:
-  an app's edges" settles the three layers: hooks on `Mode` (build: **31**),
-  session summaries as bounded scalar dicts (build: **32**), and conditional
-  flow **refused as a host feature** — "when it ends" is a hook, "when it
-  crosses a threshold" is a guarded transition inside the app, and a host
-  rule engine would be the scripting-language trade in different clothes.
-
-- ~~**24. Follow the DAW's tempo - MIDI clock in**~~ - 2026-08-19. MIDI Clock
-  is `0xF8` sent 24x per quarter note; the tempo is never transmitted, only
-  inferred. Not MIDI Time Code, which carries position and says nothing about
-  tempo. **A median, not a mean**: one late delivery on a driver thread is
-  normal and a mean lets a single 15 ms straggler drag the answer; the price is
-  half a window before a deliberate change is believed. Three decisions - the
-  clock owns the tempo and **taps no longer set it**; silence longer than two
-  beats **holds** the last tempo, because a DAW that is quit sends no `0xFC`
-  and the pulses simply stop; the light re-pushes only past 0.5 BPM of
-  movement. Permanently host-side: the DAW is on the host by definition.
-
-- ~~**A control-surface template, and a DAW command picker**~~ - 2026-08-19.
-  The picker offers **Mackie Control** note numbers, which is the whole value:
-  a DAW told it has a Mackie Control already knows what note 94 means, so
-  there is nothing to learn. The table is **JS-only and creates no mirror** -
-  the action stores a number. `control` exists because neither existing shape
-  worked as a remote: an ambient mode cannot be an `enter_mode` target, and a
-  `signal` **cycles**, so reaching Record would pass through Play and start
-  playback. Confirmation is 0.3 s rather than the ambient layer's 2 s, and
-  presses during it **queue rather than drop**. Long press is unbindable and
-  the parser drops it ([CLAUDE.md](CLAUDE.md)). Also caught: `BUILTIN_MODES`
-  had no test at all, and the DAW preset had shipped with an invalid pair.
-
-- ~~**22. A `midi` action**~~ - 2026-08-19, because Studio One speaks Mackie
-  rather than OSC. **The dependency this item accepted turned out not to be
-  installable**: `python-rtmidi` publishes no wheel for Python 3.14 and its
-  source build fails here. MIDI goes out through **`winmm.dll` via ctypes**,
-  which is what rtmidi calls one layer down, so the action costs **no
-  dependency at all on Windows**. Three decisions: the backend is chosen **once
-  at import**; the port is matched on **part of its name**, because Windows
-  renames what loopMIDI creates between sessions; and the port is **opened per
-  send**, because a cached handle goes stale exactly when the DAW restarts and
-  fails as silence. **Left open:** nothing has confirmed Control Link learning
-  a message - that bench test is all that stands between this and done.
-
-- ~~**A drift audit, and the mirrors it found unwatched**~~ - the real finding
-  was **four mirrored tables with no drift test**, in a codebase whose stated
-  rule is that mirrors are tested rather than trusted; two comments in
-  `schema.js` even claimed a test covered them, and it did not.
-  `test_schema_mirror.py` now does. Dead code was removed, each item verified
-  unreferenced repo-wide first. **Deliberately left alone, so the next sweep
-  does not re-litigate them:** the reserved `OTA_CONTROL`/`GESTURE_HOLD`, the
-  v0.2 `rules` and `*_minutes` migration paths (the whole point is that old
-  configs keep working), and `schema.js`'s internally-used exports.
-
-- ~~**19d/e. One colour control, and mode colour moved onto the mode**~~ -
-  `colorEngine.js` is the only thing that edits a `LedEffect`, and returns the
-  widget contract so it drops into any form. **The test bench was scrapped as a
-  place and kept as a capability**: pushing a look at the hardware belongs to
-  every picker, which is how you tell a wiring fault from a config one, and it
-  is optional by construction (`api.showLook` may be absent) so the offline
-  editor still works. Mode-owned palette entries stay in config as the
-  invisible fallback; only the editor group went.
-
-- ~~**The offline editor was dead on arrival**~~ - found by opening it rather
-  than by a test. Two modules both wrote `paint as applySwatch`; the bundler
-  emitted that binding once per module and the browser refused the entire
-  script, so every module never ran and the page opened blank. Two modules
-  agreeing on an alias is the normal case, so the bundler binds it once and
-  raises only when one alias would mean two symbols. The gap that let it ship:
-  the suite checked the bundler's *inputs*, never that the bundle it emitted
-  could be parsed. **It looked built.**
-
-- ~~**The control panel wedged, invisibly**~~ - three separate faults wearing
-  one symptom. A modal parented to a *withdrawn* Tk root renders with no
-  taskbar button and no focus, so the second process sat holding a dialog
-  nobody could see or dismiss. The advice ("look in the tray") was
-  unfollowable, because Windows files new tray icons into a hidden overflow
-  flyout. And "already running" and "wedged" were indistinguishable - a second
-  launch now asks the first over a loopback socket, and no answer means wedged
-  and says so with the PID instead of reassuring you. The port file is
-  deliberately not trusted on its own; connecting is what settles it.
-
-- ~~**20. Pomodoro is an interval timer**~~ - generalised, so Tabata and HIIT
-  are **presets costing zero Python**. **The template's `type` string stays
-  `pomodoro`** (its label is "Intervals"): renaming it would have been a
-  migration for every saved config in exchange for a tidier word. Seconds are
-  canonical and `*_minutes` still parses, rewritten as seconds on first save so
-  the migration completes itself and there is no second format to support
-  forward. `rounds` and `lead_in_s` were added, both defaulting to exactly what
-  a Pomodoro already did. The editor's `duration` widget came out of it.
-
-- ~~**7. Build at least 10 modes total**~~ - Hot/Cold, Reaction and Signal
-  took the count to ten. **Two are written the way Stage 3 wants every app
-  written**, which was the point of doing the games first: pure
-  `step(state, event, now)` over a closed effect set, with randomness passed
-  *in* precisely so `step` stays checkable against a table. **Signal is the
-  first app whose point is to persist rather than finish**, and it is what made
-  the one-foreground-app decision visible; a status light and an OSC footswitch
-  are the same machine, so they ship as two presets over one template.
-  **Left open:** Signal's positions are edited as a JSON field, because there
-  is no repeating-sub-form widget.
-
-- ~~**16. Games**~~ - Hot/Cold shipped and Reaction came nearly free beside
-  it, sharing the shape rather than the code. **Two things this item asserted
-  turned out to be wrong, and both mattered.** A mode binding only short press
-  does *not* get an instant press - every single press on every config waits
-  out the window, so what saves a timing game is that the delay is a
-  **constant** you subtract, read from the device because an injected press
-  arrives instantly and correcting that would be the same bug backwards. And
-  the host *can* know the device's rainbow phase exactly: pushing an effect
-  restarts the coroutine, so phase 0 **is** the push, which makes it arithmetic
-  rather than the approximation this item took it for - one radio write per
-  round is the only reason the game works over a fire-and-forget link at all.
-  What still stands: ±150 ms games are honest, judging a beat is Stage 3.
-
-- ~~**An OSC action, and no dependency for it**~~ - `osc.py` is pure encoding
-  over stdlib UDP, so it cost **zero new runtime dependencies**. A sibling of
-  `webhook` rather than a setting on it: one is a request with an answer and a
-  failure mode, the other a datagram that either leaves or does not, which is
-  why the result says "sent" and never "delivered". **What OSC cannot honestly
-  do is live looping** - the tap window plus the radio is 20x what punch-in
-  needs. Transport, scene launch, record-arm and mute are fine; anything on the
-  beat is Stage 3.
-
-- ~~**2. Verify the takeover modes work end to end**~~ - walked eight
-  templates against real hardware. **Found and fixed on the way:** Pomodoro's
-  paused indicator hardcoded the global LISTENING state and so silently
-  overrode whatever look the mode had chosen - LISTENING is deliberately
-  global-only, so a Pomodoro could never own it. It now freezes the current
-  phase's own colour into a `waiting_style` instead.
-
-- ~~**Verified power-cycle recovery**~~ — a real USB replug mid-session
-  reconnected on its own; reconnect logic was previously only exercised
-  against a fake bleak.
-
-- ~~**0a. The app launcher**~~ - one gesture reaches every app, so "load the
-  button with as many apps as it will fit" is true for the first time. **The
-  core rule was the actual work: replace, don't nest.** `enter_takeover` is a
-  loop rather than a single dispatch - a launcher *names* what runs next, and
-  its session closes before the app's opens. Chosen over a depth guard because
-  with no stack there is nothing to overflow, and the event log gets one clean
-  `mode_enter`/`mode_exit` pair per app instead of nested ones. **No hop limit,
-  deliberately:** every handoff costs a gesture so no chain runs unattended,
-  and the one shape that could - a launcher offering itself - is excluded from
-  its own menu instead. It owns no `LEDState`, wearing the target's look over
-  LISTENING. **The gestures were backwards on the first cut** (launch on long
-  press), and the fix became the "long press means up one level" invariant.
-
-- ~~**Rainbow brightness**~~ - `_rainbow` takes the effect colour's brightest
-  channel as its HSV value; the colour bytes were *discarded* for this style
-  before, so this is an addition rather than a repurpose. **Zero means full,
-  and that is the whole compatibility story**: every rainbow saved earlier very
-  often carried `#000000`, and reading that literally would black out existing
-  configs on reflash - a rainbow rendering black is indistinguishable from the
-  light being off, which nobody configures a rainbow to do.
-  `CAP_RAINBOW_LEVEL` was allocated even though the wire is unchanged, because
-  without it the failure is a slider that silently does nothing.
-
-- ~~**19a. The subdivision ladder**~~ - at any moment the colour is the one on
-  the **largest interval that divides the elapsed time**. Four things worth
-  keeping: **parity needs no notion of parity** (a 2 s rung catches the even
-  seconds and a 1 s rung whatever is left, so a 15 s rung needs no code);
-  **whole milliseconds, not floats**, because `2.0 % 0.5` can land on
-  0.4999999999999998 and a ladder that worked at 1 s and failed at 0.1 s is the
-  worst kind of intermittent; **ticks evaluate at their nominal time**, not the
-  wall time the loop woke; and **the floor applies to the cadence, not
-  `period_s`** - the transitions `flash_safe` cannot see, since a `solid` never
-  strobes by its own reckoning.
-
-- ~~**11. Reminders**~~ - scheduled like an alarm, deliberately not one, with a
-  test asserting the alarm template is untouched. Any press clears it; **no
-  snooze**, because a postponable reminder is an alarm with extra steps; it
-  gives up on its own, and a timeout logs nothing because nobody saw it. The
-  scheduler was generalised rather than duplicated: what makes a mode scheduled
-  is its *activation*.
-
-- ~~**4. The flash floor, and the period slider**~~ - the answer to "3 Hz or
-  4 Hz" was *neither as a constant*: it is a setting, defaulting to WCAG
-  2.3.1's 3 Hz. Below the recommendation is **honoured and warned about** -
-  clamping a setting silently makes it a lie, and accepting silently makes the
-  hazard invisible. The `range` widget's minimum is a function of ctx, so
-  raising the setting widens the slider instead of lying about what will be
-  accepted. The rule is in [CLAUDE.md](CLAUDE.md).
-
-- ~~**1. The event log, interrogable**~~ — `mode` and `value` columns, then
-  `kind`/`name`/`mode`/`since`/`until` filters on `/api/events`, a CSV/JSON
-  export honouring the same filters, and `/api/events/kinds` behind the picker.
-  **One query behind the table and the export**, so a downloaded file cannot
-  disagree with what you were looking at. `name` is a substring (you search
-  "coff", you want "coffee") with LIKE's wildcards escaped; an export defaults
-  to the whole log, not one page.
-
-  Still open, if item 12 ever needs it: *which gesture* produced an event, and a
-  `scene` column. Don't widen the schema on spec.
-
-- ~~**The 5-tap gesture**~~ — `TriggerType.TAP_5` plus a `GESTURES` entry, a
-  pure data change with no reflash, proved end to end against the firmware's own
-  encoder. **Four taps is deliberately unnamed**: a count with no member is
-  dropped rather than fired, which is right for a stray extra tap on a triple.
-  Binding five costs every shorter tap its instant response — the one gesture
-  whose cost is paid by the others.
-
-- ~~**3. Named looks — a mode's colour, not the button's**~~ — a top-level
-  `looks` pool referenced by name per LED state, the picker at the *top* of a
-  mode's form, and the Lights tab split into the button's colours, the mode
-  defaults, and the pool. A missing look costs a colour, never a mode; renaming
-  rewrites references, deleting deliberately does not. The invariant is in
-  CLAUDE.md. (Item **19d** finishes the job by moving mode colour out of the
-  Lights tab entirely.)
-
-- ~~**0b. Protocol v1, frozen**~~ - `DEVICE_INFO`, ephemeral effects and
-  parameterised gestures shipped; `OTA_CONTROL` and `GESTURE_HOLD` claimed and
-  unimplemented. **No `LEDState` was spent.** What it bought, stated as a bar
-  rather than a milestone: everything on this list is now reachable **without a
-  reflash**, so the bar for the next wire revision is a capability the device
-  physically cannot express today. The judgement call worth remembering:
-  counting to N costs a double tap its instant response, so `max_taps` is
-  derived from what the config binds rather than being a setting - at 2 the
-  detector is byte-for-byte the one that shipped before.
-
-- ~~**13. Scenes**~~ - a scene is shallow-merged over `config.json` as a **raw
-  dict** before `parse_config` sees it, so every existing fallback and warning
-  applies to scene files with no new validation code. Startup-only keys come
-  back as `needs_restart` rather than reloading cleanly and doing nothing. The
-  invariants are in [CLAUDE.md](CLAUDE.md). **Left open:** the tray's `Scene >`
-  submenu is unit-tested but has never been clicked (`tray.py` needs a screen,
-  so the suite deliberately does not import it); and a scene saved *through the
-  editor* carries the whole effective config, so it loses the "inherit what I
-  don't mention" property a hand-written one keeps.
-
-- ~~**A light test bench, and the byte-order fault it caught**~~ - it needed no
-  new device method, because "show this look" is already what an ephemeral
-  effect means, and it validates through the config's own parser so a colour
-  the editor would reject on Save is rejected identically here. **The diagnosis
-  came from pushing *known* colours, not from staring at a rainbow** - every
-  permutation of a rainbow is still a rainbow, so it shows at most a direction
-  reversal, and a camera's white balance will happily fake one of those.
-
-- ~~**Colour ramps, and a countdown to prove them**~~ - colours pinned at
-  fractions, blended the same way `firmware/led.py`'s `_fade` does, with a test
-  that fails if the two disagree. **Positions, not durations**, so the same
-  ramp serves a two-minute egg timer and a two-hour deadline. **Push on change,
-  not on tick**, which bounds a full sweep to a couple of hundred writes
-  whatever the duration. Ramp and effect stay separate objects. One gap found
-  later: a ramp under a style that ignores colour (rainbow) is invisible, so
-  the countdown stops pushing rather than sending colour into a style that
-  discards it.
-
-- ~~**The metronome can go fast, and has settings**~~ — tempo and flash rate are
-  separate limits. `max_bpm` bounds the tempo and is yours to raise;
-  `metronome_flash()` keeps the light legal by marking every Nth beat and saying
-  so in the status line. 240 BPM is a real 240 BPM rather than a lie or a
-  strobe. `max_bpm` also stops one bounced contact (two edges 20 ms apart imply
-  3000 BPM) throwing the average away.
-
-- ~~**An event can carry a number**~~ — one nullable `value REAL`, appended so
-  existing positional reads keep meaning what they meant, with a test that
-  attaching a value never changes what an event *counts* as.
-
-- ~~**6. The side pane folds away**~~ — one fold of the *whole* pane rather than
-  per-block disclosures. The three blocks are one thing (inspection surface) and
-  someone driving a real button wants all of it gone, not two thirds.
-  [prefs.js](aibutton/web/static/prefs.js) came out of it, holding the
-  throw-guarded localStorage helpers (storage *raises* in private browsing and
-  off `file://`), and `.header-tools` is the cluster Tinker mode joins.
-
-- ~~**The offline editor rendered as a sliver**~~ — its layout container carried
-  only `.body-split`, a class the shared stylesheet does not define, so
-  `display: grid` never applied and `.tab-panels` resolved to zero height. It
-  looked built, which is why it survived a look. The test asserts the invariant
-  (a layout container must carry a class the stylesheet actually defines) rather
-  than pixels.
-
-- ~~**Single-instance guard**~~ — an OS-level lock on `<database_path>.lock`; a
-  second copy refuses with the holder's PID and exit 1. A file lock rather than a
-  PID file precisely so a crash or hard kill leaves nothing to clear by hand.
-  `--no-lock` opts out.
-
-- ~~**The run loop survives its own components**~~ — `resolve()`,
-  `store.logged_today`, `due_alarm()` and the palette push all sat unguarded in
-  the `while` body, so one locked-database write ended the service. The iteration
-  now has a backstop that logs, drops the LED back to IDLE (a fault mid-`handle()`
-  used to leave it stuck on LISTENING) and holds at tick rate rather than
-  spinning. Repeat faults are throttled by `FaultTracker` — pure, so the throttle
-  is tested without a clock.
-
-- ~~**A bad event log no longer stops the button**~~ — an unopenable database
-  degrades to an in-memory log with a loud error and a `degraded` flag. Writes
-  get a busy timeout so a transient lock doesn't fail a press.
-
-- ~~**Graceful shutdown on Windows**~~ — SIGTERM/SIGINT were registered behind a
-  `hasattr(signal, "SIGHUP")` check, so on the host this actually runs on they
-  were never wired at all. Registered separately now, falling back to
-  `signal.signal` where the loop has no `add_signal_handler`; a second Ctrl+C
-  restores the default handler so a wedged shutdown is still killable.
-
-- ~~**Earlier work**~~ — Pomodoro template; the built-in modes set; hardware
-  validation on an ESP32-S3 Mini; editable LED colours pushed live; the `fade`
-  style mirrored across firmware and host; `WORKING`/`RESTING` added to the
-  Lights tab with a drift test; mode-switching explainers with a live "active
-  now" mark sourced from the host's own `resolve()`; the app-shell rewrite
-  (fixed-viewport layout, tabs, side pane, master/detail mode editing, the Tips
-  toggle); and the tap metronome.
+Everything that shipped completely has moved to
+[TODO_FINISHED.md](TODO_FINISHED.md), per this file's own rule in "How to work
+this list". Nothing lives in this section any more — check TODO_FINISHED.md
+for the compressed record.

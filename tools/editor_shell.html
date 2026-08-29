@@ -68,12 +68,18 @@
       <nav class="tab-bar" role="tablist">
         <button type="button" class="tab-btn" data-tab="modes" role="tab" aria-selected="true">Modes</button>
         <button type="button" class="tab-btn" data-tab="lights" role="tab" aria-selected="false">Lights</button>
+        <button type="button" class="tab-btn" data-tab="actions" role="tab" aria-selected="false">Actions</button>
         <button type="button" class="tab-btn" data-tab="device" role="tab" aria-selected="false">Device</button>
         <button type="button" class="tab-btn" data-tab="apps" role="tab" aria-selected="false">Apps</button>
       </nav>
       <div class="tab-panels">
         <section class="tab-panel scroll-fade" data-panel="modes" id="editor-modes">Open a scene to start.</section>
         <section class="tab-panel scroll-fade" data-panel="lights" id="editor-lights" hidden></section>
+        <!-- TODO 102. The offline editor gets the mount too, rather than a
+             second code path: a capability that lands on a mount this shell
+             lacks is a capability this shell silently loses, which is how the
+             ready-made app picker disappeared here once before. -->
+        <section class="tab-panel scroll-fade" data-panel="actions" id="editor-actions" hidden></section>
         <section class="tab-panel scroll-fade" data-panel="device" id="editor-device" hidden></section>
         <!-- The editor needs this as much as the served page does: installing
              an app is the only way to add one now that the ready-made picker
@@ -245,6 +251,7 @@ const api = new FileApi();
 const menu = new ConfigMenu({
   modes: document.getElementById('editor-modes'),
   lights: document.getElementById('editor-lights'),
+  actions: document.getElementById('editor-actions'),
   device: document.getElementById('editor-device'),
   apps: document.getElementById('editor-apps'),
   bar: document.getElementById('editor-menu-bar'),

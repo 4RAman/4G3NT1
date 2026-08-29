@@ -137,6 +137,53 @@ async def test_the_kinds_endpoint_backs_the_picker(client, logged):
     }
 
 
+async def test_the_summary_totals_the_whole_log_not_a_window(client, store, logged):
+    """The nav's live line (TODO 101), and the reason it is its own endpoint.
+
+    `/api/events` is a feed with a limit; this is a total. A "12 runs" that
+    quietly meant "12 of the last 500 rows" would look right for months, so the
+    two are separate queries rather than one with a flag.
+    """
+    for _ in range(3):
+        store.log_event("coffee", mode="Home")
+
+    rows = (await client.get("/api/events/summary")).json()["rows"]
+    by = {(r["kind"], r["name"]): r for r in rows}
+
+    assert by[("log", "coffee")]["count"] == 5  # 2 from `logged`, 3 more here
+    assert by[("log", "coffee")]["last"]
+    # One row per (kind, name), not one per event.
+    assert len(rows) == len({(r["kind"], r["name"]) for r in rows})
+
+
+async def test_the_summary_reports_the_extremes_of_both_number_columns(client, store):
+    """`duration_s` and `value` are different questions asked of one table -
+    how long it took, and what number it carried - and a row usually has
+    exactly one of them. Summarising them together would make a reaction
+    timer's 214 ms and a stopwatch's 214 seconds the same fact."""
+    store.log_event("tempo", value=90.0)
+    store.log_event("tempo", value=160.0)
+    started = store.log_mode_enter("Focus")
+    store.log_mode_exit("Focus", started)
+
+    by = {(r["kind"], r["name"]): r
+          for r in (await client.get("/api/events/summary")).json()["rows"]}
+
+    tempo = by[("log", "tempo")]
+    assert (tempo["value_min"], tempo["value_max"]) == (90.0, 160.0)
+    assert tempo["duration_min"] is None
+
+    exited = by[("mode_exit", "Focus")]
+    assert exited["duration_min"] is not None
+    assert exited["value_min"] is None
+
+
+async def test_an_empty_log_summarises_to_nothing(client):
+    """What a fresh install answers, and the shape the editor has to survive:
+    no rows means every nav line keeps the half it computed from the config."""
+    assert (await client.get("/api/events/summary")).json() == {"rows": []}
+
+
 async def test_an_unfiltered_request_is_unchanged(client, logged):
     """The filters are all optional, and the call the page made before they
     existed has to keep working."""

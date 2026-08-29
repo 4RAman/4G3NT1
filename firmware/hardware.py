@@ -20,12 +20,17 @@
 # marginal threshold fails as *flicker*, not silence. Do both or neither:
 # series diode or level shifter, never 5 V alone.
 #
-# **Pins to avoid on the S3**, which every pin below is chosen against: the
-# strapping pins (0/3/45/46), the SPI flash (26-32), octal PSRAM (33-37) and
-# USB (19/20). The strapping pins are a requirement rather than a nicety - a
-# button holding one low *at power-on* enters download mode instead of running,
-# and the board then sits silent in the bootloader until it is physically
-# replugged, which looks exactly like a failed flash.
+# **Pins to avoid on the S3**, which every pin you *wire something to* is
+# chosen against: the strapping pins (0/3/45/46), the SPI flash (26-32), octal
+# PSRAM (33-37) and USB (19/20). The strapping pins are a requirement rather
+# than a nicety - a button holding one low *at power-on* enters download mode
+# instead of running, and the board then sits silent in the bootloader until it
+# is physically replugged, which looks exactly like a failed flash.
+#
+# `BOOT_BUTTON_PIN` is the one deliberate exception, and it is not a
+# contradiction: GPIO0 already *has* a switch on it, put there by whoever made
+# the board, and reading a pin does not strap anything. The caveat is about
+# pressing it while the board starts, and it is written out below.
 
 DEVICE_NAME = "AIButton"  # what the host scans for; match config.json's ble_device_name
 
@@ -35,6 +40,25 @@ DEVICE_NAME = "AIButton"  # what the host scans for; match config.json's ble_dev
 BUTTON_PIN = 10
 BUTTON_PULL_UP = True   # False if you wire your own pull-down + button to 3V3
 BUTTON_ACTIVE_LOW = True  # pressed reads 0 (the pull-up case)
+
+# The board's own **BOOT** button, wired in parallel with the one above: either
+# is a press, and the firmware cannot tell them apart. It is always on, and
+# that is the point - a board whose switch is unsoldered, unplugged or sat on
+# is still a button you can press, which is exactly the position this project
+# was in on 2026-08-29 (TODO 89).
+#
+# GPIO0 on every ESP32-S3 dev board seen here, with the switch to GND and a
+# pull-up already on the board; the internal pull-up is enabled anyway, so it
+# works on a board that lacks one. Set to None to turn it off.
+#
+# **The strapping-pin caveat is real and applies to *pressing* it, not to
+# reading it.** GPIO0 is a strapping pin: held low **at power-on or reset** the
+# chip enters download mode instead of running, and then sits silent in the
+# bootloader until it is physically replugged - which looks exactly like a
+# failed flash. Configuring it as an input changes nothing about that. Press it
+# while the board is running, never while it is starting.
+BOOT_BUTTON_PIN = 0
+BOOT_BUTTON_ACTIVE_LOW = True
 
 # --- LED ---------------------------------------------------------------
 # "neopixel" - WS2812s on one data line (in the button, or onboard)
