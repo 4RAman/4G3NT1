@@ -1607,6 +1607,26 @@ def test_the_index_is_the_mode_s_position_as_written():
     assert ladder and ladder[0].mode == 1
 
 
+def test_a_drive_mismatch_warning_is_placed_too():
+    """`_drive_warning` used to build its own rendered sentence and hand it
+    back for the caller to re-log via `"%s"`, which buried `where` inside the
+    message text where `_locate` could never find it - so this one warning
+    reported fine but never marked a field, unlike every sibling around it."""
+    _, found = parse_with_details({
+        "looks": {"named": {"drive": "progress", "stops": ["#ff0000", "#0000ff"]}},
+        "modes": [
+            {"name": "Home", "template": "actions", "activation": {"type": "always"},
+             "short_press": {"action": "log", "event": "x"}},
+            {"name": "W", "template": "stopwatch", "activation": {"type": "manual"},
+             "log_as": "focus", "looks": {"TIMING": "named"}},
+        ],
+    })
+    placed = [w for w in found if "-driven look" in w.message]
+    assert placed, found
+    assert placed[0].mode == 1
+    assert placed[0].key == "looks"
+
+
 def test_a_complaint_about_no_mode_at_all_is_still_reported():
     """`mode: None` is a normal answer, not a failure - and the sentence has
     to survive, because the Save bar is where it will be read."""

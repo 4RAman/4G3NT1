@@ -2113,8 +2113,8 @@ def reflex_matches(reflex: Reflex, payload) -> tuple[bool, float | None]:
     return REFLEX_OPS[reflex.when.op](value, reflex.when.value), value
 
 
-def _drive_warning(look, where: str, template: str) -> str | None:
-    """Why `look`'s drive cannot be honoured under `template`, or None.
+def _drive_warning(look, where: str, template: str) -> None:
+    """Warn if `look`'s drive cannot be honoured under `template`.
 
     A `clock` sequence (and any plain effect) is always fine - it owns its own
     position. The other drives need an app to supply the number, and
@@ -2124,16 +2124,20 @@ def _drive_warning(look, where: str, template: str) -> str | None:
     stranded sequence by the clock instead (see its Sequence branch). Dropping
     it would leave the state with no look at all, which is a bigger change to
     what the button does than rendering the same colours on the wrong axis.
+
+    Logs directly, `where` first (TODO 62), rather than returning a rendered
+    string for the caller to re-log via `"%s"` - that used to bury `where`
+    inside the message text, where `_locate` cannot find it.
     """
     if not isinstance(look, sequencer.Sequence) or look.drive == "clock":
-        return None
+        return
     allowed = DRIVE_TEMPLATES.get(look.drive, ())
     if template in allowed:
-        return None
-    return (
-        f"config: {where} names a {look.drive!r}-driven look, which only "
-        f"{'/'.join(allowed) or 'nothing here'} can supply - it will play on "
-        f"the clock instead"
+        return
+    log.warning(
+        "config: %s names a %r-driven look, which only %s can supply - it "
+        "will play on the clock instead",
+        where, look.drive, "/".join(allowed) or "nothing here",
     )
 
 
@@ -2173,8 +2177,7 @@ def _parse_mode_looks(
                 where, state, look, state,
             )
             continue
-        if (complaint := _drive_warning(known[look], f"{where}.looks[{state!r}]", template)):
-            log.warning("%s", complaint)
+        _drive_warning(known[look], f"{where}.looks[{state!r}]", template)
         chosen[state] = look
     return chosen
 

@@ -217,10 +217,9 @@ moved to TODO_FINISHED.md). Re-populate this at the next checkpoint (**10**).
   several sprints, and no amount of code moves them.
 - **Small, if a session stalls**: **79** (media keys as a reflex source —
   its own recommendation is *don't, until something wants it*), **52b**
-  (per-pixel ring, a protocol proposal against a frozen v1), **109** (does a
-  stopwatch have a "fastest" — one field, needs an answer rather than code),
-  and the last crumb of **62** — warnings whose format string holds the key
-  rather than the `where`, one call-site edit each.
+  (per-pixel ring, a protocol proposal against a frozen v1), and **109**
+  (does a stopwatch have a "fastest" — one field, needs an answer rather
+  than code).
 
 **Known live state you may trip over:** the `no-store` header on `/static`
 needs a service restart to take effect — until then a browser will happily

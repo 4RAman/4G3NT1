@@ -1057,10 +1057,14 @@ it lives in [CLAUDE.md](CLAUDE.md) and is not repeated here.
   it a lookup. The editor marks the field; a warning it cannot place is still
   printed in the Save bar, which is why the bar was not replaced.
 
-  *Still open, small:* only warnings whose `where` **is** the location get
-  placed. A message that spells the key into its format string (`%s.looks
-  names ...`) resolves to the mode and not the field, so it marks nothing.
-  Migrating those is one edit each, at the call site, whenever one is touched.
+  **Closed 2026-08-30.** The one remaining offender was `_drive_warning`,
+  which built its own rendered sentence and handed it back for the caller to
+  re-log via `log.warning("%s", complaint)` - burying `where` inside the
+  message text where `_locate` could never find it. It now logs directly
+  with `where` first, like every sibling call site; `test_config.py`'s
+  `test_a_drive_mismatch_warning_is_placed_too` pins it. That was the only
+  call site left in this shape - grepping for `log.warning("%s"` across
+  config.py and scenes.py turns up nothing else.
 
 - ~~**An empty MIDI port warns at load**~~ - 2026-08-29, the half of the
   2026-08-27 fix that reaches a hand-edited file. `config.blank_midi_ports` is

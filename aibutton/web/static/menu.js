@@ -1110,7 +1110,7 @@ export class ConfigMenu {
       type: 'button', textContent: '+ Add a reaction',
       onclick: () => this._addReflex(),
     });
-    return el('div', { className: 'action-pool', 'data-tier': 'tinker' }, [
+    return el('div', { className: 'action-pool' }, [
       el('h3', { className: 'palette-group', textContent: 'Reactions' }),
       el('p', { className: 'menu-hint', 'data-help': true, textContent:
         'The button acting with nobody pressing it. Each one has a name and an '
@@ -1481,7 +1481,7 @@ export class ConfigMenu {
       onclick: () => this._addAction(),
     });
 
-    return el('div', { className: 'action-pool', 'data-tier': 'tinker' }, [
+    return el('div', { className: 'action-pool' }, [
       el('h3', { className: 'palette-group', textContent: 'Named actions' }),
       el('p', { className: 'menu-hint', 'data-help': true, textContent: 'A shared pool of actions. Name one here and any gesture can point at it by name, so the three gestures that all send the same webhook are one thing to edit rather than three. Naming is optional - an action used once is better written straight on the gesture.' }),
       this.actionsWrap,
