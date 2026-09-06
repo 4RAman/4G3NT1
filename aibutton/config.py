@@ -1218,13 +1218,21 @@ MAX_SEQUENCE_S = 10.0
 
 HOOK_ACTIONS: tuple[type, ...] = (*FIRE_AND_FORGET_ACTIONS, SequenceAction)
 
-# What may be named in the action pool: the hook set only. The three missing
-# here — `EnterModeAction`, `ReadoutAction`, and `StandbyAction` — each change
-# what the mode *loop* does next, and that is ambient-only state that does not
-# belong in a shared library of "do this and hand the button back". An action
-# in the pool must be truly fire-and-forget (primitives or sequences), because
-# it may be dispatched from any context — a gesture, a hook, a reflex — and
-# any of the loop-changing actions would break one or more of those paths.
+# What the **editor offers** when you add a pool entry, not what the parser
+# accepts — and the distinction is load-bearing, because it was read the other
+# way once and cost a press. The three missing here — `EnterModeAction`,
+# `ReadoutAction`, and `StandbyAction` — each change what the mode *loop* does
+# next, so they are poor candidates for a shared library of "do this and hand
+# the button back" and the pool dropdown leaves them out.
+#
+# **A gesture naming one still works, deliberately.** `main.handle` resolves
+# the name and *then* intercepts all three before `execute()` ever sees them,
+# which is why `test_standby_can_be_pooled_like_any_other_action` passes and
+# should keep passing. So this is a curation list, and the real boundary is
+# per dispatch site: `HOOK_ACTIONS` for a mode's hooks, `REFLEX_ACTIONS` for a
+# reflex, and `SEQUENCE_ACTIONS` for a step — that last one enforced in
+# `resolve_action`, because a step naming a pool entry is the one shape the
+# parser cannot check.
 # Mirrored as POOL_ACTIONS in schema.js; test_schema_mirror.py fails on drift.
 POOL_ACTIONS: tuple[type, ...] = HOOK_ACTIONS
 
@@ -3888,10 +3896,12 @@ def resolve_action(config: AppConfig, action: Action | None) -> Action | None:
 
     **A `SequenceAction` is resolved through here too** (TODO 33), step by
     step, which is why every dispatch site got sequences for free rather than
-    growing a resolver of its own. It is also where the no-nesting rule is
-    enforced for the one shape the parser cannot see: a step naming a pool
-    entry that turns out to *be* a sequence. That step is dropped and the rest
-    of the sequence runs, the same call a dangling step gets.
+    growing a resolver of its own. It is also where a step is checked against
+    `SEQUENCE_ACTIONS`, for the shape the parser cannot see: a step that is a
+    *name* could point at anything until the pool is in scope. Two ways that
+    goes wrong - the entry is itself a sequence, or it is one of the three the
+    run loop handles instead of `execute()` - and both drop the step and let
+    the rest of the sequence run, the same call a dangling step gets.
     """
     if isinstance(action, NamedAction):
         action = config.actions.get(action.name)
@@ -3912,6 +3922,23 @@ def resolve_action(config: AppConfig, action: Action | None) -> Action | None:
                         "sequence step %d names %r, which is itself a "
                         "sequence - skipped, sequences do not nest",
                         index, step.action.name,
+                    )
+                    continue
+                if not isinstance(inner, SEQUENCE_ACTIONS):
+                    # `readout`, `standby` and `enter_mode`, reached by name.
+                    # `main.handle` answers each of those *instead of* calling
+                    # `execute()`, which has no LED and no loop to change - so
+                    # one arriving here used to reach execute()'s fallthrough
+                    # and fail the whole press with "unknown action type" at
+                    # the moment it was pressed. Dropped with a reason at
+                    # resolve time instead, which is where the parser's own
+                    # allow-list would have caught it had the step been
+                    # written inline.
+                    log.warning(
+                        "sequence step %d names %r, which is a %s - skipped; "
+                        "a step does its job and hands the button back, and "
+                        "that one changes what the run loop does next",
+                        index, step.action.name, type(inner).__name__,
                     )
                     continue
             steps.append(replace(step, action=inner))

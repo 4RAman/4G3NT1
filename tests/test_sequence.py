@@ -193,6 +193,36 @@ def test_a_step_naming_a_pooled_sequence_is_the_nesting_the_parser_cannot_see():
     assert len(resolved.steps) == 1
 
 
+def test_a_step_naming_a_loop_changing_action_is_skipped_not_run():
+    """The other half of what a named step can hide. `readout`, `standby` and
+    `enter_mode` are answered by `main.handle` *instead of* `execute()`, so
+    one reaching a sequence used to fail the whole press with "unknown action
+    type" - the count went in, the light went red. Same call the nesting case
+    gets: drop the step, run the rest, say why."""
+    for entry in (
+        {"action": "readout", "event": "Habit"},
+        {"action": "standby"},
+        {"action": "enter_mode", "target": "Water"},
+    ):
+        config = parse_config(_cfg(
+            {"action": "sequence", "steps": [STOP, "after"]},
+            actions={"after": entry},
+        ))
+        resolved = resolve_action(config, _bound(config))
+        assert len(resolved.steps) == 1, entry
+        assert isinstance(resolved.steps[0].action, MidiAction), entry
+
+
+def test_a_step_naming_an_ordinary_pooled_action_still_resolves():
+    """The check is a type test, not a blanket refusal of named steps."""
+    config = parse_config(_cfg(
+        {"action": "sequence", "steps": [STOP, "note"]},
+        actions={"note": {"action": "log", "event": "Habit"}},
+    ))
+    resolved = resolve_action(config, _bound(config))
+    assert [type(s.action) for s in resolved.steps] == [MidiAction, LogAction]
+
+
 def test_a_gesture_may_name_a_pooled_sequence():
     """One level *is* allowed: what a name may not point at is another name."""
     config = parse_config(_cfg(

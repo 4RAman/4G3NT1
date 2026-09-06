@@ -2157,6 +2157,41 @@ so the question is not re-opened every quarter.
   sequence anyway — wiring it means the page lending its light to the
   readout and taking it back. Do it when someone actually binds one there;
   the failure today is a visible action error, not a silent wrong thing.
+- **117. A sequence should be able to end in a readout.** Asked 2026-09-05,
+  from a config that already tried it: `short_press` was `{sequence: [log
+  "Habit", "Count \"Habit\""]}`, where the named step was a pooled `readout`.
+  The press logged the count and then went red - `execute()` has no branch for
+  a `ReadoutAction`, so the sequence answered *unknown action type*.
+
+  **The immediate hole is closed** (2026-09-05): `resolve_action` now checks a
+  named step against `SEQUENCE_ACTIONS` the way the parser checks an inline
+  one, so the step is dropped at resolve time with a reason instead of failing
+  the press. What that does *not* do is give anyone count-then-read on one
+  press, which is the thing that was actually wanted.
+
+  **Why it is not just a branch in `execute()`.** A readout's light *is* its
+  result, and `execute()` has no LED - it takes a store and a document store,
+  and the light belongs to `main.handle`. Worse, `set_led` cancels the running
+  sequence on every call, so the SUCCESS flash the generic branch plays after
+  an action would cut a readout off mid-digit. That is exactly why `handle`
+  intercepts `readout`, `standby` and `enter_mode` *before* `execute()` and
+  returns early.
+
+  **The shape that works: last step only.** `handle` runs the leading steps
+  through `execute()`, then takes its own readout branch and returns without
+  the SUCCESS tail. "Last only" is a real constraint rather than an arbitrary
+  one - nothing can follow a readout, because the next `set_led` kills it -
+  and it is the same argument that keeps `enter_mode` out of a sequence
+  entirely.
+
+  **What it touches**: `_parse_action_sequence`'s allow-list (a trailing
+  exception), `resolve_action`'s new check, `handle`'s sequence path,
+  `SEQUENCE_ACTIONS` in schema.js plus a `lastOnly` notion the step widget can
+  render, and `test_schema_mirror.py`. Not large; the design question is
+  whether `standby` gets the same treatment (probably not - a sequence that
+  ends by going to sleep reads like a mistake) and whether the control
+  surface's unwired `readout`, one bullet above, is the same fix at a second
+  site or a different one.
 
 ## Parking lot (deliberately later)
 
