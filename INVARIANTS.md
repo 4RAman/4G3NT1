@@ -453,6 +453,18 @@ here for what it's about, not for how important it is.
 
 ## Readout & events
 
+- **A `readout` ends a sequence or is not in one at all** (TODO 117). Its
+  light *is* its result, and `set_led` cancels the running sequence on every
+  call, so a step after one would cut the count off mid-digit — "last only" is
+  a fact about the light, not a convenience. That is why `SEQUENCE_TAIL_ACTIONS`
+  is a list of its own beside `SEQUENCE_ACTIONS` rather than an entry in it,
+  and why `standby` is not in it and `enter_mode` never will be. **The tail is
+  also ambient-only**, and that half is `resolve_action`'s `tail_ok`: only
+  `main.handle` holds the light, and every other dispatch site hands what it
+  gets to `execute()`, which has a store and no LED. Defaulted off, so a new
+  dispatch site is safe before anyone thinks about it. *A second action that
+  wants to end a sequence joins that list and gets a branch in `handle`
+  beside the readout's — it does not get one in `execute()`.*
 - **An app's page reads the store and never writes it.** A takeover's own page
   shows what that app has done ([appReadout.js](aibutton/web/static/appReadout.js),
   TODO 51), and everything on it is a *read*: rows through `/api/events`, plus

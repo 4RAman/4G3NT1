@@ -13,6 +13,7 @@ import { clear, el } from './dom.js';
 // The import is one-way - schema.js is DOM-free data and never reaches back.
 import {
   ACTIONS, ACTION_BY_TYPE, MAX_SEQUENCE_S, MAX_SEQUENCE_STEPS, SEQUENCE_ACTIONS,
+  SEQUENCE_TAIL_ACTIONS,
   TEMPLATE_BY_TYPE, describeEffect, describeTemplate, levelHex, levelPercent,
   modeLook,
 } from './schema.js';
@@ -455,6 +456,13 @@ const WIDGETS = {
   steps(spec, obj, onInput, ctx) {
     const NAMED = '__named__';
     const offered = ACTIONS.filter((a) => SEQUENCE_ACTIONS.includes(a.type));
+    // A tail action - today just `readout` - is offered on the last row only,
+    // so the control cannot express what the parser would refuse (TODO 117).
+    const tailish = (step) => !!step && typeof step === 'object'
+      && SEQUENCE_TAIL_ACTIONS.includes(step.action);
+    const offeredAt = (index, steps) => (index === steps.length - 1
+      ? [...offered, ...ACTIONS.filter((a) => SEQUENCE_TAIL_ACTIONS.includes(a.type))]
+      : offered);
     const list = () => (Array.isArray(obj[spec.key]) ? obj[spec.key] : (obj[spec.key] = []));
     const rows = el('div', { className: 'steps' });
     const err = errLine();
@@ -481,7 +489,10 @@ const WIDGETS = {
         type: 'button', className: 'mini', textContent: '+ Add a step',
         disabled: steps.length >= MAX_SEQUENCE_STEPS,
         onclick: () => {
-          steps.push(ACTION_BY_TYPE.midi.defaults());
+          // Inserted before a trailing readout, never after: the readout is
+          // the finale by construction, and "add a step" means add to the run.
+          const at = tailish(steps[steps.length - 1]) ? steps.length - 1 : steps.length;
+          steps.splice(at, 0, ACTION_BY_TYPE.midi.defaults());
           changed();
         },
       });
@@ -498,6 +509,7 @@ const WIDGETS = {
       const named = typeof step === 'string';
       const fields = el('div', { className: 'gesture-fields' });
 
+      const choices = offeredAt(index, steps);
       const kind = el('select', {
         className: 'inp',
         onchange: () => {
@@ -505,7 +517,7 @@ const WIDGETS = {
           changed();
         },
       }, [
-        ...offered.map((a) => el('option', { value: a.type, textContent: a.label })),
+        ...choices.map((a) => el('option', { value: a.type, textContent: a.label })),
         el('option', { value: NAMED, textContent: 'Use a named action' }),
       ]);
       kind.value = named ? NAMED : (step.action || 'midi');
@@ -545,7 +557,7 @@ const WIDGETS = {
         ]));
         validators.push(() => (pick.value ? null : `step ${index + 1}: pick a named action`));
       } else {
-        const descriptor = offered.find((a) => a.type === step.action);
+        const descriptor = choices.find((a) => a.type === step.action);
         for (const field of (descriptor ? descriptor.fields : [])) {
           const built = createField(field, step, onInput, ctx);
           fields.append(built.el);
@@ -566,8 +578,10 @@ const WIDGETS = {
           el('label', { className: 'step-wait-lbl' }, [
             el('span', { textContent: 'wait' }), wait, el('span', { textContent: 's' }),
           ]),
-          button('↑', 'Move earlier', () => move(index, index - 1), index === 0),
-          button('↓', 'Move later', () => move(index, index + 1), index === steps.length - 1),
+          button('↑', 'Move earlier', () => move(index, index - 1),
+            index === 0 || tailish(step)),
+          button('↓', 'Move later', () => move(index, index + 1),
+            index === steps.length - 1 || tailish(steps[index + 1])),
           button('✕', 'Remove this step', () => { steps.splice(index, 1); changed(); }),
         ]),
         fields,
@@ -582,6 +596,15 @@ const WIDGETS = {
         if (spec.required && !steps.length) {
           err.textContent = 'Add at least one step';
           return `${spec.label} needs at least one step`;
+        }
+        // The control cannot produce this, but a hand-edited config can, and
+        // the parser drops the step rather than the sequence - so say it here
+        // instead of letting a save quietly lose a step (TODO 117).
+        const stray = steps.findIndex((step, i) => tailish(step) && i !== steps.length - 1);
+        if (stray >= 0) {
+          const message = `step ${stray + 1}: a readout can only be the last step`;
+          err.textContent = message;
+          return message;
         }
         for (const validate of validators) {
           const message = validate();

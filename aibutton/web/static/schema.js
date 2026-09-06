@@ -42,6 +42,14 @@ export const SEQUENCE_ACTIONS = [
   'log', 'timer_toggle', 'webhook', 'osc', 'artnet', 'midi', 'keys', 'set_value',
 ];
 
+// What a sequence may *end* with, and only end with (TODO 117). A readout owns
+// the light for as long as it counts, and `set_led` cancels a running sequence
+// on every call - so a step after one would cut it off mid-digit. "Last only"
+// is a fact about the light rather than a nicety, which is why `standby` and
+// `enter_mode` are not here and will not be. Mirrors SEQUENCE_TAIL_ACTIONS in
+// config.py; test_schema_mirror.py fails on drift.
+export const SEQUENCE_TAIL_ACTIONS = ['readout'];
+
 // What `set_value` may do to a slot: a delta and an absolute, and nothing
 // else. Anything more is arithmetic, which belongs to the app runtime's
 // expression language rather than to an action. Mirrors SET_VALUE_OPS in

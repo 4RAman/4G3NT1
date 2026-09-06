@@ -10,15 +10,22 @@ The worked example throughout is the one that made this item exist: Mackie
 Control has no return-to-zero, so "stop and rewind" is Stop, a beat, Stop.
 """
 
+import asyncio
+import json
 import time
 
 import pytest
+
+import aibutton.main as main
+from aibutton.device import LEDState, MockDevice, TriggerType
+from aibutton.store import EventStore
 
 import aibutton.config as cfg
 from aibutton.actions import execute
 from aibutton.config import (
     LogAction,
     MidiAction,
+    ReadoutAction,
     NamedAction,
     SequenceAction,
     SequenceStep,
@@ -43,6 +50,8 @@ def _bound(config):
 
 STOP = {"action": "midi", "port": "4G3NT", "channel": 1,
         "kind": "note_on", "number": 93, "value": 127}
+
+READOUT = {"action": "readout", "event": "Habit"}
 
 
 # --- parsing ---------------------------------------------------------------
@@ -199,11 +208,7 @@ def test_a_step_naming_a_loop_changing_action_is_skipped_not_run():
     one reaching a sequence used to fail the whole press with "unknown action
     type" - the count went in, the light went red. Same call the nesting case
     gets: drop the step, run the rest, say why."""
-    for entry in (
-        {"action": "readout", "event": "Habit"},
-        {"action": "standby"},
-        {"action": "enter_mode", "target": "Water"},
-    ):
+    for entry in ({"action": "standby"}, {"action": "enter_mode", "target": "Water"}):
         config = parse_config(_cfg(
             {"action": "sequence", "steps": [STOP, "after"]},
             actions={"after": entry},
@@ -211,6 +216,37 @@ def test_a_step_naming_a_loop_changing_action_is_skipped_not_run():
         resolved = resolve_action(config, _bound(config))
         assert len(resolved.steps) == 1, entry
         assert isinstance(resolved.steps[0].action, MidiAction), entry
+
+
+def test_a_readout_may_end_a_sequence_where_something_holds_the_light():
+    """TODO 117: "count it, then show me the count" on one press. `tail_ok` is
+    the caller saying it can render one - only `main.handle` can."""
+    for last in (READOUT, "show"):
+        config = parse_config(_cfg(
+            {"action": "sequence", "steps": [STOP, last]},
+            actions={"show": READOUT},
+        ))
+        resolved = resolve_action(config, _bound(config), tail_ok=True)
+        assert [type(s.action) for s in resolved.steps] == [MidiAction, ReadoutAction], last
+
+
+def test_a_readout_is_dropped_where_nothing_can_render_it():
+    """Every dispatch site but `handle` hands its actions to `execute()`,
+    which has a store and no LED - so the default is off, and a hook firing
+    this sequence loses the readout rather than failing the whole thing."""
+    config = parse_config(_cfg({"action": "sequence", "steps": [STOP, READOUT]}))
+    resolved = resolve_action(config, _bound(config))
+    assert [type(s.action) for s in resolved.steps] == [MidiAction]
+
+
+def test_a_readout_anywhere_but_last_is_refused_at_parse_time():
+    """Nothing may follow one: the next `set_led` cancels the running sequence
+    and would cut the count off mid-digit."""
+    config, warnings = parse_with_warnings(
+        _cfg({"action": "sequence", "steps": [READOUT, STOP]})
+    )
+    assert [type(s.action) for s in _bound(config).steps] == [MidiAction]
+    assert any("only be the last step" in w for w in warnings), warnings
 
 
 def test_a_step_naming_an_ordinary_pooled_action_still_resolves():
@@ -290,3 +326,75 @@ async def test_a_failed_step_does_not_stop_the_rest():
 async def test_one_step_reads_as_one_step():
     result = await _run(SequenceAction(steps=(SequenceStep(action=LogAction(event="a")),)))
     assert result.message == "Sent 1 step"
+
+
+# --- through the run loop --------------------------------------------------
+
+class _Recording(MockDevice):
+    """A mock that keeps every push, because a readout is a *sequence* of them
+    and `led_effect` only ever holds the frame showing right now."""
+
+    def __init__(self):
+        super().__init__()
+        self.pushed = []
+
+    def set_led(self, state, effect=None):
+        self.pushed.append((state, effect))
+        super().set_led(state, effect)
+
+
+async def test_a_press_can_count_and_then_show_the_count(tmp_path, monkeypatch):
+    """The whole of TODO 117 in one press, driven through `run()` because what
+    it changes is what the *loop* does - there is no pure function underneath.
+
+    The bug it closes: this exact config used to log the count and then go red,
+    because `execute()` has no branch for a readout and answered "unknown
+    action type". What proves it fixed is not the absence of the error but the
+    count arriving on the light - one blue pulse, then two.
+    """
+    db_path = tmp_path / "events.db"
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({
+        "sounds_enabled": False,
+        "web_enabled": False,
+        "database_path": str(db_path),
+        "modes": [{**FLOOR, "short_press": {
+            "action": "sequence",
+            "steps": [{"action": "log", "event": "Habit"}, READOUT],
+        }}],
+    }), encoding="utf-8")
+    device = _Recording()
+    monkeypatch.setattr(main, "_SUCCESS_DISPLAY_S", 0.05)
+    monkeypatch.setattr(main, "_ERROR_DISPLAY_S", 0.05)
+    args = main._parse_args(["--no-web", "--config", str(cfg_path)])
+    task = asyncio.create_task(main.run(args, device=device))
+
+    units = lambda: sum(  # noqa: E731 - the units digit's colour, counted
+        1 for _state, effect in device.pushed
+        if effect is not None and effect.color == ReadoutAction(event="x").units_color
+    )
+    try:
+        await asyncio.sleep(0.4)  # let run() reach the main loop
+        device.press(TriggerType.SHORT_PRESS)
+        await asyncio.sleep(0.8)
+        assert units() == 1, device.pushed
+        device.press(TriggerType.SHORT_PRESS)
+        await asyncio.sleep(0.8)
+        # Two more, because it is the second one today - a readout that ran
+        # before the log step, or ignored it, would say one again.
+        assert units() == 3, device.pushed
+        # And never the error the whole item is about.
+        assert LEDState.ERROR not in [state for state, _effect in device.pushed]
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    store = EventStore(str(db_path))
+    try:
+        rows = store.recent(100)
+    finally:
+        store.close()
+    assert [name for (_ts, kind, name, *_rest) in rows if kind == "log"] == [
+        "Habit", "Habit",
+    ]

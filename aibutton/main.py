@@ -375,6 +375,7 @@ async def run(
         MetronomeBehavior,
         NoticeBehavior,
         SetPositionAction,
+        SequenceAction,
         PomodoroBehavior,
         ReactionBehavior,
         ReadoutAction,
@@ -1061,6 +1062,21 @@ async def run(
         play_sound(Sound.ERROR)
         set_status("ERROR")
         await asyncio.sleep(_ERROR_DISPLAY_S)
+
+    def show_readout(action: ReadoutAction) -> str:
+        """Put a count on the light and say what it was.
+
+        Shared by the two places a readout is answered - bound to a gesture,
+        and ending a sequence (TODO 117) - so the digits, the log line and the
+        status text cannot drift between them.
+        """
+        count = store.count_today(action.event)
+        set_led(
+            LEDState.IDLE,
+            sequencer.readout(count, action.tens_color, action.units_color),
+        )
+        log.info("readout %s -> %d today", action.event, count)
+        return f"{action.event}: {count} today"
 
     def reminder_look(behavior: NoticeBehavior):
         """What a gentle (non-`urgent`) notice shows on ALERT.
@@ -2944,7 +2960,12 @@ async def run(
         # A binding may name a pooled action rather than hold one
         # (config.NamedAction). Undone here, once, before anything below asks
         # what kind of action it is.
-        action = resolve_action(cm.config, resolved[1]) if resolved is not None else None
+        # `tail_ok`: this is the one dispatch site holding the light, so it is
+        # the one that may be handed a sequence ending in a readout (TODO 117).
+        action = (
+            resolve_action(cm.config, resolved[1], tail_ok=True)
+            if resolved is not None else None
+        )
 
         if lighting.standby and not isinstance(action, StandbyAction):
             # Asleep: the ambient layer answers nothing and does not let on
@@ -3013,15 +3034,47 @@ async def run(
             # than falling into the shared SUCCESS/IDLE tail.
             mode = resolved[0]
             status.last_mode = mode.name
-            count = store.count_today(action.event)
-            set_led(
-                LEDState.IDLE,
-                sequencer.readout(count, action.tens_color, action.units_color),
-            )
             status.last_ok = True
-            status.last_message = f"{action.event}: {count} today"
+            status.last_message = show_readout(action)
             set_status("IDLE")
-            log.info("readout %s -> %d today", action.event, count)
+            return
+        elif isinstance(action, SequenceAction) and isinstance(
+            action.steps[-1].action, ReadoutAction
+        ):
+            # "Count it, then show me the count" on one press (TODO 117). The
+            # leading steps go through execute() exactly as they always do;
+            # the readout is taken here for the reason directly above, and
+            # that asymmetry is the whole argument for it being *last* only.
+            #
+            # A failing lead step does not cost the readout, and does not go
+            # through `fail()`: the count is still the honest answer to the
+            # press, so the error takes the sound and the status line while
+            # the light keeps saying what it was asked to say. Two channels,
+            # two facts.
+            mode = resolved[0]
+            status.last_mode = mode.name
+            *lead, tail = action.steps
+            failure = None
+            if lead:
+                set_led(LEDState.THINKING)
+                try:
+                    result = await run_action(
+                        SequenceAction(steps=tuple(lead)),
+                        trigger=trigger.value, mode_name=mode.name,
+                    )
+                except Exception as exc:  # a primitive bug must never kill the loop
+                    log.exception("action crashed")
+                    result = ActionResult(False, f"internal error: {exc}")
+                if not result.ok:
+                    failure = result.message
+                    log.error("%s", failure)
+                    play_sound(Sound.ERROR)
+            if tail.wait_s:
+                await asyncio.sleep(tail.wait_s)
+            message = show_readout(tail.action)
+            status.last_ok = failure is None
+            status.last_message = message if failure is None else f"{failure}; {message}"
+            set_status("IDLE")
             return
         else:
             mode = resolved[0]

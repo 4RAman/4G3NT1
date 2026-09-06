@@ -749,6 +749,17 @@ def test_which_actions_a_sequence_step_may_be_match_on_both_sides():
     assert "sequence" not in listed
 
 
+def test_what_may_end_a_sequence_matches_on_both_sides():
+    """A tail action is offered on the last row only (TODO 117). The editor
+    offering one the parser refuses is a step lost on Save; the parser taking
+    one the editor never offers is a feature nobody can reach."""
+    listed = _js_action_list("SEQUENCE_TAIL_ACTIONS")
+    assert listed == [_wire_kind(c) for c in cfg.SEQUENCE_TAIL_ACTIONS]
+    # A tail action is *instead of* being an ordinary step, never as well as:
+    # one in both lists would be a readout the parser accepts in the middle.
+    assert not set(listed) & set(_js_action_list("SEQUENCE_ACTIONS"))
+
+
 def test_a_sequences_limits_are_the_same_number_on_both_sides():
     """The editor stops you where the parser would. One of them knowing a
     different number means either a save that loses steps or a bound a

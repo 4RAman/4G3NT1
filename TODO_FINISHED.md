@@ -1240,6 +1240,61 @@ to test against, both worth having regardless:
   A hint now sits beside the fields naming "Show on the button" as the one
   place the real rhythm shows.
 
+### 117. A sequence may end in a readout - shipped 2026-09-05
+
+**Found from a live config, not from the list.** `short_press` was
+`{sequence: [log "Habit", "Count \"Habit\""]}` with the named step a pooled
+`readout`; the press logged the count and went red, because `execute()` has no
+branch for a `ReadoutAction` and answered *unknown action type*.
+
+Two fixes, an hour apart. First the hole: `resolve_action` now checks a
+resolved named step against the whole allow-list, not just "is it a sequence"
+- the parser refuses an inline step outside `SEQUENCE_ACTIONS` but has to let a
+name through, since it cannot know what the name points at. Then the feature
+underneath it, which is what the config was reaching for.
+
+**The decisions that still bind** (the rule itself is in INVARIANTS.md, under
+Readout & events):
+
+- **`SEQUENCE_TAIL_ACTIONS` is a list of its own, not an entry in
+  `SEQUENCE_ACTIONS`.** A readout may *end* a sequence and nothing may follow
+  it, because `set_led` cancels the running sequence and the next push would
+  cut the count off mid-digit. Enforced at parse time for an inline step and
+  in `resolve_action` for a named one - the same two places the no-nesting
+  rule is enforced, for the same reason.
+- **The tail is ambient-only, via `resolve_action(..., tail_ok=True)`, and
+  only `main.handle` passes it.** Every other dispatch site hands what it gets
+  to `execute()`, which has a store and no LED. Defaulted off so a new
+  dispatch site is safe before anyone has thought about it - the call
+  `_parse_action`'s `known` already makes. A hook or reflex carrying such a
+  sequence loses the readout with a warning rather than failing the whole
+  thing.
+- **A failing lead step does not cost the readout, and does not go through
+  `fail()`.** The count is still the honest answer to the press, so the error
+  takes the *sound* and the status line while the light keeps counting. Two
+  channels, two facts - the one place in `handle` where a failure is reported
+  without the ERROR look.
+- **`show_readout` is shared** by the bound-to-a-gesture branch and the
+  sequence-tail branch, so the digits, the log line and the status text cannot
+  drift between them.
+- **`POOL_ACTIONS` was not the guilty seam**, though it looked like it: it is
+  what the *editor offers*, not a parser rule, and `main.handle` resolves a
+  name and then intercepts `readout`/`standby`/`enter_mode` before `execute()`
+  sees them - which is why `test_standby_can_be_pooled_like_any_other_action`
+  passes and must keep passing. Its comment claimed otherwise and was
+  corrected in place; reading it the other way is what sent the first look at
+  this to the wrong file.
+- **The editor offers the tail on the last row only**, `+ Add a step` inserts
+  *before* a trailing readout rather than after it, and the arrows will not
+  carry one out of last place. The validator still checks, because a
+  hand-edited config can arrive holding one in the middle.
+
+Verified end to end through `run()` against a recording `MockDevice`: one blue
+unit pulse on the first press, two more on the second, and `LEDState.ERROR`
+never pushed. The `readout`-inside-a-control-surface bullet in TODO.md is the
+same class of gap at a second site and stayed open.
+
+
 ## Small fixes
 
 - **An empty MIDI port still means "the first output", and now it says so.**

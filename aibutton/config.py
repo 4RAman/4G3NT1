@@ -1207,6 +1207,24 @@ FIRE_AND_FORGET_ACTIONS: tuple[type, ...] = (
 # which enforces the same thing for a step that names a pooled sequence.
 SEQUENCE_ACTIONS: tuple[type, ...] = FIRE_AND_FORGET_ACTIONS
 
+# What a sequence may end with, and only end with (TODO 117). A readout's
+# light *is* its result, so it is not fire-and-forget and cannot be a step
+# like the others: `execute()` has no LED, and `set_led` cancels the running
+# sequence on every call, so anything after a readout would cut it off
+# mid-digit. "Last only" is therefore a fact about how the light works rather
+# than a convenience - which is also why `standby` is not here, and why
+# `enter_mode` never will be.
+#
+# **The tail is ambient-only**, and that check lives in `resolve_action`'s
+# `tail_ok`, not here: a hook, a reflex, a control page and a signal all hand
+# actions to `execute()`, which cannot render one. The parser cannot see which
+# surface it is parsing for, so a trailing readout written under a hook parses
+# and is then dropped, with a reason, at the moment it is dispatched - the
+# same call a dangling name gets.
+# Mirrored as SEQUENCE_TAIL_ACTIONS in schema.js; test_schema_mirror.py fails
+# on drift.
+SEQUENCE_TAIL_ACTIONS: tuple[type, ...] = (ReadoutAction,)
+
 # The two edges TODO 33 says to decide before writing any code, and they are
 # enforced by the **parser** rather than by the editor: a config is a file
 # people hand-edit, and a limit only the UI knows is not a limit. Both are
@@ -2511,7 +2529,19 @@ def _parse_action_sequence(
         action = _parse_action(entry, f"{where}.steps[{index}]", known)
         if action is None:
             continue  # _parse_action has already said why
-        if not isinstance(action, (*SEQUENCE_ACTIONS, NamedAction)):
+        if isinstance(action, SEQUENCE_TAIL_ACTIONS):
+            # A readout may *end* a sequence (TODO 117) and nothing may follow
+            # it: the next `set_led` cancels the running sequence, so a step
+            # after one would cut the count off mid-digit.
+            if index != len(steps_raw) - 1:
+                log.error(
+                    "config: %s step %d is a %s, which can only be the last "
+                    "step - dropped; nothing follows a readout, because the "
+                    "next light cancels it", where, index + 1,
+                    type(action).__name__,
+                )
+                continue
+        elif not isinstance(action, (*SEQUENCE_ACTIONS, NamedAction)):
             log.error(
                 "config: %s step %d cannot be a %s - dropped; a step does its "
                 "job and hands the button back", where, index + 1,
@@ -3882,8 +3912,16 @@ def look_for(
     return config.looks.get(name) if name else None
 
 
-def resolve_action(config: AppConfig, action: Action | None) -> Action | None:
+def resolve_action(
+    config: AppConfig, action: Action | None, *, tail_ok: bool = False,
+) -> Action | None:
     """The action to actually run: `action` itself, or whatever it names.
+
+    `tail_ok` says the caller is holding the light and can render a readout
+    that ends a sequence (TODO 117). Only `main.handle` passes it: every other
+    dispatch site hands what comes back to `execute()`, which has a store and
+    no LED. Defaulted off so a new dispatch site is safe before it is
+    thought about, which is the same call `known` makes in `_parse_action`.
 
     The single place a `NamedAction` becomes a real one, which is why it lives
     here rather than inlined at the four dispatch sites that need it (main.py's
@@ -3909,38 +3947,54 @@ def resolve_action(config: AppConfig, action: Action | None) -> Action | None:
         steps = []
         for index, step in enumerate(action.steps, start=1):
             inner = step.action
-            if isinstance(inner, NamedAction):
-                inner = config.actions.get(inner.name)
+            named = step.action.name if isinstance(step.action, NamedAction) else None
+            if named is not None:
+                inner = config.actions.get(named)
                 if inner is None:
                     log.warning(
                         "sequence step %d names action %r, which is not in "
-                        "'actions' - skipped", index, step.action.name,
+                        "'actions' - skipped", index, named,
                     )
                     continue
                 if isinstance(inner, SequenceAction):
                     log.warning(
                         "sequence step %d names %r, which is itself a "
                         "sequence - skipped, sequences do not nest",
-                        index, step.action.name,
+                        index, named,
                     )
                     continue
-                if not isinstance(inner, SEQUENCE_ACTIONS):
-                    # `readout`, `standby` and `enter_mode`, reached by name.
-                    # `main.handle` answers each of those *instead of* calling
-                    # `execute()`, which has no LED and no loop to change - so
-                    # one arriving here used to reach execute()'s fallthrough
-                    # and fail the whole press with "unknown action type" at
-                    # the moment it was pressed. Dropped with a reason at
-                    # resolve time instead, which is where the parser's own
-                    # allow-list would have caught it had the step been
-                    # written inline.
-                    log.warning(
-                        "sequence step %d names %r, which is a %s - skipped; "
-                        "a step does its job and hands the button back, and "
-                        "that one changes what the run loop does next",
-                        index, step.action.name, type(inner).__name__,
-                    )
+            if isinstance(inner, SEQUENCE_TAIL_ACTIONS):
+                # A readout ends a sequence, and only where the caller has a
+                # light to render it with. `main.handle` passes `tail_ok`;
+                # every other dispatch site hands its actions to `execute()`,
+                # which has a store and no LED. The parser cannot tell those
+                # apart - it does not know which surface it is parsing for -
+                # so the site check is here, at the moment of dispatch.
+                if tail_ok and index == len(action.steps):
+                    steps.append(replace(step, action=inner))
                     continue
+                log.warning(
+                    "sequence step %d%s is a %s - skipped; a readout can only "
+                    "end a sequence, and only where something is holding the "
+                    "light", index, f" ({named!r})" if named else "",
+                    type(inner).__name__,
+                )
+                continue
+            if not isinstance(inner, SEQUENCE_ACTIONS):
+                # `standby` and `enter_mode`, reached by name - the parser
+                # refuses them inline but cannot see through a name.
+                # `main.handle` answers both *instead of* calling `execute()`,
+                # which has no loop to change, so one arriving there failed the
+                # whole press with "unknown action type" at the moment it was
+                # pressed. Dropped with a reason at resolve time instead.
+                log.warning(
+                    "sequence step %d%s is a %s - skipped; a step does its "
+                    "job and hands the button back, and that one changes what "
+                    "the run loop does next",
+                    index, f" ({named!r})" if named else "",
+                    type(inner).__name__,
+                )
+                continue
             steps.append(replace(step, action=inner))
         return replace(action, steps=tuple(steps)) if steps else None
     return action
