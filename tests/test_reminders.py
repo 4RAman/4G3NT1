@@ -90,6 +90,20 @@ def _rows(db_path):
         store.close()
 
 
+def _values(db_path, name):
+    """The `value` column of every row logged under `name`, in order.
+
+    A notice's outcome is *the value*, not the presence of the row (TODO 84),
+    so a test that only asked whether the name appeared could not tell a miss
+    from a clear."""
+    store = EventStore(str(db_path))
+    try:
+        return [value for (_ts, _k, row_name, _d, _m, value) in store.recent(100)
+                if row_name == name]
+    finally:
+        store.close()
+
+
 # --- what it does ----------------------------------------------------------
 
 async def test_a_scheduled_reminder_takes_the_button_and_flashes(tmp_path, monkeypatch):
@@ -147,14 +161,26 @@ async def test_every_gesture_clears_it(tmp_path, monkeypatch, trigger):
         await _stop(task)
 
 
-async def test_it_gives_up_on_its_own_and_logs_nothing(tmp_path, monkeypatch):
-    """A timeout is not a clear - nobody saw it, so nothing happened."""
+async def test_it_gives_up_on_its_own_and_records_the_miss(tmp_path, monkeypatch):
+    """A timeout is not a clear - and since TODO 84 that is something the log
+    *says* rather than something it omits.
+
+    This used to assert the opposite ("nobody saw it, so nothing happened"),
+    which was right while the cleared event was the only row a notice could
+    write. Outcome logging is unconditional now: the same name, with 0 for
+    missed and 1 for cleared, because a notice that fires while nobody is
+    watching is only trustworthy if the record says so. Silence and "it never
+    fired" are the two things that must not look alike.
+    """
     task, device, db_path = await _run_until_firing(
         tmp_path, monkeypatch, timeout_minutes=1 / 120,  # half a second
     )
     try:
         await asyncio.sleep(1.0)
-        assert ("log", "stretched") not in _rows(db_path)
+        assert ("log", "stretched") in _rows(db_path)
+        assert _values(db_path, "stretched") and all(
+            value == 0 for value in _values(db_path, "stretched")
+        ), "a miss must never be recorded as a clear"
         assert device.led_state is LEDState.IDLE
     finally:
         await _stop(task)

@@ -28,7 +28,7 @@ CONFIG = {
             "name": "Default",
             "template": "actions",
             "activation": {"type": "always"},
-            "long_press": {"action": "enter_mode", "target": "Focus"},
+            "tap_4": {"action": "enter_mode", "target": "Focus"},
             "double_tap": {"action": "enter_mode", "target": "Water"},
             "short_press": {"action": "log", "event": "ping"},
         },
@@ -80,9 +80,9 @@ async def test_run_enter_mode_stopwatch_then_counter(tmp_path, monkeypatch):
         await asyncio.sleep(0.05)  # let the consumer act on it
 
     try:
-        # Stopwatch: long_press enters Focus (starts a timer), short_press is a
+        # Stopwatch: four taps enter Focus (starts a timer), short_press is a
         # lap, long_press stops & exits.
-        await feed(TriggerType.LONG_PRESS)   # enter_mode -> Focus (timer_start)
+        await feed(TriggerType.TAP_4)        # enter_mode -> Focus (timer_start)
         await feed(TriggerType.SHORT_PRESS)  # lap -> log focus_lap
         await feed(TriggerType.LONG_PRESS)   # stop -> timer_stop, exit
         await asyncio.sleep(0.1)
@@ -152,7 +152,13 @@ async def test_the_device_is_told_how_far_to_count_taps(
     not a preference: counting to three is what delays a double tap, so a
     button pays that only once something is listening for one.
     """
+    # The shared CONFIG reaches Focus on **four taps** - TODO 104 took
+    # `long_press` away from an ambient map, and that is what it was migrated
+    # to. A binding that long is exactly what this test varies, so it starts
+    # from a copy with nothing longer than a double on it; leaving it in made
+    # all three cases answer 4 and the first two assert nothing.
     modes = [dict(m) for m in CONFIG["modes"]]
+    modes[0] = {k: v for k, v in modes[0].items() if k != "tap_4"}
     if extra_binding:
         modes[0] = dict(modes[0], **extra_binding)
     cfg_path = tmp_path / "config.json"
@@ -637,7 +643,7 @@ async def test_counter_starts_from_the_stores_count_not_zero(tmp_path, monkeypat
 
 def _hooked(db_path, app=None, **hooks) -> dict:
     """A config whose only takeover is `app` (a Counter unless something else
-    is named), reached by a long press and carrying `hooks`."""
+    is named), reached by four taps and carrying `hooks`."""
     return {
         "sounds_enabled": False,
         "web_enabled": False,
@@ -647,7 +653,7 @@ def _hooked(db_path, app=None, **hooks) -> dict:
             {
                 "name": "Default", "template": "actions",
                 "activation": {"type": "always"},
-                "long_press": {"action": "enter_mode", "target": "Water"},
+                "tap_4": {"action": "enter_mode", "target": "Water"},
             },
             dict({
                 "name": "Water", "template": "counter",
@@ -675,7 +681,7 @@ async def _session(tmp_path, monkeypatch, config) -> list[tuple[str, str]]:
         await asyncio.sleep(0.08)
 
     try:
-        await feed(TriggerType.LONG_PRESS)   # enter_mode -> Water
+        await feed(TriggerType.TAP_4)        # enter_mode -> Water
         await feed(TriggerType.SHORT_PRESS)  # +1 -> log water
         await feed(TriggerType.LONG_PRESS)   # exit
         await asyncio.sleep(0.1)

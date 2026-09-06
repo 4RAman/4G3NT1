@@ -20,13 +20,13 @@
         "action": "enter_mode",
         "target": "Pomodoro"
       },
-      "long_press": {
-        "action": "enter_mode",
-        "target": "Pomodoro 2"
-      },
       "double_tap": {
         "action": "enter_mode",
         "target": "Metronome"
+      },
+      "triple_tap": {
+        "action": "enter_mode",
+        "target": "Pomodoro 2"
       }
     },
     {

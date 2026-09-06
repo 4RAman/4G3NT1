@@ -893,6 +893,109 @@ degrade a capability, never invent a classification.
 Touched: `menu.js` (`_natureOf`, `_membersOf`, `_renderModeNav`), `schema.js`
 (`MODE_GROUPS` gains `unknown`).
 
+### 109. Does a stopwatch have a "fastest"? - shipped 2026-09-03
+
+**Raised 2026-08-29 while building 101(b)**: the sidebar sketch asked for
+*Fastest: 7:57* under a "Mile Run" stopwatch, and what shipped was *12 runs so
+far*, because the stopwatch's readout descriptor sets `better: null`.
+
+**Answered the way the item recommended: the *item* carries it.** A stopwatch
+times a mile run, where quicker is better, and a loaf of bread, where it is
+not - so the template cannot know and the copy can. `Mode.better` is a
+mode-level key beside `looks`, values `low`/`high` (`MODE_BETTER`, mirrored in
+schema.js), absent meaning "whatever the template says".
+
+Four decisions still binding:
+
+- **Two words, not three.** There is no `none` to override a template that
+  *has* an opinion, because no template offering the field has one. The day
+  one does, that is when the third word is worth adding on both sides.
+- **`""` is absent, silently.** A select with a blank option writes an empty
+  string, and warning about it would complain on every save of every
+  stopwatch - the noise **108** had just removed.
+- **The field is offered where it would be *read*, and that set is derived.**
+  `better` only reaches the `duration` and `value` measures; `tally` crowns
+  the busiest day regardless and `outcome` counts two states. So it lands on
+  the stopwatch, the countdown and the metronome and nowhere else, and
+  test_schema_mirror.py computes that set from the descriptors rather than
+  listing it - a new timing app either offers the choice or fails.
+- **Read through `betterFor`, never off the descriptor**, or the override is
+  ignored on whichever page forgot. Now in
+  [INVARIANTS.md](INVARIANTS.md)'s "Readout & events", with the delta bug
+  below.
+
+**It found a bug that had been shipped and invisible.** `measuredRow` received
+its delta already *formatted*, so the good/bad test compared `"-0:02"` with
+`0` - NaN, false, and therefore every reaction-timer attempt painted worse and
+every Hot/Cold guess painted better, whichever way the number had gone. The
+delta stays a number now and the row formats it at the last moment. Nothing
+failed, because the wrong half was a CSS class.
+
+Touched: `config.py` (`MODE_BETTER`, `Mode.better`, `_parse_mode_better`,
+`_mode_to_dict`), `schema.js` (`MODE_BETTER`, `BETTER_FIELD`, `betterFor`,
+`readoutStat`), `appReadout.js`, plus tests in `test_config.py`,
+`test_schema_mirror.py` and `tests/js/readoutStat.test.mjs`.
+
+### 104. Long press at the root means sleep - shipped 2026-08-29
+
+**Asked 2026-08-29**: *"Long press should be removed from Actions. If it is the
+outer-most menu, let's make long press 'sleep'. Then long press again wakes the
+device."*
+
+**It completes CLAUDE.md's invariant rather than breaking it.** Long press means
+*up one level*, everywhere; at the everyday layer there is no level above, and
+the honest answer to "up" there is off. The rule now has no exception at either
+end - `_parse_control_body` already refused the gesture at the app end, and
+`_parse_actions_body` refuses it at the menu end for the same reason.
+
+**Host-side quiet mode, and that split is the reason it could ship today.** The
+light goes down, every gesture but the wake one is ignored, no app is entered -
+and schedules and reflexes keep running, because the host is awake and has
+merely stopped speaking. Zero protocol change. **Item 29's device deep sleep is
+the other half** and is still blocked on measuring what the board draws; it can
+later make the same gesture also cut power without the gesture changing meaning.
+
+Four decisions worth not re-litigating:
+
+- **It reuses `standby`, it does not replace it.** `toggle_standby` in
+  `main.handle` is one call site for both the root's long press and a bound
+  `standby` action, so a config that spends a five-tap on an off switch keeps
+  working and looks identical while it does.
+- **The flag flips *after* the fade is pushed**, in `Lighting.set_standby`, and
+  that ordering is load-bearing: `set_led` substitutes the ember for anything
+  IDLE wears while `standby` is true, so setting it first would replace the
+  fade with the colour it is fading to. `standby_look()` is the one definition
+  of "what asleep looks like", read by `set_led` and by `_drive_sequence` -
+  which now lands a finished one-shot on the ember instead of the palette's
+  bright IDLE.
+- **Down is a fade, up is a cut, and asleep is dark.** Off must be
+  distinguishable from broken (item 29's words), and the *fade* is what carries
+  that - a two-stop one-shot, inside `sequence_safe`'s exemption so it is not
+  floored into a jump. Waking snaps, because a wake should feel like an answer
+  rather than an entrance. A dim ember was shipped first, on the argument that
+  asleep and unplugged must not look alike; **the owner overruled it the same
+  day** - sleep means dark, and a light you watched go out has already said it
+  was deliberate. `_STANDBY_COLOR` is `#000000`, still pushed as a solid effect
+  rather than as "no effect", which would mean the palette's own bright IDLE.
+- **`--demo` skips the long press**, because a demo that put itself to sleep
+  would swallow every gesture after it - which is exactly what the demo exists
+  to show.
+
+**What it cost, and it was not nothing.** `_home_mode` gave up its third
+binding (the launcher on the double tap already reached the Pomodoro it
+opened), `config.json` moved Pomodoro 2 to a triple tap, `scenes/default.json`
+dropped its binding outright, and about fifteen test files had to stop using
+the long press as the cheap way into a takeover - `tap_4` is the fixture
+gesture now. `scenes/personal.json` had already stopped binding it.
+
+Touched: `config.py` (`_parse_actions_body`, `ActionsBehavior`, `_home_mode`),
+`main.py` (`_SLEEP_FADE_S`, `Lighting.standby_look`/`set_standby`,
+`_drive_sequence`, `toggle_standby`, `handle`'s intercept, the demo loop),
+`schema.js` (the actions template's `gestures` + `gesturesNote`, `describe`),
+`modeEditor.js` (`_gestures` renders the note), `CLAUDE.md`, `README.md`,
+`MANUAL.md` (§2, §4.1, §6, §7, troubleshooting), `tests/test_sleep.py` (new)
+plus the fixture sweep.
+
 ### 54-68. What the three-POV read-back found
 
 **Raised 2026-08-26 by item 47** (see Done), which walked the finished shell as
@@ -988,6 +1091,154 @@ one-field version of it.
 Progress is through the **current block**, not the session (a classic Pomodoro
 has no end), so it resets at every phase change and `extend` grows the
 denominator along with the deadline.
+
+### 93. DMX — Art-Net over UDP is an action — shipped 2026-09-05
+
+**Asked 2026-08-29: "DMX integrations possible?"** Decided: Art-Net (DMX over
+UDP) is an action the same size as `osc`; wired DMX512 is hardware (RS-485)
+and stays out of scope while Art-Net nodes are cheap.
+
+**`aibutton/artnet.py`** is `osc.py`'s sibling - pure, no sockets, `dmx
+(universe, channels) -> bytes`, one ArtDmx packet. Total by construction:
+`universe` masks to the protocol's 15 bits, `channels` clamps to a byte each
+and pads to an even count (Art-Net requires one), because a config asking for
+something out of range should show up wrong on the fixture, not get silently
+dropped by a receiver. **OpCode is the one field in the packet that is not
+network order** - sent low byte first, unlike everything around it - and is
+exactly the kind of transcription bug that would have been invisible without
+a receiver to check it against; the tests pin every field's byte order by
+hand rather than round-tripping the encoder against itself.
+
+`ArtnetAction` (host, universe, channels, port defaulting to 6454) joined
+`FIRE_AND_FORGET_ACTIONS` beside `OscAction`, which is what let it inherit
+being offered everywhere a hook/reflex/sequence step already reaches - no new
+dispatch site needed, per the invariant that a new action shape is resolved
+in `resolve_action`, not at each call site (this one needed no change there
+at all, since `execute()`'s isinstance dispatch was the only new code). The
+UDP send in `actions.py` mirrors the osc branch exactly: resolved on the
+event loop (a hostname must not cost a blocking DNS lookup mid-press), then
+fire-and-forget.
+
+The room-follows-the-button idea (the button's own look driving DMX
+channels) stays parked, deliberately: it is a second renderer, and renderers
+are where this project keeps its discipline. It gets its own number if it is
+ever wanted.
+
+### 83. A Morse code look — shipped 2026-09-05
+
+**Asked 2026-08-29:** *"I see this fitting in the Sequence 'Driven By' - the
+user selects 'Morse Code Message', types the message, and the light plays it,
+with a playback speed."* **Decided:** Morse is a way of *writing* a stop
+list, not a fourth `drive` - a dot, a dash and every gap between them is a
+`Stop` with a `hold_s` and no fade, so this needed no runtime, only a pure
+compiler.
+
+**`aibutton/morse.py`** - pure, no imports from the package, like `ramp.py`
+and `ladder.py` beside it. `encode(message, unit_s, color) -> tuple[Stop,
+...]` plus `unknown_chars` for the parser to warn with; unrecognised
+characters cost nothing, not even a gap. A look-pool entry gains a `morse`
+shape beside `stops` (`{"morse": "SOS", "dpm": 400, "color": "#ff0000"}`),
+expanded at parse time in `_parse_morse_look`, which also caps `dpm` against
+`_max_morse_dpm(min_flash_period_s)` (`2 * UNIT_S_PER_DPM /
+min_flash_period_s`, ~360 dots/min at the 3 Hz default) and warns rather
+than clamping in silence.
+
+**Speed is dots per minute, not words per minute - changed the same day, on
+request.** WPM needs the PARIS-standard "a word is 50 units" convention
+before it means a duration at all; `dpm` is just `unit_s = 60 / dpm`,
+nothing to invert. `morse.UNIT_S_PER_DPM` (60) replaced `UNIT_S_PER_WPM`
+(1.2) in the same formula shape throughout - `_max_morse_dpm`,
+`colorEngine.js`'s mirrored `maxMorseDpm`, `describeEffect`'s summary - so
+the rename touched call sites, not the reasoning.
+
+**The colour can change across the message, added the same day on request**
+("what's the most efficient way to allow colour changes during the
+message?"). Decided against a by-character colour list (fragile - a typo
+shifts every colour after it, and it is a fourth thing needing its own
+editor) in favour of overlaying a **ramp** (`ramp.py`'s existing `Stop(at,
+color)`/`color_at`), sampled once per symbol at how far into the message that
+symbol falls and baked into flat per-stop colours at compile time - "the
+compiler unrolls" applied to colour, not just timing. `morse.encode`'s
+`color` parameter accepts a callable for exactly this, and stays otherwise
+ignorant of what the callable does (config.py is the only place that knows
+about `ramp.py`) - the same seam `_parse_ramp` already existed to fill, so
+`ramp: ["#ff0000", "#0000ff"]` on a Morse look reuses it verbatim. A ramp
+wins over a flat `color` when both are given; gaps stay plain black either
+way.
+
+**The editor widget is a third tab in `colorEngine.js`'s `createLookEditor`**
+(Single Color / Sequence / Morse / Preset), with its own Solid colour /
+Colour ramp toggle reusing `widgets.js`'s `ramp` widget via `createField`.
+`switchShape` generalised from a boolean to a three-way switch with one
+parking slot per shape, so flipping through all three and back loses
+nothing. `describeEffect` and `ledPreview.js`'s `colorAt` both gained a
+Morse branch - deliberately *not* a client-side encoder (a second copy of a
+Python parser with nothing testing the two against each other is exactly
+what CLAUDE.md's mirrored-table rule warns about, and `editor_shell.html`'s
+`FileApi` already says so for the same reason): the swatch shows a
+representative colour and "Show on the button" is what proves the real
+rhythm, round-tripping through the actual parser.
+
+**Found while building the widget: "stored as written" did not hold.**
+`menu.js`'s edit model is seeded from `GET /api/config`'s **`effective`**
+(parsed and expanded), not `raw` - so a compact `{"morse": "SOS", ...}` look
+turned into its two-hundred-stop expansion the moment *any* field on the page
+was saved, Morse or not. Fixed with `_preserveAuthoredLooks`, a targeted
+merge (not a general "remember every authoring shape" mechanism this page
+does not otherwise need): on load, a raw look naming a `morse` key wins over
+its own parsed expansion. The same problem existed a second time on the Save
+path, less obviously - `PUT /api/config`'s response carries no `raw` the way
+`GET`'s does, so `save()` re-seeding from the response alone had nothing to
+restore from. Fixed by capturing `this.model.looks` *before* the request (it
+already holds the authored shape, being exactly what was serialised into the
+request body) and reapplying that instead of round-tripping through the
+server a second time.
+
+Verified against a running instance throughout, not just tests: a
+`{"morse": "SOS", "dpm": 400}` look warned "capped to 360" exactly as
+predicted; a ramped look showed a live-updating gradient preview and saved
+its compact form to disk intact; switching Morse → Sequence → Morse restored
+the parked message, speed and ramp unchanged; and an emptied message field
+blocked Save with "Message is required" rather than saving silently.
+
+Tests: `tests/test_morse.py` (the compiler, table-driven, including the
+callable-colour/ramp path), `tests/test_looks.py` (the look-pool integration
+and the ramp override).
+
+**Found the same day, from actually using it: a repeating message had no
+pause before it started over.** `sequencer`'s walker wraps a looping sequence
+straight from its last stop back to its first with no gap of its own - right
+for an ordinary colour loop, wrong for a beacon, whose last symbol then sat
+flush against its own first symbol on every lap ("the repeats are getting
+stuck together"). Fixed in `morse.encode` rather than in the walker: a new
+`repeat` parameter appends `_REPEAT_GAP_UNITS` (14 - twice a word gap, so the
+loop boundary reads as more than just another word break) of `off` after the
+last symbol, added *after* `total_units` is fixed so a ramp still spans the
+message rather than being stretched thin across its own trailing silence.
+`config._parse_morse_look` passes its own `repeat` flag through. A one-shot,
+or an empty message, gets no such gap - there is nothing after it to
+separate itself from.
+
+**Reported the same day, on real hardware: "the LED is cutting off" and
+"behaving erratically".** Traced by polling `/api/status` at 20ms
+resolution against a running instance - the host-side stop list plays
+completely and in order, so nothing there truncates a message. Two real
+issues found alongside it, neither confirmed as *the* cause without hardware
+to test against, both worth having regardless:
+
+- **`ble_device.BLEDevice._send` dropped the newest write on a full outbox,
+  not the oldest** - backwards from its own comment ("the backlog is stale by
+  definition"). A repeating Morse look can need dozens of writes a cycle,
+  each awaiting a real over-the-air response (`write_gatt_char(...,
+  response=True)`); once the pump falls behind, the fix now evicts the
+  *oldest* queued write to make room, so a slow link recovers towards the
+  current colour instead of refusing it in favour of replaying ancient ones.
+  `tests/test_ble_device.py` pins which end survives.
+- **The look editor's own swatch was silently static for a Morse look** - by
+  design (no client-side encoder, see above), but nothing on the page said
+  so, so a solid, unflashing dot reads as broken rather than as expected.
+  A hint now sits beside the fields naming "Show on the button" as the one
+  place the real rhythm shows.
 
 ## Small fixes
 

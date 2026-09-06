@@ -501,6 +501,12 @@
 
   .apps-install { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
                   margin-top: 10px; padding-left: 21px; }
+
+  /* "On its own" (TODO 111): the same card vocabulary, separated by a rule
+     because it answers a different question from the two groups above it -
+     what survives the host going away, not what the config holds. */
+  .standalone { border-top: 1px solid var(--line); padding-top: 16px; }
+  .standalone .apps-pill { white-space: normal; text-align: right; }
   .apps-preset { max-width: 100%; flex: 1; min-width: 200px; font-size: 12px; }
 
   /* --- an app's own page (TODO 51) ---

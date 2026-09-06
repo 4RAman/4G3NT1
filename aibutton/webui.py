@@ -61,7 +61,7 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, midi_io, scenes, sequencer
+from . import __version__, appc, midi_io, scenes, sequencer
 from .actions import execute as execute_action, webhook_payload
 from .audio import ToneLibrary
 from .config import (
@@ -78,7 +78,8 @@ from .config import (
     parse_with_details,
     parse_with_warnings,
 )
-from .device import ButtonDevice, LEDState, MockDevice, Sound, TriggerType
+from .device import ButtonDevice, LEDState, MockDevice, Sound, TriggerType, package_crc
+from . import device as device_module
 from .rules import resolve
 from .store import EventStore
 from .summary import clean as summary_clean
@@ -535,6 +536,55 @@ def create_app(ctx: WebContext) -> FastAPI:
         ctx.on_stop()
         return {"stopping": True}
 
+    @app.get("/api/app")
+    async def app_status():
+        """What the button is running standalone, and whether it is current.
+
+        **The staleness answer, and the reason this endpoint exists.** A
+        package is compiled from the config and pushed; edit the config
+        afterwards and the button quietly keeps doing the old thing whenever
+        the host is away. Comparing what *would* compile against the CRC the
+        device reports on connect is what turns that into something the page
+        can say out loud.
+        """
+        try:
+            package, report = appc.compile_config(ctx.cm.config)
+        except appc.CompileError as exc:
+            return {
+                "buildable": False, "why": str(exc),
+                "installed_crc": ctx.device.info.package_crc,
+                "supported": ctx.device.info.has(device_module.CAP_APP),
+            }
+        installed = ctx.device.info.package_crc
+        wanted = package_crc(package)
+        return {
+            "buildable": True,
+            "bytes": len(package),
+            "wanted_crc": wanted,
+            "installed_crc": installed,
+            "current": installed == wanted,
+            "supported": ctx.device.info.has(device_module.CAP_APP),
+            **report,
+        }
+
+    @app.post("/api/app/install")
+    async def install_app():
+        """Compile the current config and push it to the button.
+
+        The service does this rather than a CLI because the service is what
+        holds the radio - one BLE central, and it is already taken. So "install
+        on the button" is an API call for exactly the reason "stop the service"
+        is one.
+        """
+        try:
+            package, report = appc.compile_config(ctx.cm.config)
+        except appc.CompileError as exc:
+            raise HTTPException(400, str(exc))
+        ok, detail = await ctx.device.push_package(package)
+        if not ok:
+            raise HTTPException(503, detail)
+        return {"installed": True, "bytes": len(package), **report}
+
     @app.post("/api/config/validate")
     async def validate_config(body: dict = Body(...)):
         """Dry-run the parser without writing or reloading - the config
@@ -858,7 +908,9 @@ def create_app(ctx: WebContext) -> FastAPI:
         if body.get("clear"):
             look, warnings = None, []
         else:
-            look, warnings = parse_look_with_warnings(body, "look")
+            look, warnings = parse_look_with_warnings(
+                body, "look", ctx.cm.config.min_flash_period_s
+            )
 
         if ctx.show_look is not None:
             # One gate, and it is main's: `set_led` floors a plain effect with

@@ -464,6 +464,24 @@ here for what it's about, not for how important it is.
   caught by [test_app_readout.py](tests/test_app_readout.py), which also checks
   the `nameField` against the **real parser's** dataclass rather than a
   hand-written map.
+- **Which end is "best" is the item's answer, and it is read through one
+  function.** Most templates set `readout.better: null`, because "fastest" is
+  a fact about a reaction timer and a guess about a stopwatch — the same
+  template times a mile run and a loaf of bread (TODO 109). A mode may override
+  it (`Mode.better`, `MODE_BETTER`, mirrored in schema.js), and every reader
+  goes through `betterFor(mode, readout)` rather than off the descriptor, or
+  the override is silently ignored on whichever page forgot. The field is
+  offered by exactly the templates that would *read* it — `duration` and
+  `value` measures whose descriptor declines to answer — and
+  [test_schema_mirror.py](tests/test_schema_mirror.py) derives that set rather
+  than listing it, so a new timing app either offers the choice or fails.
+- **Anything a row shows twice — as a number and as a colour — stays a number
+  until the last moment.** A readout's delta arrived at `measuredRow` already
+  formatted, so the good/bad test compared `"-0:02"` with `0`: NaN, false, and
+  therefore *every* reaction attempt painted worse and every Hot/Cold guess
+  painted better, whichever way the number had actually gone. It rendered
+  perfectly and had no failing test, because the wrong half is a CSS class.
+  *Pass the value and the formatter, not the string.*
 - **`value` is one untyped column, so anything reading it groups by `name`.**
   A metronome's BPM, a reaction timer's milliseconds, a countdown's minutes and
   an alarm's 0/1 share that slot and nothing else. Every reader gives each name

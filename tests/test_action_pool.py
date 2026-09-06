@@ -171,9 +171,9 @@ def test_standby_parses_and_round_trips():
 def test_standby_can_be_pooled_like_any_other_action():
     cfg = parse_config({
         "actions": {"off": {"action": "standby"}},
-        "modes": [{**FLOOR, "long_press": "off"}],
+        "modes": [{**FLOOR, "tap_5": "off"}],
     })
-    bound = cfg.modes[0].behavior.actions["long_press"]
+    bound = cfg.modes[0].behavior.actions["tap_5"]
     assert resolve_action(cfg, bound) == StandbyAction()
 
 
@@ -188,7 +188,7 @@ STANDBY_CONFIG = {
             "activation": {"type": "always"},
             "short_press": {"action": "log", "event": "ping"},
             "double_tap": "nap",
-            "long_press": {"action": "enter_mode", "target": "Water"},
+            "triple_tap": {"action": "enter_mode", "target": "Water"},
         },
         {
             "name": "Water", "template": "counter",
@@ -243,7 +243,7 @@ async def test_standby_silences_the_ambient_layer_and_lets_it_back(tmp_path, mon
         await feed(TriggerType.SHORT_PRESS)   # awake: logs
         await feed(TriggerType.DOUBLE_TAP)    # -> standby, via the named action
         await feed(TriggerType.SHORT_PRESS)   # asleep: ignored entirely
-        await feed(TriggerType.LONG_PRESS)    # asleep: no takeover entered
+        await feed(TriggerType.TRIPLE_TAP)    # asleep: no takeover entered
         await feed(TriggerType.DOUBLE_TAP)    # -> awake
         await feed(TriggerType.SHORT_PRESS)   # awake again: logs
         await asyncio.sleep(0.1)
@@ -261,16 +261,22 @@ async def test_standby_silences_the_ambient_layer_and_lets_it_back(tmp_path, mon
 
     # Two pings, not three: the press made while asleep logged nothing.
     assert kinds_names.count(("log", "ping")) == 2
-    # And the long press that would have opened the counter did not.
+    # And the triple tap that would have opened the counter did not.
     assert ("mode_enter", "Water") not in kinds_names
 
 
-async def test_standby_dims_idle_and_waking_puts_it_back(tmp_path, monkeypatch):
-    """What "ambient-only" looks like: IDLE goes dim rather than dark, because
-    "off" and "unplugged" have to be different things to look at."""
+async def test_standby_darkens_idle_and_waking_puts_it_back(tmp_path, monkeypatch):
+    """What "ambient-only" looks like: IDLE goes dark, and comes back.
+
+    The dark is *arrived at* rather than snapped to (TODO 104), so this waits
+    out the fade - shortened here, since what is being asserted is where the
+    light lands and not how long it takes to get there.
+    """
+    monkeypatch.setattr(main, "_SLEEP_FADE_S", 0.1)
     device, task, feed, _db = await _running(tmp_path, monkeypatch)
     try:
         await feed(TriggerType.DOUBLE_TAP)  # -> standby
+        await asyncio.sleep(0.25)           # the fade, and then some
         assert device.led_state is LEDState.IDLE
         assert device.led_effect is not None
         assert (device.led_effect.style, device.led_effect.color) == (

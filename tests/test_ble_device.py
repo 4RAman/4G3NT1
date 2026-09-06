@@ -11,6 +11,7 @@ is involved and the tests run in milliseconds.
 """
 
 import asyncio
+import contextlib
 
 import protocol as fw  # firmware/protocol.py - see conftest.py
 import pytest
@@ -491,6 +492,32 @@ async def test_outbox_cannot_grow_without_bound():
         for _ in range(ble_device.OUTBOX_MAX * 3):
             device.play_sound(Sound.ACK)
         assert device._outbox.qsize() <= ble_device.OUTBOX_MAX
+    finally:
+        await device.close()
+
+
+async def test_a_full_outbox_drops_the_oldest_write_not_the_newest():
+    """OUTBOX_MAX's own reasoning ('the backlog is stale by definition') only
+    holds if the newest write is the one that survives - a burst that outruns
+    the pump (a repeating Morse look, TODO 83, pushes a colour every
+    0.15-0.7s while each write awaits a real over-the-air response) must
+    recover towards the current colour once the link catches up, not keep
+    delivering whichever ancient ones happened to queue first."""
+    device = await _connected_device()
+    try:
+        client = FakeClient.instances[0]
+        client.write_fails = True  # stall the pump so nothing drains
+        newest = ble_device.OUTBOX_MAX + 5
+        for i in range(newest + 1):
+            device.set_led(LEDState.TIMING, _Look(color=f"#{i:06x}"))
+        survivors = []
+        with contextlib.suppress(asyncio.QueueEmpty):
+            while True:
+                survivors.append(device._outbox.get_nowait())
+        assert len(survivors) == ble_device.OUTBOX_MAX
+        assert survivors[-1] == (
+            LED_EFFECT_UUID, effect_payload(_Look(color=f"#{newest:06x}")),
+        )
     finally:
         await device.close()
 

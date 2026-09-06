@@ -39,7 +39,7 @@ export const GESTURES = [
 // readout and standby - each change what the mode *loop* does next, and none
 // of these run inside the loop. test_schema_mirror.py fails on drift.
 export const SEQUENCE_ACTIONS = [
-  'log', 'timer_toggle', 'webhook', 'osc', 'midi', 'keys', 'set_value',
+  'log', 'timer_toggle', 'webhook', 'osc', 'artnet', 'midi', 'keys', 'set_value',
 ];
 
 // What `set_value` may do to a slot: a delta and an absolute, and nothing
@@ -65,6 +65,15 @@ export const HOOK_ACTIONS = [...SEQUENCE_ACTIONS, 'sequence'];
 // fires beside the run loop, a reflex is dispatched by it, so starting an app
 // is exactly what a reflex is for. test_schema_mirror.py fails on drift.
 export const REFLEX_ACTIONS = [...HOOK_ACTIONS, 'enter_mode', 'set_position'];
+
+// Which actions may be named in the action pool: the hook set only. The three
+// missing from here — `enter_mode`, `readout`, and `standby` — each change
+// what the mode *loop* does next, and that is ambient-only state that does not
+// belong in a shared library of "do this and hand the button back". An action
+// in the pool must be truly fire-and-forget (primitives or sequences), because
+// it may be dispatched from any context — a gesture, a hook, a reflex — and
+// any of the loop-changing actions would break one or more of those paths.
+export const POOL_ACTIONS = HOOK_ACTIONS;
 
 // The operators a reflex's test may use - one field, one operator, one number,
 // and this is the whole list (TODO 72). Mirrors REFLEX_OPS in config.py;
@@ -502,6 +511,33 @@ export const ACTIONS = [
     describe: (a) => `OSC ${a.address || '…'} → ${a.host || '…'}:${a.port ?? '…'}`,
   },
   {
+    type: 'artnet',
+    label: 'Send Art-Net (DMX)',
+    fields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true,
+        placeholder: '2.0.0.1',
+        hint: 'IP of the lighting desk or Art-Net node - a broadcast '
+          + 'address (like 2.255.255.255) reaches every node on the net.' },
+      { key: 'universe', label: 'Universe', kind: 'number', min: 0, max: 32767,
+        step: 1,
+        hint: 'The Art-Net universe (Net/Sub-Net/Universe, packed as one '
+          + 'number) this packet addresses.' },
+      { key: 'channels', label: 'Channel values', kind: 'json', shape: 'list',
+        hint: 'JSON list, one number 0-255 per DMX channel, starting at '
+          + 'channel 1. [255, 0, 128] sets channels 1-3 and leaves the rest '
+          + 'of the universe untouched.' },
+      { key: 'port', label: 'Port', kind: 'number', min: 1, max: 65535,
+        step: 1, tier: 'tinker',
+        hint: 'Almost always 6454, the standard Art-Net port - change it '
+          + 'only if your node says otherwise.' },
+    ],
+    defaults: () => ({
+      action: 'artnet', host: '2.0.0.1', port: 6454, universe: 0, channels: [255],
+    }),
+    // No delivery to report: Art-Net is UDP, exactly like osc above.
+    describe: (a) => `Art-Net universe ${a.universe ?? 0} → ${a.host || '…'}:${a.port ?? 6454}`,
+  },
+  {
     type: 'midi',
     label: 'Send a MIDI message',
     fields: [
@@ -899,6 +935,32 @@ const LADDER_BEATS_FIELD = {
     + 'tapped tempo supplies timing - no tick to set.',
 };
 
+// Which end of an app's numbers is the good end, when the *item* knows and the
+// template cannot (TODO 109). Mirrors `config.MODE_BETTER`;
+// test_schema_mirror.py fails on drift.
+export const MODE_BETTER = ['low', 'high'];
+
+// Offered by the three templates whose `readout.better` is null because it is
+// a guess about the person rather than a fact about the app - a stopwatch, a
+// countdown and a metronome. The blank option is the default and says what it
+// does rather than "none": absent is not a missing answer here, it is the
+// answer most of these apps want.
+//
+// Two options, not three. There is no "neither" because no template offering
+// this field has an opinion to override; the day one does, that is when the
+// word is worth adding on both sides.
+const BETTER_FIELD = {
+  key: 'better', label: 'Is one of these best?', kind: 'select', tier: 'tinker',
+  options: [
+    { value: '', label: 'No - just list them' },
+    { value: 'low', label: 'Yes - lower is better' },
+    { value: 'high', label: 'Yes - higher is better' },
+  ],
+  hint: 'A mile run has a best time; a loaf of bread does not. Say so and '
+    + 'this app’s history crowns one and colours each change good or bad - '
+    + 'press Refresh on it to redraw.',
+};
+
 /**
  * How an app reads its own history back, on its own page (TODO 51).
  *
@@ -933,7 +995,10 @@ const LADDER_BEATS_FIELD = {
  * `better` is which end of the range is the good end, and it is null far more
  * often than not: a tempo has no good end and neither does a countdown's
  * length. Set it only where "best" is a fact about the app rather than a guess
- * about the person using it.
+ * about the person using it - and where it is a guess, `BETTER_FIELD` lets the
+ * *item* answer it (TODO 109), which is the only level that can. Read it
+ * through `betterFor`, never off the descriptor, or the override is silently
+ * ignored on whichever page forgot.
  */
 export const READOUT_MEASURES = ['duration', 'value', 'tally', 'outcome'];
 
@@ -946,6 +1011,14 @@ export const TEMPLATES = [
     nature: 'ambient',
     allowedActivations: ['always', 'window'],
     body: 'actions', // gesture×ACTIONS sub-editor + unless_logged_today
+    // Five, not six, exactly like a control surface - and mirroring
+    // `_parse_actions_body`, which drops a long press with a warning (TODO
+    // 104). An everyday map is the level with nothing above it, so "up one
+    // level" here means off, and the gesture belongs to sleep.
+    gestures: ['short_press', 'double_tap', 'triple_tap', 'tap_4', 'tap_5'],
+    gesturesNote: 'Long press puts the button to sleep, and wakes it again. '
+      + 'That is why it is not in this list: it is the one gesture that means '
+      + 'the same thing everywhere.',
     // A filled-in event name so a freshly added mode is valid by construction -
     // it parses, round-trips, and won't be dropped as an empty actions mode.
     defaults: () => ({
@@ -954,6 +1027,7 @@ export const TEMPLATES = [
     describe: (mode) => {
       const parts = [];
       for (const g of GESTURES) {
+        if (g.key === 'long_press') continue;  // sleep, not a binding
         const action = mode[g.key];
         // A string binding is a pool reference and has no `.action` - see
         // describeAction. Testing the binding itself rather than its shape is
@@ -1064,6 +1138,7 @@ export const TEMPLATES = [
       { key: 'log_as', label: 'Timer name', kind: 'text', required: true,
         placeholder: 'focus',
         hint: 'Logs elapsed time under this name. Short press laps, long press stops.' },
+      BETTER_FIELD,
     ],
     // The app item 51 was actually asked for: a stopwatch's page should be the
     // stopwatch, and its runs are already in the log as timer_stop rows with a
@@ -1122,6 +1197,12 @@ export const TEMPLATES = [
           + 'an app’s number" can add to from any gesture - and which you '
           + 'reset by setting it to 0. Either way every press is logged, so '
           + 'history and streaks are the same.' },
+      // Unlike a stopwatch or countdown, a tally has no "longest"/"shortest"
+      // pair to fall back on when nobody answers - a busiest day is all
+      // `renderTally` can say without this. So the default here still reads
+      // as today's behaviour (busiest, unlabelled), and this only starts
+      // mattering the day someone is counting something they want fewer of.
+      BETTER_FIELD,
     ],
     // A tally, not a value: each press is one row and the number worth seeing
     // is how many of them a day held - which is exactly what `count_today`
@@ -1220,6 +1301,7 @@ export const TEMPLATES = [
       { key: 'log_as', label: 'Log each session as', kind: 'text', required: true,
         placeholder: 'metronome',
         hint: 'One event per session, carries the tempo you settled on.' },
+      BETTER_FIELD,
       { key: 'clock_port', label: 'Follow a DAW (MIDI clock in)', kind: 'text', tier: 'tinker', suggest: 'midi_in',
         placeholder: 'leave blank to tap the tempo',
         hint: 'Partial MIDI input port name. Enable Clock Out in your DAW, '
@@ -1294,6 +1376,7 @@ TEMPLATES.push({
     { key: 'log_as', label: 'Log each finished run as', kind: 'text', required: true,
       placeholder: 'countdown',
       hint: 'Logs the length run. A cancelled run logs nothing.' },
+    BETTER_FIELD,
   ],
   // The length that was run, in minutes - and only *finished* runs are here,
   // because a cancelled one logs nothing (the field above says so). So this
@@ -2318,16 +2401,63 @@ export function actionUsedBy(name, modes, reflexes, pool) {
  * deliberately holds no `format.js` import, so this returns the numbers and
  * the caller writes the sentence. That also makes it a table test.
  *
- * **`best` appears only where the descriptor declares a `better`**, which most
- * do not, and that is the honest part rather than a gap. "Fastest" is a fact
- * about a reaction timer and a guess about a stopwatch - the same template
- * times a mile run, where quicker is better, and a cake, where it is not. See
- * the note on `better` above; putting a best on every app would print a
- * judgement the config never made.
+ * **`best` appears only where a `better` was actually chosen** - by the
+ * template, or by this item overriding it (`betterFor`). Most templates
+ * declare none, and that is the honest part rather than a gap: "fastest" is a
+ * fact about a reaction timer and a guess about a stopwatch, since the same
+ * template times a mile run, where quicker is better, and a cake, where it is
+ * not. TODO 109 is that guess becoming the item's to make; putting a best on
+ * every app regardless would print a judgement the config never made.
  */
+export function betterFor(mode, readout) {
+  const own = mode?.better;
+  return MODE_BETTER.includes(own) ? own : (readout?.better ?? null);
+}
+
+// --- what the button does on its own (TODO 111) ----------------------------
+// A compiled package runs with nobody connected, and the whole hazard is that
+// it is a *snapshot*: edit the config afterwards and the button quietly keeps
+// doing the old thing whenever the host is away. `GET /api/app` answers that
+// comparison; this turns the answer into a verdict, and the page writes the
+// sentence - the same structured-not-formatted split `readoutStat` follows.
+
+/**
+ * One of five states, from what `/api/app` said.
+ *
+ *   unsupported  the button is there and its firmware cannot run apps at all
+ *   unbuildable  nothing in this config compiles yet (`why` says what)
+ *   empty        it could run one, and there is none installed
+ *   stale        one is installed and it is not what this config makes now
+ *   current      installed, and it matches
+ *
+ * **`supported` is asked first and answers for a disconnected button too**,
+ * because `info` falls back to the assumed one when nothing is attached - so
+ * "your firmware is too old" and "no button is plugged in" are the same answer
+ * here, and the page says the honest half: what would be installed *if*.
+ *
+ * `null` in means the page has not asked yet (or there is no service to ask),
+ * which is silence rather than a state - the same rule `readoutStat` follows
+ * for a log that has never seen an app.
+ */
+export function standaloneVerdict(status) {
+  if (!status) return null;
+  if (!status.supported) return { state: 'unsupported', buildable: !!status.buildable };
+  if (!status.buildable) return { state: 'unbuildable', why: status.why || '' };
+  // 0 is the wire's "no package", not a checksum: the firmware starts there
+  // and stays there with no `app.pkg` on flash, and a device too old to send
+  // the field decodes to it (device.py's `package_crc: int = 0`). A real
+  // package could in principle checksum to zero and would then read as empty,
+  // which costs an Install nobody needed - the opposite mistake, reporting a
+  // bare board as up to date, is the one that matters.
+  if (!status.installed_crc) return { state: 'empty', bytes: status.bytes };
+  if (status.current) return { state: 'current', bytes: status.bytes };
+  return { state: 'stale', bytes: status.bytes };
+}
+
 export function readoutStat(mode, rows) {
   const readout = TEMPLATE_BY_TYPE[mode?.template]?.readout;
   if (!readout) return null;
+  const better = betterFor(mode, readout);
   const name = mode[readout.nameField];
   if (!name) return null;
   const row = (rows || []).find((r) => r && r.kind === readout.kind && r.name === name);
@@ -2337,11 +2467,11 @@ export function readoutStat(mode, rows) {
     count: row.count, noun: readout.noun, last: row.last,
     best: null, unit: readout.unit || '', bestIsDuration: false,
   };
-  if (readout.better === 'low' || readout.better === 'high') {
+  if (better === 'low' || better === 'high') {
     const duration = readout.measure === 'duration';
     const low = duration ? row.duration_min : row.value_min;
     const high = duration ? row.duration_max : row.value_max;
-    const best = readout.better === 'low' ? low : high;
+    const best = better === 'low' ? low : high;
     if (best !== null && best !== undefined) {
       stat.best = best;
       stat.bestIsDuration = duration;
@@ -3038,6 +3168,15 @@ export const LED_FIELDS = [
 
 /** One-line summary of an effect, e.g. "Breathe #0000ff, fading every 3s". */
 export function describeEffect(effect) {
+  // A Morse look (TODO 83) is a look but not a style either, and it compiles
+  // to a stop list only on the server - see ledPreview.js's colorAt for why
+  // this describes the message rather than trying to render its rhythm.
+  if (effect && typeof effect.morse === 'string') {
+    const dpm = effect.dpm || 400;
+    const shape = Array.isArray(effect.ramp) && effect.ramp.length ? 'ramp' : (effect.color || '#ff0000');
+    return `Morse "${effect.morse}" at ${dpm} dots/min, ${shape}, `
+      + (effect.repeat === false ? 'plays once' : 'looping');
+  }
   // A stop list (TODO 19b) is a look but not a style, so it summarises
   // before the style table gets a say.
   if (effect && Array.isArray(effect.stops)) {

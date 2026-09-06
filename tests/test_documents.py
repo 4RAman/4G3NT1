@@ -248,7 +248,17 @@ async def test_with_nowhere_to_keep_values_it_fails_clearly(docs):
 # --- the counter, both ways ------------------------------------------------
 
 
-async def _run(tmp_path, modes, presses):
+async def _run(tmp_path, monkeypatch, modes, presses):
+    """Start the service, make `presses`, hand back the document store.
+
+    **The SUCCESS hold is shortened, and it is not a nicety.** An ambient
+    press holds SUCCESS for `_SUCCESS_DISPLAY_S` and then the run loop
+    *discards* everything queued behind it ("single in-flight action"), so at
+    the real 2 s only the first of a burst 0.12 s apart would ever land - and
+    the two tests that press from the ambient layer would count 1 where they
+    said 3. Every other multi-press test here patches it for the same reason.
+    """
+    monkeypatch.setattr(main, "_SUCCESS_DISPLAY_S", 0.05)
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({
         "sounds_enabled": False, "web_enabled": False,
@@ -272,15 +282,15 @@ async def _run(tmp_path, modes, presses):
 def _counter_modes(durable: bool) -> list[dict]:
     return [
         {"name": "Home", "template": "actions", "activation": {"type": "always"},
-         "long_press": {"action": "enter_mode", "target": "Habit"}},
+         "tap_4": {"action": "enter_mode", "target": "Habit"}},
         {"name": "Habit", "template": "counter", "activation": {"type": "manual"},
          "event": "cigs", "durable": durable},
     ]
 
 
-async def test_a_durable_counter_keeps_its_number_in_its_document(tmp_path):
-    docs = await _run(tmp_path, _counter_modes(True), [
-        TriggerType.LONG_PRESS,   # enter
+async def test_a_durable_counter_keeps_its_number_in_its_document(tmp_path, monkeypatch):
+    docs = await _run(tmp_path, monkeypatch, _counter_modes(True), [
+        TriggerType.TAP_4,        # enter
         TriggerType.SHORT_PRESS,
         TriggerType.SHORT_PRESS,
     ])
@@ -290,11 +300,11 @@ async def test_a_durable_counter_keeps_its_number_in_its_document(tmp_path):
         docs.close()
 
 
-async def test_an_ordinary_counter_writes_no_document(tmp_path):
+async def test_an_ordinary_counter_writes_no_document(tmp_path, monkeypatch):
     """Off is the template as it always was - today's rows, recounted - and it
     must cost nothing at all."""
-    docs = await _run(tmp_path, _counter_modes(False), [
-        TriggerType.LONG_PRESS, TriggerType.SHORT_PRESS,
+    docs = await _run(tmp_path, monkeypatch, _counter_modes(False), [
+        TriggerType.TAP_4, TriggerType.SHORT_PRESS,
     ])
     try:
         assert docs.everything() == {}
@@ -302,12 +312,12 @@ async def test_an_ordinary_counter_writes_no_document(tmp_path):
         docs.close()
 
 
-async def test_a_durable_counter_still_writes_every_row(tmp_path):
+async def test_a_durable_counter_still_writes_every_row(tmp_path, monkeypatch):
     """History and current value are different jobs, so a durable counter does
     both - otherwise switching the flag would silently empty the Events page
     for that app."""
-    docs = await _run(tmp_path, _counter_modes(True), [
-        TriggerType.LONG_PRESS, TriggerType.SHORT_PRESS, TriggerType.SHORT_PRESS,
+    docs = await _run(tmp_path, monkeypatch, _counter_modes(True), [
+        TriggerType.TAP_4, TriggerType.SHORT_PRESS, TriggerType.SHORT_PRESS,
     ])
     docs.close()
     events = EventStore(str(tmp_path / "events.db"))
@@ -318,14 +328,14 @@ async def test_a_durable_counter_still_writes_every_row(tmp_path):
         events.close()
 
 
-async def test_a_gesture_can_add_to_a_counter_without_entering_it(tmp_path):
+async def test_a_gesture_can_add_to_a_counter_without_entering_it(tmp_path, monkeypatch):
     """TODO 15's "Smoking +1", and the whole reason a document lives outside
     every app's run loop."""
     modes = _counter_modes(True)
     modes[0]["short_press"] = {
         "action": "set_value", "app": "Habit", "slot": "count", "value": 1,
     }
-    docs = await _run(tmp_path, modes, [
+    docs = await _run(tmp_path, monkeypatch, modes, [
         TriggerType.SHORT_PRESS, TriggerType.SHORT_PRESS, TriggerType.SHORT_PRESS,
     ])
     try:
@@ -334,7 +344,7 @@ async def test_a_gesture_can_add_to_a_counter_without_entering_it(tmp_path):
         docs.close()
 
 
-async def test_the_counter_opens_on_what_a_gesture_left_there(tmp_path):
+async def test_the_counter_opens_on_what_a_gesture_left_there(tmp_path, monkeypatch):
     """The two halves meeting: press it up from Home, then open the app and
     the number is the same one. Under `count_today` that agreed because they
     were the same rows; under a document it agrees because they are the same
@@ -343,9 +353,9 @@ async def test_the_counter_opens_on_what_a_gesture_left_there(tmp_path):
     modes[0]["short_press"] = {
         "action": "set_value", "app": "Habit", "slot": "count", "value": 4,
     }
-    docs = await _run(tmp_path, modes, [
+    docs = await _run(tmp_path, monkeypatch, modes, [
         TriggerType.SHORT_PRESS,   # +4 from the ambient layer
-        TriggerType.LONG_PRESS,    # enter the counter
+        TriggerType.TAP_4,         # enter the counter
         TriggerType.SHORT_PRESS,   # +1 inside it
     ])
     try:

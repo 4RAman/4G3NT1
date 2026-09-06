@@ -170,14 +170,14 @@ async def test_status_reports_which_mode_answers_each_gesture(client, ctx):
             {"name": "Default", "template": "actions",
              "activation": {"type": "always"},
              "short_press": {"action": "log", "event": "ping"},
-             "long_press": {"action": "log", "event": "held"}},
+             "triple_tap": {"action": "log", "event": "held"}},
         ],
     })
 
     ctx.clock.set(datetime.now().replace(hour=6, minute=0))
     active = (await client.get("/api/status")).json()["active_modes"]
     assert active["short_press"] == "Morning"  # the window wins
-    assert active["long_press"] == "Default"   # which it does not define
+    assert active["triple_tap"] == "Default"   # which the window does not define
     assert active["double_tap"] is None        # nothing binds it
 
     ctx.clock.set(datetime.now().replace(hour=12, minute=0))

@@ -104,6 +104,32 @@ export class ConfigApi {
     return this._json('/api/midi/ports');
   }
 
+  /** What the button would run with nobody connected, and whether what is on
+   *  it is still current (TODO 111).
+   *
+   *  `{ buildable, bytes, wanted_crc, installed_crc, current, supported,
+   *  menu, apps, dropped, skipped }` - or `{ buildable: false, why }` when
+   *  nothing in the config compiles yet. The comparison is the point: a
+   *  package is compiled from the config and pushed, and editing the config
+   *  afterwards leaves the button quietly doing the old thing whenever the
+   *  host is away.
+   *
+   *  Optional by construction like showLook and events: the offline editor's
+   *  FileApi has no such method and no button behind it, so the section
+   *  simply does not appear there. */
+  appStatus() {
+    return this._json('/api/app');
+  }
+
+  /** Compile the running config and push it to the button, over BLE.
+   *
+   *  The *service* does this rather than the browser or a CLI, because the
+   *  service is what holds the radio - one BLE central, and it is already
+   *  taken. Optional in the same way appStatus is. */
+  installApp() {
+    return this._json('/api/app/install', { method: 'POST' });
+  }
+
   // --- scenes ---
   // Every one of these returns the same shape (the saved scenes, which is
   // active, the resulting effective config, and anything waiting on a

@@ -22,7 +22,7 @@ function world() {
     {
       name: 'Home', template: 'actions',
       short_press: 'ping',                                  // a gesture
-      long_press: { action: 'log', event: 'x' },            // inline, not a reference
+      triple_tap: { action: 'log', event: 'x' },            // inline, not a reference
     },
     {
       name: 'Wake', template: 'notice',

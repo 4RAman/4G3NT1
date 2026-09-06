@@ -10,12 +10,12 @@ import { readFlag, writeFlag } from './prefs.js';
 import { ConfigApi } from './api.js';
 import {
   ACTIONS, ACTION_BY_TYPE, BUILTIN_MODES, GESTURES, LED_STATE_BY_KEY,
-  SYSTEM_LED_STATES, MENU_TEMPLATES, MODE_GROUPS, REFLEX_ACTIONS, REFLEX_OPS,
-  SETTINGS_GROUPS, TEMPLATES,
+  POOL_ACTIONS, SYSTEM_LED_STATES, MENU_TEMPLATES, MODE_GROUPS, REFLEX_ACTIONS,
+  REFLEX_OPS, SETTINGS_GROUPS, TEMPLATES,
   TEMPLATE_BY_TYPE, danglingTargets, describeAction, describeActivation,
   describeEffect, describeReflex, describeTemplate, findEntryPoints, modeLook,
   reachableModes, STARTER_BY_KEY, actionRefs, actionUsedBy, readoutStat,
-  startedBy,
+  standaloneVerdict, startedBy,
 } from './schema.js';
 import { ModeEditor } from './modeEditor.js';
 import { SceneBar } from './scenes.js';
@@ -26,6 +26,30 @@ import { createLookEditor } from './colorEngine.js';
 // way, and a nav line that rounded differently would be a third answer.
 import { countOf, fmtDay, fmtDuration, fmtValue } from './format.js';
 import { paint as applySwatch, unpaint } from './ledPreview.js';
+
+/**
+ * A Morse look (TODO 83) is authored as `{morse, dpm, color/ramp, repeat}`
+ * but the *effective* config - what `this.model` is seeded from - holds the
+ * expanded stop list `parse_config` actually computed instead. Every other
+ * look shape round-trips through that expansion unchanged (a plain effect or
+ * a hand-written `stops` list *is* its own effective form), so this is a
+ * targeted fix for the one shape that is not, rather than a general
+ * "remember how everything was authored" mechanism this page does not
+ * otherwise need.
+ *
+ * `rawLooks` is `undefined` in the offline editor (`FileApi.get()` has no
+ * server-side parser to have expanded anything, so `effective` already *is*
+ * the raw file) - nothing to restore there, and the check below is what
+ * makes that a no-op rather than a crash.
+ */
+function _preserveAuthoredLooks(model, rawLooks) {
+  if (!rawLooks || typeof model.looks !== 'object' || !model.looks) return;
+  for (const [name, raw] of Object.entries(rawLooks)) {
+    if (raw && typeof raw === 'object' && typeof raw.morse === 'string') {
+      model.looks[name] = structuredClone(raw);
+    }
+  }
+}
 
 export class ConfigMenu {
   /** @param {{modes: Element, lights: Element, device: Element, bar: Element, scenes?: Element}} mounts */
@@ -62,6 +86,7 @@ export class ConfigMenu {
     try {
       const data = await this.api.get();
       this.model = structuredClone(data.effective);
+      _preserveAuthoredLooks(this.model, data.raw && data.raw.looks);
       if (!Array.isArray(this.model.modes)) this.model.modes = [];
       if (!Array.isArray(this.model.reflexes)) this.model.reflexes = [];
       this.dirty = false;
@@ -344,7 +369,131 @@ export class ConfigMenu {
 
     wrap.append(this._appsGroup('Installed', installed, reached, true));
     wrap.append(this._appsGroup('Available', available, reached, false));
+    wrap.append(this._renderStandalone());
     return wrap;
+  }
+
+  // --- what the button does with nobody connected (TODO 111) -------------
+  // The other half of the page's own question. "Installed" above means
+  // installed *in the config*, which the service reads while it is running;
+  // this is what survives the host going away, and it is a different and
+  // smaller list. The endpoint has existed since the day packages shipped and
+  // nothing showed it, which meant a Save could quietly leave the button
+  // running an older build - the exact confusion the comparison was built to
+  // prevent.
+
+  /** The section, plus the one fetch that fills it.
+   *
+   *  **Asked once per load, not per render.** The comparison is against what
+   *  is *saved* - the server compiles `cm.config`, not the unsaved model in
+   *  this page - so it cannot change while you type, and this section is
+   *  rebuilt on every keystroke (`_markDirty` -> `_refreshApps`). Save and
+   *  Install drop the cached answer instead. */
+  _renderStandalone() {
+    this.standaloneWrap = el('div', { className: 'apps-group standalone' });
+    if (typeof this.api?.appStatus !== 'function') return this.standaloneWrap;
+    this._paintStandalone();
+    if (this._standalone === undefined) {
+      this._standalone = null;  // in flight: one request, however many renders
+      this.api.appStatus().then(
+        (status) => { this._standalone = status; this._paintStandalone(); },
+        // Never an error box: this is a report, and a service too old to
+        // answer /api/app should cost the section, not the page.
+        () => { this._standalone = false; this._paintStandalone(); },
+      );
+    }
+    return this.standaloneWrap;
+  }
+
+  /** Forget what the button said, so the next render asks again. */
+  _forgetStandalone() {
+    this._standalone = undefined;
+  }
+
+  _paintStandalone() {
+    const wrap = this.standaloneWrap;
+    if (!wrap) return;
+    clear(wrap);
+    if (this._standalone === false) return;  // asked, and there was no answer
+
+    wrap.append(el('div', { className: 'apps-group-title', textContent: 'On its own' }));
+    const verdict = standaloneVerdict(this._standalone);
+    if (!verdict) {
+      wrap.append(el('p', { className: 'empty', textContent: 'Asking the button…' }));
+      return;
+    }
+
+    const say = {
+      unsupported: ['available', "This button's firmware cannot run apps on its own yet."],
+      unbuildable: ['stranded', `Nothing here compiles yet: ${verdict.why}`],
+      empty: ['stranded', `Nothing installed. ${verdict.bytes} bytes would go.`],
+      stale: ['stranded', `Out of date - the button is running an older build. ${verdict.bytes} bytes would go.`],
+      current: ['installed', `Up to date - ${verdict.bytes} bytes on the button.`],
+    }[verdict.state];
+
+    wrap.append(el('p', { className: 'apps-lead', 'data-help': true, textContent:
+      'Pressed with the service stopped, or the PC asleep, the button runs a '
+      + 'compiled copy of some of this. Most of a config cannot come - a '
+      + 'webhook needs a network - so what does is worth reading before you '
+      + 'rely on it.' }));
+
+    const head = el('div', { className: 'apps-head' }, [
+      el('span', { className: 'apps-name', textContent: 'Installed on the button' }),
+      el('span', { className: `apps-pill ${say[0]}`, textContent: say[1] }),
+    ]);
+    const card = el('div', { className: 'apps-card' }, [head]);
+
+    const status = this._standalone || {};
+    if (status.buildable) {
+      const runs = [
+        status.menu ? `starts at “${status.menu}”` : 'no menu - the first app is the button',
+        `apps: ${(status.apps || []).join(', ') || 'none'}`,
+      ];
+      card.append(el('p', { className: 'apps-about', textContent: runs.join(' · ') }));
+      for (const [name, why] of status.skipped || []) {
+        card.append(el('div', { className: 'apps-copy unreachable' }, [
+          el('span', { className: 'apps-copy-name', textContent: name }),
+          el('span', { className: 'apps-copy-how', textContent: `stays host-only - needs ${why}` }),
+        ]));
+      }
+      for (const [where, trigger, why] of status.dropped || []) {
+        card.append(el('div', { className: 'apps-copy unreachable' }, [
+          el('span', { className: 'apps-copy-name', textContent: `${where} · ${trigger}` }),
+          el('span', { className: 'apps-copy-how', textContent: why }),
+        ]));
+      }
+    }
+
+    if (verdict.state === 'empty' || verdict.state === 'stale') {
+      const row = el('div', { className: 'apps-install' });
+      const button = el('button', {
+        type: 'button', className: 'mini',
+        textContent: 'Install on the button',
+        onclick: async () => {
+          button.disabled = true;
+          button.textContent = 'Installing…';
+          try {
+            await this.api.installApp();
+            this._showResult('ok', 'Installed on the button.');
+          } catch (err) {
+            // The service holds the radio and answers 503 when the button is
+            // not there, which is the common case and is not a bug worth an
+            // exception dialog - say it and leave the button enabled.
+            this._showResult('err', `Could not install: ${err.message}`);
+          }
+          this._forgetStandalone();
+          this._refreshApps();
+        },
+      });
+      row.append(button);
+      if (this.dirty) {
+        row.append(el('span', { className: 'apps-copy-how', textContent:
+          'Unsaved changes are not in this - Save first, or it installs what is on disk.' }));
+      }
+      card.append(row);
+    }
+
+    wrap.append(card);
   }
 
   _appsGroup(title, entries, reached, isInstalled) {
@@ -1572,7 +1721,7 @@ export class ConfigMenu {
         summary.textContent = describeAction(this.model.actions[name]);
         this._markDirty();
       },
-    }, ACTIONS.map((a) => el('option', { value: a.type, textContent: a.label })));
+    }, ACTIONS.filter((a) => POOL_ACTIONS.includes(a.type)).map((a) => el('option', { value: a.type, textContent: a.label })));
     kind.value = this.model.actions[name].action || 'log';
 
     const remove = el('button', {
@@ -1772,14 +1921,25 @@ export class ConfigMenu {
       return this._showResult('err', `Fix these first:\n• ${errors.map((e) => e.text).join('\n• ')}`);
     }
     try {
+      // Captured before the request, not read back from it: this *is* the
+      // authored shape (whatever was just serialised into the request body),
+      // in the one case `res.effective` cannot answer for - `PUT`'s response
+      // carries no `raw` the way `GET`'s does, so there is nothing else to
+      // restore a Morse look's message from once the server has expanded it.
+      const authoredLooks = this.model.looks;
       const res = await this.api.put(this.model);
       this.warningDetails = res.warning_details || [];
       // Re-seed from the normalized server result so the form shows exactly
       // what was stored (per-key fallbacks included).
       this.model = structuredClone(res.effective);
+      _preserveAuthoredLooks(this.model, authoredLooks);
       if (!Array.isArray(this.model.modes)) this.model.modes = [];
       if (!Array.isArray(this.model.reflexes)) this.model.reflexes = [];
       this.dirty = false;
+      // A save is the one edit that can change the answer to "is what is on
+      // the button still current" - the server compares against what is on
+      // disk, so nothing before this moment could have moved it (TODO 111).
+      this._forgetStandalone();
       this._render();
       // A save changes the active scene's mode count and can introduce a
       // setting that needs a restart, both of which the bar reports.

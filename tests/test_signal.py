@@ -27,7 +27,7 @@ from aibutton.store import EventStore
 def _modes(states, **over):
     return [
         {"name": "Home", "template": "actions", "activation": {"type": "always"},
-         "long_press": {"action": "enter_mode", "target": "Sign"}},
+         "tap_4": {"action": "enter_mode", "target": "Sign"}},
         {"name": "Sign", "template": "signal", "activation": {"type": "manual"},
          "states": states, **over},
     ]
@@ -143,7 +143,7 @@ async def test_it_opens_on_a_position_without_announcing_it(tmp_path):
     """Walking up to your own desk should not send anything."""
     task, device = await _start(tmp_path, _modes(THREE, log_as="status"))
     try:
-        await _press(device, TriggerType.LONG_PRESS)  # enter
+        await _press(device, TriggerType.TAP_4)  # enter
         assert device.led_effect.color == "#00ff00"
         store = EventStore(str(tmp_path / "events.db"))
         try:
@@ -159,7 +159,7 @@ async def test_it_opens_on_a_position_without_announcing_it(tmp_path):
 async def test_a_press_moves_on_and_stays_there(tmp_path):
     task, device = await _start(tmp_path, _modes(THREE))
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # enter -> Free
+        await _press(device, TriggerType.TAP_4)   # enter -> Free
         await _press(device, TriggerType.SHORT_PRESS)  # -> Heads-down
         assert device.led_effect.color == "#ff8800"
         await asyncio.sleep(0.3)  # and it is still there a moment later
@@ -172,7 +172,7 @@ async def test_a_press_moves_on_and_stays_there(tmp_path):
 async def test_the_positions_wrap_around(tmp_path):
     task, device = await _start(tmp_path, _modes(THREE))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         for _ in range(3):
             await _press(device, TriggerType.SHORT_PRESS)
         assert device.led_effect.color == "#00ff00"
@@ -183,7 +183,7 @@ async def test_the_positions_wrap_around(tmp_path):
 async def test_a_position_carries_its_own_style(tmp_path):
     task, device = await _start(tmp_path, _modes(THREE))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         await _press(device, TriggerType.SHORT_PRESS)
         await _press(device, TriggerType.SHORT_PRESS)  # On air, breathing
         assert device.led_effect.style == "breathe"
@@ -194,7 +194,7 @@ async def test_a_position_carries_its_own_style(tmp_path):
 async def test_each_change_can_be_logged_with_its_position(tmp_path):
     task, device = await _start(tmp_path, _modes(THREE, log_as="status"))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         await _press(device, TriggerType.SHORT_PRESS)
         await _press(device, TriggerType.SHORT_PRESS)
         store = EventStore(str(tmp_path / "events.db"))
@@ -213,7 +213,7 @@ async def test_long_press_releases_the_button(tmp_path):
     """The escape from an app that otherwise holds the foreground forever."""
     task, device = await _start(tmp_path, _modes(THREE))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         await _press(device, TriggerType.LONG_PRESS)
         assert device.led_state is LEDState.IDLE
     finally:
@@ -223,7 +223,7 @@ async def test_long_press_releases_the_button(tmp_path):
 async def test_a_double_tap_resends_without_moving(tmp_path):
     task, device = await _start(tmp_path, _modes(THREE, log_as="status"))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         await _press(device, TriggerType.SHORT_PRESS)  # -> Heads-down, logged
         await _press(device, TriggerType.DOUBLE_TAP)   # same place, sent again
         assert device.led_effect.color == "#ff8800"

@@ -231,7 +231,7 @@ def test_a_game_may_not_be_started_by_a_schedule():
 
 GAME = [
     {"name": "Home", "template": "actions", "activation": {"type": "always"},
-     "long_press": {"action": "enter_mode", "target": "Game"}},
+     "tap_4": {"action": "enter_mode", "target": "Game"}},
     {"name": "Game", "template": "hotcold", "activation": {"type": "manual"},
      "log_as": "wheel", "sweep_s": 4, "reveal_s": 0.05, "rounds": 0},
 ]
@@ -282,7 +282,7 @@ async def test_the_wheel_goes_out_as_one_rainbow_effect(tmp_path):
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
-        await _press(device, TriggerType.LONG_PRESS)  # enter the game
+        await _press(device, TriggerType.TAP_4)       # enter the game
         assert device.led_state is LEDState.LISTENING
         assert device.led_effect.style == "rainbow"
         assert device.led_effect.period_s == 4
@@ -294,7 +294,7 @@ async def test_a_guess_logs_how_close_it_was(tmp_path):
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # enter
+        await _press(device, TriggerType.TAP_4)        # enter
         await _press(device, TriggerType.SHORT_PRESS)  # stop the wheel
         rows = _rows(db, "wheel")
         assert len(rows) == 1
@@ -310,7 +310,7 @@ async def test_a_guess_shows_a_solid_colour_off_the_ramp(tmp_path):
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         device.press(TriggerType.SHORT_PRESS)
         await asyncio.sleep(0.02)  # inside the reveal window
         assert device.led_effect.style == "solid"
@@ -323,7 +323,7 @@ async def test_long_press_leaves_the_game(tmp_path):
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
-        await _press(device, TriggerType.LONG_PRESS)  # enter
+        await _press(device, TriggerType.TAP_4)       # enter
         await _press(device, TriggerType.LONG_PRESS)  # and out again
         assert device.led_state is LEDState.IDLE
     finally:
@@ -335,7 +335,7 @@ async def test_a_fixed_round_count_ends_the_session_without_a_press(tmp_path):
     modes = [GAME[0], dict(GAME[1], rounds=1)]
     task, device = await _start(tmp_path, _config(db, modes=modes))
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # enter
+        await _press(device, TriggerType.TAP_4)        # enter
         await _press(device, TriggerType.SHORT_PRESS)  # the only round
         await asyncio.sleep(0.1)  # the reveal, then it closes itself
         assert device.led_state is LEDState.IDLE

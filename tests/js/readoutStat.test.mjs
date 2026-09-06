@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { readoutStat } from '../../aibutton/web/static/schema.js';
+import { betterFor, readoutStat } from '../../aibutton/web/static/schema.js';
 
 /** What `/api/events/summary` answers with, in its wire shape. */
 const ROWS = [
@@ -65,6 +65,35 @@ test('a unit with no better is carried but unused', () => {
   const stat = readoutStat({ template: 'metronome', log_as: 'tempo' }, ROWS);
   assert.equal(stat.unit, 'BPM');
   assert.equal(stat.best, null);
+});
+
+test('the item can say which end is best, and the template is the fallback', () => {
+  // TODO 109. "Mile Run" and "Cake" are the same template and the same
+  // question with two different answers, which is the whole reason this is a
+  // field on the item rather than a word on the descriptor.
+  const run = readoutStat({ template: 'stopwatch', log_as: 'mile run', better: 'low' }, ROWS);
+  assert.equal(run.best, 477);
+  assert.equal(run.bestIsDuration, true);
+  const high = readoutStat({ template: 'stopwatch', log_as: 'mile run', better: 'high' }, ROWS);
+  assert.equal(high.best, 1125);
+  // Anything that is not one of the two words leaves the template's answer
+  // standing, which for a stopwatch is "nothing is best".
+  for (const better of ['', 'quick', null, undefined]) {
+    assert.equal(
+      readoutStat({ template: 'stopwatch', log_as: 'mile run', better }, ROWS).best, null,
+      String(better),
+    );
+  }
+});
+
+test('betterFor prefers the item, then the template, then nothing', () => {
+  const descriptor = { better: 'low' };
+  assert.equal(betterFor({ better: 'high' }, descriptor), 'high');
+  // A template that *has* an opinion keeps it: absent means "you decide", not
+  // "no best". This is the case that would need a third word to override.
+  assert.equal(betterFor({}, descriptor), 'low');
+  assert.equal(betterFor({ better: 'sideways' }, descriptor), 'low');
+  assert.equal(betterFor(undefined, undefined), null);
 });
 
 test('three different kinds of nothing all report nothing', () => {

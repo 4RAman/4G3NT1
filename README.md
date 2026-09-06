@@ -17,8 +17,9 @@ a control surface that fires a different command per gesture (the DAW
 remote), and a light show that walks a playlist of your looks. Nine of those are started by a gesture and there are only six
 gestures, so an **app launcher** reaches every one of them from a single
 binding. **Long press always means "up one level"** — out of an app,
-then out of the menu — so there is one escape gesture to learn and it works
-everywhere.
+then out of the menu, and at the menus themselves there is no level left, so
+it **puts the button to sleep**; a long press wakes it. One escape gesture to
+learn, and it works everywhere.
 
 The hardware is an **ESP32** — it detects gestures and shows feedback; this
 Python app is the brain on the PC, connected over BLE. It replaces an
@@ -41,7 +42,7 @@ Menus resolve first-match-wins against eight action primitives:
 | `osc` | fire an OSC message over UDP — Reaper, QLab, Resolume, TouchOSC |
 | `midi` | send a MIDI note or CC to a port — for a DAW that has no OSC |
 | `enter_mode` | launch an app — one of the eleven, or the launcher that lists them |
-| `standby` | put the menus to sleep; the same gesture wakes them |
+| `standby` | put the menus to sleep; the same gesture wakes them — what a long press does at the menus anyway, bindable elsewhere |
 
 And one thing no press starts: a **reaction** is a circumstance with an action
 attached. Name one, and anything that can make an HTTP request fires it —

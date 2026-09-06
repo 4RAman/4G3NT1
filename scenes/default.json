@@ -14,10 +14,6 @@
       "double_tap": {
         "action": "enter_mode",
         "target": "Launcher"
-      },
-      "long_press": {
-        "action": "enter_mode",
-        "target": "Pomodoro"
       }
     },
     {

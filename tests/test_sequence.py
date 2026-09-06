@@ -101,10 +101,10 @@ def test_a_sequence_with_no_usable_steps_is_dropped_entirely():
     config, warnings = parse_with_warnings({"modes": [{
         **FLOOR,
         "short_press": {"action": "sequence", "steps": [{"action": "nonsense"}]},
-        "long_press": {"action": "log", "event": "still here"},
+        "tap_4": {"action": "log", "event": "still here"},
     }]})
     assert "short_press" not in config.modes[0].behavior.actions
-    assert "long_press" in config.modes[0].behavior.actions
+    assert "tap_4" in config.modes[0].behavior.actions
     assert warnings
 
 
@@ -113,7 +113,7 @@ def test_a_sequence_needs_steps(steps):
     config, warnings = parse_with_warnings({"modes": [{
         **FLOOR,
         "short_press": {"action": "sequence", "steps": steps},
-        "long_press": {"action": "log", "event": "still here"},
+        "tap_4": {"action": "log", "event": "still here"},
     }]})
     assert "short_press" not in config.modes[0].behavior.actions
     assert warnings

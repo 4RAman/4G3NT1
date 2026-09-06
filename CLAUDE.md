@@ -23,6 +23,9 @@ its section for whatever you're about to touch, before you touch it.
 ./.venv/Scripts/python tools/ble_probe.py --cycle        # drive the firmware by hand
 ./.venv/Scripts/python -m aibutton.scenes list|check|activate         # scenes, service stopped
 ./.venv/Scripts/python tools/build_editor.py             # dist/button-editor.html (offline)
+./.venv/Scripts/python tools/install_app.py               # what compiles to a device package
+./.venv/Scripts/python tools/install_app.py --push       # install it over BLE, via the service
+./.venv/Scripts/python tools/install_app.py --write      # or save dist/app.pkg for mpremote
 ```
 
 **The leading `./` is not decoration.** This machine's shell is PowerShell,
@@ -177,6 +180,38 @@ the package - `config` imports *it*.
 *Never let device.py import config.py; palette encoding duck-types the effect
 object precisely to avoid that.*
 
+## The device runs apps now, and that changes what "firmware" means
+
+Phase C of [ARCHITECTURE.md](ARCHITECTURE.md) has started, one app at a time.
+[apppkg.py](firmware/apppkg.py) decodes a compiled package,
+[runtime.py](firmware/runtime.py) is the step function over it, and
+[standalone.py](firmware/standalone.py) gives that a clock and a light while no
+host is connected. The compiler is host-side ([appc.py](aibutton/appc.py)),
+because parsing config is staying on the machine with a keyboard.
+
+Four rules for anything that touches it:
+
+- **`firmware/` still imports nothing from `aibutton/`.** The package format
+  lives twice — encoder host-side, decoder device-side — exactly like the
+  protocol tables, and [test_apppkg.py](tests/test_apppkg.py) compiles with one
+  and decodes with the other so a moved byte fails a test rather than a board.
+- **The compiler unrolls; the runtime walks.** A light show's cue ring is N
+  states pointing at each other, not an index and a modulo; a menu's launching
+  gesture is a state whose only job is an `OP_ENTER`, because a transition
+  points at a *state* and entering an app is something a state **does**. Reach for that
+  before reaching for the expression evaluator the runtime does not have yet —
+  and when an app genuinely needs arithmetic (a metronome's tempo average),
+  that is the next increment, never a special case in `standalone.py`.
+- **A package must never be able to stop the button.** `decode` answers `None`
+  for anything short, corrupt or newer, prints why, and the firmware carries on
+  as the plain BLE peripheral it has always been. No `app.pkg` on flash means
+  none of it is reachable at all, which is the whole safety argument.
+- **A port of a pure host module is a mirrored table.** `sequence.py` is
+  `sequencer.py`'s rendering half, and the conformance sweep samples both past
+  a full cycle. It has already earned its keep: the two accumulated a cycle's
+  length in different orders, differed by one ulp, and diverged completely at
+  the loop seam.
+
 ## Apps, not features
 
 The product is *a button that runs swappable apps*. What ships as a "mode"
@@ -203,6 +238,17 @@ protocol v1 is supported rather than a workaround: the device renders it until
 the next state change, storing nothing (`run_metronome` and `run_countdown` are
 the two to copy). **Allocating a new `LEDState` needs an argument for why the
 app's look is a thing the whole system should have a name for.**
+
+**The light is the product, and you are expected to have opinions about it.**
+One RGB LED is the main output; sound is a garnish and the network is
+plumbing. The owner's standing instruction (2026-09-05) is that light gets
+treated as the star of the show - so when a change touches colour, looks,
+presets or anything that renders, **say what else it makes possible**. Name
+features, use-cases, categories or apps the ask did not mention but that the
+same work is one step away from, and say plainly when a light idea will not
+read on a single pixel. Unprompted suggestions are wanted here specifically;
+this is a licence to volunteer, not a licence to build - keep them to a short
+list at the end and let the owner pick.
 
 **Keep new logic out of the run loop.** The takeover loops are the one place
 the pure-core rule is *not* followed - they await the device, so they need
@@ -287,6 +333,12 @@ whatever you're touching before you touch it.
   floor — a stop list has no period, so the floor is defined over transitions
   — and a one-shot of three stops or fewer is exempt, which is the
   confirmation-flash rule. One call site each, still.
+  **A compiled app package is the third path and the last one**
+  ([appc.py](aibutton/appc.py)'s `_look_bytes`): it renders on a device with no
+  host in the room, so nothing downstream can clamp it and the floor has to be
+  applied where the bytes are made. Three paths to the light — a pushed look, a
+  pushed palette, a compiled package — one call site each. That is the shape of
+  the rule rather than an exception to it.
 - **Long press means "up one level", everywhere.** Alarm, stopwatch, counter,
   pomodoro, metronome, countdown, both games, the signal light, the control
   surface and the launcher all leave on a long press;
@@ -303,6 +355,15 @@ whatever you're touching before you touch it.
   gesture always travels exactly one level rather than one-or-two depending on
   how you arrived. **A new takeover binds long press to leaving, or has a very
   good reason.**
+  **At the ambient layer there is no level above, and the honest answer to
+  "up" there is off** (TODO 104): `handle` answers a long press by toggling
+  standby before it resolves anything, and `_parse_actions_body` drops a
+  `long_press` binding exactly as `_parse_control_body` does — so the rule now
+  has *no* exceptions rather than one at each end. Sleeping is host-side and
+  ambient-only: schedules and reflexes keep running, which is what leaves
+  room for 29's device deep sleep to make the same gesture also cut power
+  without changing what it means. **A new ambient surface gets five gestures,
+  not six.**
 - **A gesture happened earlier than it arrived, and only the device knows how
   much earlier.** A single press is held back until the multi-tap window
   closes, *unconditionally* — `max_taps_for` floors at `DEFAULT_MAX_TAPS = 2`,
@@ -361,12 +422,18 @@ is the one surface that will exist in someone else's pocket.
   device readable by an older host.
 - **Batch the breaks.** Protocol changes cost a reflash and a chance to drift
   the mirrored tables. Land them together, then freeze.
-- **Protocol v1 is frozen.** `DEVICE_INFO`, ephemeral effects and
-  parameterised gestures all shipped; `OTA_CONTROL` and `GESTURE_HOLD` are
-  claimed and unimplemented. Everything below v1 needs is now reachable
-  without a reflash, so the bar for the *next* wire change is a capability the
-  device physically cannot express today — not a feature that would merely be
-  tidier on the wire.
+- **Protocol v1 is frozen, and `APP_PACKAGE` is the one thing that has cleared
+  the bar since.** `DEVICE_INFO`, ephemeral effects and parameterised gestures
+  all shipped; `OTA_CONTROL` and `GESTURE_HOLD` are claimed and unimplemented.
+  The bar for a wire change is *a capability the device physically cannot
+  express today* — and installing an app over the air was exactly that, since
+  there was no way to send one at all. It followed every rule rather than
+  bending them: a **new** characteristic (nothing repurposed), gated on a
+  **new capability bit** (`CAP_APP`, so a host asks instead of assuming), with
+  its installed-package fingerprint **appended** to `DEVICE_INFO` (the decoder
+  already ignored trailing bytes it did not know, which is what made that
+  free). Version stayed 1: nothing that existed changed meaning.
+  **The bar is unmoved for the next one.**
 - **The host must read everything a device might send; the device sends the
   oldest form that will do.** That asymmetry is deliberate — the host is the
   half that is easy to update. So the classic three gestures still go out as

@@ -22,6 +22,7 @@ import { el, clear } from './dom.js';
 import {
   countOf, fmtDay, fmtDelta, fmtDuration, fmtValue, fmtWhen, plural,
 } from './format.js';
+import { betterFor } from './schema.js';
 
 // How many rows to ask the service for. Generous, because the window below is
 // counted *after* the exact-name filter and a busy log can hold a lot of other
@@ -82,7 +83,7 @@ function summarise(numbers, { noun, unit, better, write }) {
 /** One row: when it happened, a bar against the biggest in the window, the
  *  number, and how it compares with the one before it. The bar is what makes
  *  this a comparison rather than a list, which is what item 51 asked for. */
-function measuredRow({ when, value, peak, best, delta, write, unit, better }) {
+function measuredRow({ when, value, peak, best, delta, write, writeDelta, unit, better }) {
   const bar = el('span', { className: 'ro-bar' }, [
     el('span', {
       className: `ro-bar-fill${best ? ' best' : ''}`,
@@ -94,6 +95,12 @@ function measuredRow({ when, value, peak, best, delta, write, unit, better }) {
   // Good or bad only where the app knows which is which. Without a `better`
   // the delta is still worth showing - it says the runs differ and by how
   // much - it just is not coloured as an achievement.
+  //
+  // **`delta` is the number and stays one until the line below writes it.**
+  // It used to arrive already formatted, so `delta < 0` compared "-0:02" with
+  // 0, which is NaN and therefore false every time: a reaction timer painted
+  // every attempt as worse and Hot/Cold painted every guess as better, both
+  // regardless of which way the number had actually moved.
   const mood = delta == null || !better ? ''
     : (better === 'low') === (delta < 0) ? ' good' : ' bad';
   return el('div', { className: 'ro-row' }, [
@@ -105,7 +112,7 @@ function measuredRow({ when, value, peak, best, delta, write, unit, better }) {
     }),
     el('span', {
       className: `ro-delta${mood}`,
-      textContent: delta == null ? '' : delta,
+      textContent: delta == null ? '' : writeDelta(delta),
     }),
   ]);
 }
@@ -133,8 +140,9 @@ function renderMeasured(rows, spec) {
       value,
       peak,
       best: spec.better != null && value === target,
-      delta: previous == null ? null : writeDelta(value - previous),
+      delta: previous == null ? null : value - previous,
       write,
+      writeDelta,
       unit: spec.unit,
       better: spec.better,
     }));
@@ -150,7 +158,13 @@ function renderMeasured(rows, spec) {
   ];
 }
 
-/** tally: the rows are occurrences, so the number is how many a day held. */
+/** tally: the rows are occurrences, so the number is how many a day held.
+ *
+ *  With no `better` (or `high`) the busiest day is the interesting one - more
+ *  of most things is the direction worth seeing. `low` flips that to the
+ *  quietest day *among the ones that logged anything at all*: a tally has no
+ *  row for a day nothing happened, so a "quietest" day can only ever be
+ *  compared against days that did log something, never a true zero. */
 function renderTally(rows, spec) {
   if (!rows.length) return [emptyNote(spec)];
   // Insertion order is preserved by Map, and the rows arrive newest first, so
@@ -163,6 +177,9 @@ function renderTally(rows, spec) {
   const days = [...byDay.entries()].slice(0, WINDOW_DAYS);
   const counts = days.map(([, n]) => n);
   const peak = Math.max(...counts);
+  // Mirrors renderMeasured's target: 'low' takes the minimum, anything else
+  // (including the default, no answer at all) takes the peak.
+  const target = spec.better === 'low' ? Math.min(...counts) : peak;
   const total = counts.reduce((a, b) => a + b, 0);
   const today = fmtDay(new Date().toISOString());
 
@@ -172,7 +189,7 @@ function renderTally(rows, spec) {
       el('span', { className: 'ro-when', textContent: day === today ? 'today' : day }),
       el('span', { className: 'ro-bar' }, [
         el('span', {
-          className: `ro-bar-fill${count === peak ? ' best' : ''}`,
+          className: `ro-bar-fill${count === target ? ' best' : ''}`,
           style: `width: ${Math.max(2, (count / peak) * 100)}%`,
         }),
       ]),
@@ -184,7 +201,7 @@ function renderTally(rows, spec) {
   const many = (n) => countOf(n, spec.noun);
   const summary = [
     `${many(total)} over ${countOf(days.length, 'day')}`,
-    `busiest ${many(peak)}`,
+    spec.better === 'low' ? `quietest ${many(target)}` : `busiest ${many(target)}`,
   ];
   return [
     el('p', { className: 'ro-summary', textContent: summary.join(' · ') }),
@@ -284,9 +301,14 @@ export function createReadout(mode, descriptor, api) {
     try {
       const rows = await fetchRows(api, { kind: readout.kind, name });
       clear(body);
-      const parts = readout.measure === 'tally' ? renderTally(rows, spec)
-        : readout.measure === 'outcome' ? renderOutcome(rows, spec)
-          : renderMeasured(rows, spec);
+      // Which end is best is read *here* rather than captured above, because
+      // the field that sets it (TODO 109) is on this same page and edits
+      // `mode` in place. Refresh is what applies it - the same answer the
+      // head already gives for renaming the event underneath these rows.
+      const now = { ...spec, better: betterFor(mode, readout) };
+      const parts = readout.measure === 'tally' ? renderTally(rows, now)
+        : readout.measure === 'outcome' ? renderOutcome(rows, now)
+          : renderMeasured(rows, now);
       for (const part of parts) if (part) body.append(part);
     } catch (err) {
       clear(body);

@@ -194,7 +194,7 @@ def _modes(**gestures) -> list[dict]:
     surface.update(gestures)
     return [
         {"name": "Home", "template": "actions", "activation": {"type": "always"},
-         "long_press": {"action": "enter_mode", "target": "DAW"}},
+         "tap_4": {"action": "enter_mode", "target": "DAW"}},
         surface,
     ]
 
@@ -243,7 +243,7 @@ async def test_it_stays_open_across_several_commands(tmp_path):
     to send several things, so it does not drop back after the first."""
     task, device = await _start(tmp_path, _modes(**THREE))
     try:
-        await _press(device, TriggerType.LONG_PRESS)    # enter
+        await _press(device, TriggerType.TAP_4)    # enter
         await _press(device, TriggerType.SHORT_PRESS)   # play
         await _press(device, TriggerType.DOUBLE_TAP)    # record
         await _press(device, TriggerType.TRIPLE_TAP)    # stop
@@ -265,7 +265,7 @@ async def test_commands_pressed_faster_than_the_flash_are_not_lost(tmp_path):
         short_press={"action": "log", "event": "play"},
     ))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         for _ in range(10):
             device.press(TriggerType.SHORT_PRESS)
         await asyncio.sleep(main._CONTROL_CONFIRM_S * 12)
@@ -277,7 +277,7 @@ async def test_commands_pressed_faster_than_the_flash_are_not_lost(tmp_path):
 async def test_each_gesture_fires_its_own_command(tmp_path):
     task, device = await _start(tmp_path, _modes(**THREE))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         await _press(device, TriggerType.DOUBLE_TAP)
         assert _logged(tmp_path, "record")
         assert not _logged(tmp_path, "play")   # and nothing else came along
@@ -289,10 +289,11 @@ async def test_a_long_press_leaves(tmp_path):
     """The invariant, driven rather than asserted about the parser."""
     task, device = await _start(tmp_path, _modes(**THREE))
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # enter
+        await _press(device, TriggerType.TAP_4)   # enter
         await _press(device, TriggerType.LONG_PRESS)   # leave
         assert device.led_state is LEDState.IDLE
-        # ...and the ambient layer has the button back, so long press re-enters.
+        # ...and the ambient layer has the button back, so the surface's own
+        # short press is answered by nothing rather than by the app.
         await _press(device, TriggerType.SHORT_PRESS)
         assert not _logged(tmp_path, "play")
     finally:
@@ -306,7 +307,7 @@ async def test_an_unbound_gesture_keeps_the_surface_open(tmp_path):
         short_press={"action": "log", "event": "play"},
     ))
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # enter
+        await _press(device, TriggerType.TAP_4)   # enter
         await _press(device, TriggerType.TRIPLE_TAP)   # nothing bound here
         await _press(device, TriggerType.SHORT_PRESS)  # still open
         assert _logged(tmp_path, "play")
@@ -322,7 +323,7 @@ async def test_an_unbound_gesture_keeps_the_surface_open(tmp_path):
 def _tree(return_after=True) -> list[dict]:
     return [
         {"name": "Home", "template": "actions", "activation": {"type": "always"},
-         "long_press": {"action": "enter_mode", "target": "Menu"}},
+         "tap_4": {"action": "enter_mode", "target": "Menu"}},
         {"name": "Menu", "template": "control", "activation": {"type": "manual"},
          "short_press": {"action": "enter_mode", "target": "Mix"},
          "double_tap": {"action": "log", "event": "menu_thing"},
@@ -337,7 +338,7 @@ async def test_a_gesture_can_open_another_control_surface(tmp_path):
     mode is - so the loop has to intercept it the way handle() does."""
     task, device = await _start(tmp_path, _tree())
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # Home -> Menu
+        await _press(device, TriggerType.TAP_4)   # Home -> Menu
         await _press(device, TriggerType.SHORT_PRESS)  # Menu -> Mix
         await asyncio.sleep(main._CONTROL_CONFIRM_S * 2)
         await _press(device, TriggerType.SHORT_PRESS)  # fires inside Mix
@@ -353,7 +354,7 @@ async def test_leaving_a_branch_returns_to_the_page_that_opened_it(tmp_path):
     level" or "up two" depending how deep you had gone."""
     task, device = await _start(tmp_path, _tree(return_after=True))
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # Home -> Menu
+        await _press(device, TriggerType.TAP_4)   # Home -> Menu
         await _press(device, TriggerType.SHORT_PRESS)  # Menu -> Mix
         await asyncio.sleep(main._CONTROL_CONFIRM_S * 2)
         await _press(device, TriggerType.LONG_PRESS)   # leave Mix
@@ -369,7 +370,7 @@ async def test_leaving_a_branch_returns_to_the_page_that_opened_it(tmp_path):
 async def test_return_after_off_drops_straight_out(tmp_path):
     task, device = await _start(tmp_path, _tree(return_after=False))
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # Home -> Menu
+        await _press(device, TriggerType.TAP_4)   # Home -> Menu
         await _press(device, TriggerType.SHORT_PRESS)  # Menu -> Mix
         await asyncio.sleep(main._CONTROL_CONFIRM_S * 2)
         await _press(device, TriggerType.LONG_PRESS)   # leave Mix -> home
@@ -388,13 +389,13 @@ async def test_a_branch_to_a_mode_that_is_not_there_keeps_the_page_open(tmp_path
     dependency order), so a typo must not strand you on a dead page."""
     task, device = await _start(tmp_path, [
         {"name": "Home", "template": "actions", "activation": {"type": "always"},
-         "long_press": {"action": "enter_mode", "target": "Menu"}},
+         "tap_4": {"action": "enter_mode", "target": "Menu"}},
         {"name": "Menu", "template": "control", "activation": {"type": "manual"},
          "short_press": {"action": "enter_mode", "target": "Nope"},
          "double_tap": {"action": "log", "event": "menu_thing"}},
     ])
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # Home -> Menu
+        await _press(device, TriggerType.TAP_4)   # Home -> Menu
         await _press(device, TriggerType.SHORT_PRESS)  # branch to nothing
         await asyncio.sleep(main._CONTROL_CONFIRM_S * 2)
         await _press(device, TriggerType.DOUBLE_TAP)   # still on Menu
@@ -419,7 +420,7 @@ async def test_only_commands_that_were_sent_are_counted(tmp_path):
         short_press={"action": "log", "event": "play"},
     ))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         await _press(device, TriggerType.SHORT_PRESS)
         await _press(device, TriggerType.TRIPLE_TAP)  # unbound
         assert len(_logged(tmp_path, "daw")) == 1
@@ -580,7 +581,7 @@ async def test_the_page_wears_the_position_the_world_reports(tmp_path):
     """The whole item: nobody pressed anything and the light changed."""
     task, device, inbound = await _start_full(tmp_path, _with_positions())
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # enter
+        await _press(device, TriggerType.TAP_4)   # enter
         assert device.led_effect.color == "#000080"    # opens on Stopped
         await _report(inbound, "rec_on", {"velocity": 127})
         assert device.led_state is LEDState.LISTENING
@@ -595,7 +596,7 @@ async def test_the_page_wears_the_position_the_world_reports(tmp_path):
 async def test_a_report_that_fails_its_test_does_not_move_the_page(tmp_path):
     task, device, inbound = await _start_full(tmp_path, _with_positions())
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         await _report(inbound, "rec_on", {"velocity": 64})
         assert device.led_effect.color == "#000080"
     finally:
@@ -608,7 +609,7 @@ async def test_the_position_survives_a_commands_confirmation_flash(tmp_path):
     quietly reset a transport light to "stopped"."""
     task, device, inbound = await _start_full(tmp_path, _with_positions())
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         await _report(inbound, "rec_on", {"velocity": 127})
         await _press(device, TriggerType.SHORT_PRESS)      # fires, flashes
         await asyncio.sleep(main._CONTROL_CONFIRM_S * 2)
@@ -622,7 +623,7 @@ async def test_a_reported_position_is_not_counted_as_a_command_sent(tmp_path):
     not something this button sent."""
     task, device, inbound = await _start_full(tmp_path, _with_positions())
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         await _report(inbound, "rec_on", {"velocity": 127})
         assert not _logged(tmp_path, "daw")
         await _press(device, TriggerType.SHORT_PRESS)
@@ -640,7 +641,7 @@ async def test_a_position_that_does_not_exist_leaves_the_page_where_it_was(tmp_p
     )
     task, device, inbound = await _start_full(tmp_path, raw)
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         await _report(inbound, "nowhere", None)
         assert device.led_effect.color == "#000080"     # still Stopped
         await _press(device, TriggerType.LONG_PRESS)    # and it still leaves
@@ -658,7 +659,7 @@ async def test_a_surface_nothing_can_report_says_it_is_guessing(tmp_path, caplog
     task, device, _inbound = await _start_full(tmp_path, raw)
     try:
         with caplog.at_level("WARNING"):
-            await _press(device, TriggerType.LONG_PRESS)
+            await _press(device, TriggerType.TAP_4)
         assert any("without being told" in r.getMessage() for r in caplog.records)
     finally:
         await _stop(task)
@@ -670,7 +671,7 @@ async def test_a_surface_that_can_be_told_does_not_claim_to_be_guessing(
     task, device, _inbound = await _start_full(tmp_path, _with_positions())
     try:
         with caplog.at_level("WARNING"):
-            await _press(device, TriggerType.LONG_PRESS)
+            await _press(device, TriggerType.TAP_4)
         assert not any("without being told" in r.getMessage() for r in caplog.records)
     finally:
         await _stop(task)
@@ -683,7 +684,7 @@ async def test_a_surface_with_no_positions_is_the_remote_it_always_was(tmp_path)
         short_press={"action": "log", "event": "play"},
     ))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         assert device.led_state is LEDState.LISTENING
         await _press(device, TriggerType.SHORT_PRESS)
         await asyncio.sleep(main._CONTROL_CONFIRM_S * 2)

@@ -130,6 +130,28 @@ function sequenceFloor(floor) {
   return limit / 2;
 }
 
+// --- Morse (TODO 83) ------------------------------------------------------
+// A look shaped `{morse, dpm, color|ramp, repeat}` - config.py's
+// `_parse_morse_look` compiles it into the stop list that actually plays.
+// Nothing here re-implements that compiler (see ledPreview.js's colorAt on
+// why); this widget only edits the authored fields.
+
+// 60 / dpm seconds per unit - mirrors morse.UNIT_S_PER_DPM. Dots per minute
+// rather than words per minute: a WPM figure needs the PARIS-standard "a
+// word is 50 units" convention before it means a duration, where dpm is
+// just this division, directly. Informational only, exactly like
+// sequenceFloor above: the real cap (and the warning if a save asks for
+// more) is applied host-side in _parse_morse_look, and this hint would only
+// ever be stale in the harmless direction (asking to lower the flash floor
+// further than actually necessary).
+const MORSE_UNIT_S_PER_DPM = 60;
+
+function maxMorseDpm(floor) {
+  const configured = Number(floor);
+  const limit = Number.isFinite(configured) && configured > 0 ? configured : FALLBACK_FLOOR;
+  return (2 * MORSE_UNIT_S_PER_DPM) / limit;
+}
+
 /**
  * A colour control bound to one effect object, which it mutates in place.
  *
@@ -168,6 +190,13 @@ export function createLookEditor(o) {
 
   const effect = () => o.get();
   const isSequence = () => Array.isArray(effect().stops);
+  const isMorse = () => typeof effect().morse === 'string';
+  // The three shapes a look-pool entry may take (config.py's `_parse_look`
+  // dispatches on the same key presence, in the same order): a Morse message,
+  // a stop list, or a plain effect - whichever no earlier check claimed.
+  const shapeOf = (obj) => (
+    typeof obj.morse === 'string' ? 'morse' : Array.isArray(obj.stops) ? 'sequence' : 'single'
+  );
 
   const refresh = () => {
     // What the *button* will do, which is not always what this control is
@@ -176,9 +205,10 @@ export function createLookEditor(o) {
     // was the whole "named looks don't work" report - the runtime had it
     // right and this line was describing the other layer.
     //
-    // Both shapes: ledPreview's colorAt and schema.js's describeEffect know
-    // stop lists - they had to, because a pool look that is a sequence also
-    // shows up in modeEditor.js's compact swatch, well outside this control.
+    // All three shapes: ledPreview's colorAt and schema.js's describeEffect
+    // know stop lists and Morse looks - they had to, because a pool look in
+    // either shape also shows up in modeEditor.js's compact swatch, well
+    // outside this control.
     const name = namedName();
     const look = shownLook();
     applySwatch(swatch, look);
@@ -612,10 +642,136 @@ export function createLookEditor(o) {
     ]));
   };
 
+  const renderMorseFields = () => {
+    const msg = effect();
+    if (typeof msg.dpm !== 'number') msg.dpm = 400;
+    if (typeof msg.repeat !== 'boolean') msg.repeat = true;
+
+    // Set once, read by every swatch this look reaches (refresh() above,
+    // and modeEditor.js's compact one) - none of them animate the real
+    // rhythm, on purpose (see ledPreview.js's colorAt). Said here, next to
+    // the fields, because a solid dot that never flashes reads as broken if
+    // nothing tells you it was never meant to.
+    fields.append(el('p', {
+      className: 'menu-hint', 'data-help': true,
+      textContent: 'The swatch above shows one representative colour, not '
+        + 'the rhythm - there is no second Morse player in the browser to '
+        + 'keep in step with the real one. "Show on the button" is what '
+        + 'actually plays the message, on whatever is connected.',
+    }));
+
+    const messageField = createField(
+      { key: 'morse', label: 'Message', kind: 'text', required: true,
+        placeholder: 'SOS',
+        hint: 'Letters and digits only - anything else (punctuation, spaces '
+          + 'aside) is dropped when this plays, with no gap left in its '
+          + 'place. A space is a pause between words.' },
+      msg,
+      () => { refresh(); o.onChange?.(); },
+    );
+    validators.push(messageField.validate);
+    fields.append(messageField.el);
+
+    const dpmField = createField(
+      { key: 'dpm', label: 'Speed (dots per minute)', kind: 'number',
+        min: 1, max: 3000, step: 10,
+        hint: 'How many dot-lengths fit in a minute - concrete rather than '
+          + '"words per minute", which needs a wire-code convention before '
+          + 'it means a duration at all. Capped against the flash safety '
+          + `limit at roughly ${maxMorseDpm(o.floor).toFixed(0)}/min - `
+          + 'asking for more is honoured up to that cap and said so on '
+          + 'Save. Lower the flash floor on the Device tab to send faster.' },
+      msg,
+      () => { refresh(); o.onChange?.(); },
+    );
+    validators.push(dpmField.validate);
+    fields.append(dpmField.el);
+
+    const repeatField = createField(
+      { key: 'repeat', label: 'Repeat', kind: 'checkbox',
+        hint: 'On sends the message as a beacon, over and over, with a '
+          + 'longer pause between each so the loop reads as a loop. Off '
+          + 'sends it once, then the light falls back to its configured '
+          + 'colour.' },
+      msg,
+      () => { refresh(); o.onChange?.(); },
+    );
+    validators.push(repeatField.validate);
+    fields.append(repeatField.el);
+
+    // Solid colour, or a ramp sampled across the whole message (TODO 83's
+    // colour-changes-during-the-message follow-up): each dot and dash is
+    // painted by how far into the message it falls, and the gaps stay dark
+    // either way. Two sub-shapes of one field, the same relationship
+    // `switchShape` below has with the whole look, just one level shallower -
+    // so it gets its own toggle rather than reusing the outer tabs, which
+    // answer a different question ("what kind of look is this" vs "how is
+    // this look's colour chosen").
+    const wantsRamp = Array.isArray(msg.ramp);
+    const switchColorMode = (toRamp) => {
+      if (toRamp === wantsRamp) return;
+      if (toRamp) {
+        const carried = typeof msg.color === 'string' ? msg.color : '#ff0000';
+        delete msg.color;
+        msg.ramp = [carried, '#0000ff'];
+      } else {
+        const first = msg.ramp?.[0];
+        const carried = (typeof first === 'string' ? first : first?.color) || '#ff0000';
+        delete msg.ramp;
+        msg.color = carried;
+      }
+      renderFields();
+      refresh();
+      o.onChange?.();
+    };
+    const colorModeTabs = el('div', { className: 'look-mode-toggle' }, [
+      el('button', {
+        type: 'button', className: `mini${wantsRamp ? '' : ' active'}`,
+        textContent: 'Solid colour', onclick: () => switchColorMode(false),
+      }),
+      el('button', {
+        type: 'button', className: `mini${wantsRamp ? ' active' : ''}`,
+        textContent: 'Colour ramp', onclick: () => switchColorMode(true),
+      }),
+    ]);
+    fields.append(colorModeTabs);
+
+    if (wantsRamp) {
+      const rampField = createField(
+        { key: 'ramp', label: 'Colour across the message', kind: 'ramp',
+          hint: 'Left = the start of the message, right = the end. Each dot '
+            + 'and dash is coloured by how far into the message it falls; '
+            + 'the gaps between them stay dark.' },
+        msg,
+        () => { refresh(); o.onChange?.(); },
+      );
+      validators.push(rampField.validate);
+      fields.append(rampField.el);
+    } else {
+      const colorField = createField(
+        { key: 'color', label: 'Colour', kind: 'color' },
+        msg,
+        () => { refresh(); o.onChange?.(); },
+      );
+      validators.push(colorField.validate);
+      fields.append(colorField.el);
+    }
+
+    // Caught here for the same reason the sequence editor catches an empty
+    // stop list before Save: `_parse_morse_look`'s own fallback is silent
+    // recovery for a *saved* config, and this should refuse before it gets
+    // there.
+    validators.push(() => (
+      typeof msg.morse === 'string' && msg.morse.trim()
+        ? null : 'A message needs at least one character'
+    ));
+  };
+
   const renderFields = () => {
     clear(fields);
     validators.length = 0;
     if (activeTab === 'preset') fields.append(presetBody());
+    else if (isMorse()) renderMorseFields();
     else if (isSequence()) renderSequenceFields();
     else renderEffectFields();
     syncTabs();
@@ -645,6 +801,10 @@ export function createLookEditor(o) {
     // (it is the default), so assigning one over a beats-driven preset would
     // leave the old `drive` behind and silently mis-drive the new look - which
     // is exactly what happened before this line listed it.
+    //
+    // A preset is never a Morse message, so those keys go first unconditionally
+    // - the third shape neither branch below was written to expect.
+    for (const key of ['morse', 'dpm', 'ramp']) delete target[key];
     if (presetIsSequence(preset)) {
       for (const key of ['style', 'color', 'color2', 'period_s', 'drive']) delete target[key];
     } else {
@@ -756,9 +916,11 @@ export function createLookEditor(o) {
   }
 
   // --- switching shape --------------------------------------------------
-  // Only offered where a sequence is a legal look at all (see the
-  // `allowSequence` doc above). The object is mutated in place, key by key,
-  // like `applyPreset` above - callers hold a reference to it.
+  // Sequence and Morse are only offered where a schedule is a legal look at
+  // all (see the `allowSequence` doc above) - both are walked by the host
+  // rather than rendered by the device, which a palette entry cannot be.
+  // The object is mutated in place, key by key, like `applyPreset` above -
+  // callers hold a reference to it.
   //
   // A flip used to `delete` every key with nothing kept, so one accidental
   // click on "Single colour" discarded a stop list with no way back (item
@@ -769,22 +931,38 @@ export function createLookEditor(o) {
   // parked yet) falls back to that reconstruction.
   let parkedEffect = null;
   let parkedSequence = null;
-  const switchShape = (wantSequence) => {
+  let parkedMorse = null;
+
+  /** The colour to carry into whichever shape comes next - read before the
+   *  object is cleared, since it lives under a different key in each shape
+   *  (`color` on a plain effect, `stops[0].color` on a sequence, `color` or
+   *  the first `ramp` stop on a Morse look). */
+  const carryColorFrom = (obj, shape) => {
+    if (shape === 'sequence') return obj.stops?.[0]?.color;
+    if (shape === 'morse') {
+      if (typeof obj.color === 'string') return obj.color;
+      const first = obj.ramp?.[0];
+      return typeof first === 'string' ? first : first?.color;
+    }
+    return typeof obj.color === 'string' ? obj.color : undefined;
+  };
+
+  const switchShape = (wantShape) => {
     const cur = effect();
-    if (Array.isArray(cur.stops) === wantSequence) return;
-    // Read the colour to carry across *before* clearing the object below -
-    // both branches want it, and it lives under a different key in each
-    // shape (`color` on a plain effect, `stops[0].color` on a sequence).
-    const carryColor = wantSequence
-      ? (typeof cur.color === 'string' && cur.color) || '#ffffff'
-      : cur.stops?.[0]?.color || '#ffffff';
-    if (wantSequence) {
-      parkedEffect = { ...cur };
-    } else {
+    const curShape = shapeOf(cur);
+    if (curShape === wantShape) return;
+    const carryColor = carryColorFrom(cur, curShape) || '#ffffff';
+
+    if (curShape === 'sequence') {
       parkedSequence = { ...cur, stops: cur.stops.map((s) => ({ ...s })) };
+    } else if (curShape === 'morse') {
+      parkedMorse = { ...cur };
+    } else {
+      parkedEffect = { ...cur };
     }
     for (const key of Object.keys(cur)) delete cur[key];
-    if (wantSequence) {
+
+    if (wantShape === 'sequence') {
       if (parkedSequence) {
         Object.assign(cur, parkedSequence);
       } else {
@@ -796,6 +974,12 @@ export function createLookEditor(o) {
           curve: 'linear', style: 'solid', period_s: 1,
         }];
         cur.repeat = true;
+      }
+    } else if (wantShape === 'morse') {
+      if (parkedMorse) {
+        Object.assign(cur, parkedMorse);
+      } else {
+        Object.assign(cur, { morse: 'SOS', dpm: 400, color: carryColor, repeat: true });
       }
     } else if (parkedEffect) {
       Object.assign(cur, parkedEffect);
@@ -809,35 +993,42 @@ export function createLookEditor(o) {
   };
 
   // --- the tab bar ------------------------------------------------------
-  // Single Color / Sequence / Preset, replacing what used to be a two-button
-  // shape toggle plus a separate "Start from a preset" drawer - one control
-  // answering "how is this look specified", not two stacked on top of each
-  // other. Sequence is offered only where `allowSequence` allows the shape at
-  // all (see the doc above); Preset is always offered, as a picker rather
-  // than a persisted shape - applying one lands on whichever of the other two
-  // tabs shows the result (see `applyPreset`).
-  let activeTab = o.openPresets ? 'preset' : (isSequence() ? 'sequence' : 'single');
+  // Single Color / Sequence / Morse / Preset, replacing what used to be a
+  // two-button shape toggle plus a separate "Start from a preset" drawer -
+  // one control answering "how is this look specified", not two stacked on
+  // top of each other. Sequence and Morse are offered only where
+  // `allowSequence` allows a schedule at all (see the doc above); Preset is
+  // always offered, as a picker rather than a persisted shape - applying one
+  // lands on whichever of the other tabs shows the result (see `applyPreset`).
+  let activeTab = o.openPresets ? 'preset' : shapeOf(effect());
 
   const singleTab = el('button', {
     type: 'button', className: 'mini', textContent: 'Single Color',
     title: 'One colour or animation the device renders on its own.',
-    onclick: () => { switchShape(false); activeTab = 'single'; renderFields(); },
+    onclick: () => { switchShape('single'); activeTab = 'single'; renderFields(); },
   });
   const seqTab = o.allowSequence ? el('button', {
     type: 'button', className: 'mini', textContent: 'Sequence',
     title: 'A list of colours the host walks through in order.',
-    onclick: () => { switchShape(true); activeTab = 'sequence'; renderFields(); },
+    onclick: () => { switchShape('sequence'); activeTab = 'sequence'; renderFields(); },
+  }) : null;
+  const morseTab = o.allowSequence ? el('button', {
+    type: 'button', className: 'mini', textContent: 'Morse',
+    title: 'Spell out a message in Morse code, played as a stop list.',
+    onclick: () => { switchShape('morse'); activeTab = 'morse'; renderFields(); },
   }) : null;
   const presetTab = el('button', {
     type: 'button', className: 'mini', textContent: 'Preset',
     title: 'Start from a built-in look.',
     onclick: () => { activeTab = 'preset'; renderFields(); },
   });
-  const tabsEl = el('div', { className: 'look-mode-toggle' }, [singleTab, seqTab, presetTab].filter(Boolean));
+  const tabsEl = el('div', { className: 'look-mode-toggle' },
+    [singleTab, seqTab, morseTab, presetTab].filter(Boolean));
 
   const syncTabs = () => {
     singleTab.classList.toggle('active', activeTab === 'single');
     seqTab?.classList.toggle('active', activeTab === 'sequence');
+    morseTab?.classList.toggle('active', activeTab === 'morse');
     presetTab.classList.toggle('active', activeTab === 'preset');
   };
 

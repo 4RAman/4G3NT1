@@ -196,7 +196,7 @@ def test_a_reaction_mode_round_trips_through_the_editor():
 
 GAME = [
     {"name": "Home", "template": "actions", "activation": {"type": "always"},
-     "long_press": {"action": "enter_mode", "target": "Sharp"}},
+     "tap_4": {"action": "enter_mode", "target": "Sharp"}},
     {"name": "Sharp", "template": "reaction", "activation": {"type": "manual"},
      "log_as": "sharp", "min_delay_s": 0.2, "max_delay_s": 0.2,
      "reveal_s": 0.05, "rounds": 0},
@@ -233,7 +233,7 @@ def _values(db, name):
 async def test_it_goes_dark_then_lights_up_on_its_own(tmp_path):
     task, device = await _start(tmp_path, GAME)
     try:
-        device.press(TriggerType.LONG_PRESS)  # enter
+        device.press(TriggerType.TAP_4)  # enter
         await asyncio.sleep(0.1)  # inside the 0.2s armed wait
         assert device.led_effect.color == main._REACTION_DARK
         await asyncio.sleep(0.25)  # past it
@@ -246,7 +246,7 @@ async def test_it_goes_dark_then_lights_up_on_its_own(tmp_path):
 async def test_an_attempt_logs_its_milliseconds(tmp_path):
     task, device = await _start(tmp_path, GAME)
     try:
-        device.press(TriggerType.LONG_PRESS)
+        device.press(TriggerType.TAP_4)
         await asyncio.sleep(0.35)  # let it light up
         device.press(TriggerType.SHORT_PRESS)
         await asyncio.sleep(0.15)
@@ -260,7 +260,7 @@ async def test_an_attempt_logs_its_milliseconds(tmp_path):
 async def test_a_false_start_logs_nothing(tmp_path):
     task, device = await _start(tmp_path, GAME)
     try:
-        device.press(TriggerType.LONG_PRESS)
+        device.press(TriggerType.TAP_4)
         await asyncio.sleep(0.05)  # still dark
         device.press(TriggerType.SHORT_PRESS)
         await asyncio.sleep(0.15)
@@ -272,7 +272,7 @@ async def test_a_false_start_logs_nothing(tmp_path):
 async def test_long_press_leaves_the_game(tmp_path):
     task, device = await _start(tmp_path, GAME)
     try:
-        device.press(TriggerType.LONG_PRESS)
+        device.press(TriggerType.TAP_4)
         await asyncio.sleep(0.35)
         device.press(TriggerType.LONG_PRESS)
         await asyncio.sleep(0.15)

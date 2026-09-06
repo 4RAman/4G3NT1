@@ -19,7 +19,7 @@ from aibutton.store import EventStore
 
 APPS = [
     {"name": "Home", "template": "actions", "activation": {"type": "always"},
-     "long_press": {"action": "enter_mode", "target": "Menu"}},
+     "tap_4": {"action": "enter_mode", "target": "Menu"}},
     {"name": "Menu", "template": "launcher", "activation": {"type": "manual"},
      "log_as": "launched"},
     {"name": "Focus", "template": "stopwatch", "activation": {"type": "manual"},
@@ -71,7 +71,7 @@ async def test_a_gesture_opens_the_launcher(tmp_path):
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         assert device.led_state is LEDState.LISTENING
     finally:
         await _stop(task)
@@ -88,7 +88,7 @@ async def test_each_app_is_shown_in_its_own_colour(tmp_path):
     })
     task, device = await _start(tmp_path, raw)
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # open the launcher
+        await _press(device, TriggerType.TAP_4)   # open the launcher
         first = device.led_effect
         await _press(device, TriggerType.SHORT_PRESS)  # next app
         second = device.led_effect
@@ -107,7 +107,7 @@ async def test_launching_closes_the_launcher_before_opening_the_app(tmp_path):
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # open launcher
+        await _press(device, TriggerType.TAP_4)   # open launcher
         await _press(device, TriggerType.DOUBLE_TAP)   # launch the first app
         await asyncio.sleep(0.1)
     finally:
@@ -126,11 +126,13 @@ async def test_long_press_means_up_one_level_everywhere(tmp_path):
     """The rule the whole button leans on. Every takeover already exits on a
     long press; with `return_after` on by default that makes the gesture mean
     one distance rather than two - out of an app lands in the menu, out of the
-    menu goes home. Two presses from anywhere, and nothing to learn."""
+    menu goes home. Two presses from anywhere, and nothing to learn. A third
+    would put the button to sleep (TODO 104), which is the same rule arriving
+    at the top of the ladder rather than an exception to it."""
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
-        await _press(device, TriggerType.LONG_PRESS)  # Home -> launcher
+        await _press(device, TriggerType.TAP_4)  # four taps -> launcher
         await _press(device, TriggerType.DOUBLE_TAP)  # launch Focus (stopwatch)
         await asyncio.sleep(0.1)
         assert device.led_state is LEDState.TIMING, "the app did not start"
@@ -154,7 +156,7 @@ async def test_opting_out_makes_an_app_exit_straight_home(tmp_path):
     modes[1] = dict(modes[1], return_after=False)
     task, device = await _start(tmp_path, _config(db, modes=modes))
     try:
-        await _press(device, TriggerType.LONG_PRESS)  # launcher
+        await _press(device, TriggerType.TAP_4)  # launcher
         await _press(device, TriggerType.DOUBLE_TAP)  # launch Focus
         await _press(device, TriggerType.LONG_PRESS)  # stop it
         await asyncio.sleep(0.15)
@@ -167,7 +169,7 @@ async def test_it_returns_to_the_launcher_once_not_forever(tmp_path):
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
-        await _press(device, TriggerType.LONG_PRESS)  # launcher
+        await _press(device, TriggerType.TAP_4)  # launcher
         await _press(device, TriggerType.DOUBLE_TAP)  # launch Focus
         await _press(device, TriggerType.LONG_PRESS)  # stop it -> back to launcher
         await asyncio.sleep(0.15)
@@ -183,7 +185,7 @@ async def test_long_press_backs_out_without_launching(tmp_path):
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
-        await _press(device, TriggerType.LONG_PRESS)  # open
+        await _press(device, TriggerType.TAP_4)  # open
         await _press(device, TriggerType.LONG_PRESS)  # and straight back out
         await asyncio.sleep(0.1)
         assert device.led_state is LEDState.IDLE
@@ -198,7 +200,7 @@ async def test_a_launch_is_logged_when_asked(tmp_path):
     db = tmp_path / "events.db"
     task, device = await _start(tmp_path, _config(db))
     try:
-        await _press(device, TriggerType.LONG_PRESS)  # open
+        await _press(device, TriggerType.TAP_4)  # open
         await _press(device, TriggerType.DOUBLE_TAP)  # launch
         await asyncio.sleep(0.1)
     finally:
@@ -234,7 +236,7 @@ async def test_a_launcher_never_offers_another_launcher(tmp_path):
                      "activation": {"type": "manual"}}]
     task, device = await _start(tmp_path, _config(db, modes=modes))
     try:
-        await _press(device, TriggerType.LONG_PRESS)   # open the launcher
+        await _press(device, TriggerType.TAP_4)   # open the launcher
         await _press(device, TriggerType.SHORT_PRESS)  # -> Water
         await _press(device, TriggerType.SHORT_PRESS)  # -> back to Focus
         await _press(device, TriggerType.DOUBLE_TAP)   # launch whatever shows
@@ -252,7 +254,7 @@ async def test_a_launcher_with_nothing_to_offer_fails_clearly(tmp_path):
     modes = [APPS[0], APPS[1]]  # a launcher and nothing to launch
     task, device = await _start(tmp_path, _config(db, modes=modes))
     try:
-        await _press(device, TriggerType.LONG_PRESS)
+        await _press(device, TriggerType.TAP_4)
         await asyncio.sleep(0.2)
         assert device.led_state is LEDState.IDLE
     finally:

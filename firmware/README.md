@@ -163,8 +163,12 @@ is also a VS Code task (see *Editing in VS Code*).
    each other by bare name, and MicroPython runs `main.py` on boot):
 
    ```bash
-   python -m mpremote cp protocol.py trigger.py clock.py hardware.py tones.py led.py buzzer.py main.py : + reset
+   python -m mpremote cp protocol.py trigger.py clock.py hardware.py tones.py sequence.py apppkg.py runtime.py standalone.py led.py buzzer.py main.py : + reset
    ```
+
+   `spike_hid.py` is deliberately not in that list — it is a spike and must
+   not travel. The four new names are the on-device app runtime; a board that
+   has them and no `app.pkg` behaves exactly as it did before they existed.
 
    No port is given: `mpremote` uses the only attached board. With several
    plugged in, add `connect COM3` after `-m mpremote`, and run
@@ -187,6 +191,55 @@ is also a VS Code task (see *Editing in VS Code*).
    continued — check `NEOPIXEL_PIN` and the LED's own wiring. Press the
    button and the REPL should print `button: short_press` whether or not the
    LED works; nothing printed means the switch wiring, not the firmware.
+
+## An app that runs with nobody attached
+
+The board can hold a menu and the apps behind it, and run them while no host
+is connected. Build the package out of your config and copy it over:
+
+```bash
+./.venv/Scripts/python tools/install_app.py           # what would go, and what would not
+./.venv/Scripts/python tools/install_app.py --push    # over BLE, service running, nothing unplugged
+```
+
+`--push` goes through the running service, which is the only thing holding the
+radio. The board keeps running while it arrives; the new package takes over the
+moment it lands. For a board whose firmware predates `APP_PACKAGE` there is
+still the cable:
+
+```bash
+./.venv/Scripts/python tools/install_app.py --write
+python -m mpremote cp dist/app.pkg :app.pkg + reset
+```
+
+**Read the report before you flash.** Most of a config needs the host - a
+webhook needs a network, a DAW command needs a DAW - so a standalone button
+does a subset of what your button does, and the tool names every gesture and
+mode it had to leave behind, with what each is waiting on.
+
+Then stop the service and press the button. It boots into your ambient menu
+wearing the IDLE light; a gesture bound to *Launch an app* opens one; long
+press comes back; long press at the menu puts it to sleep, and another wakes
+it. That is the host's ladder exactly, because it is the host's rule.
+
+**What is actually on the device is not your config.** It is compiled state
+machines ([aibutton/appc.py](../aibutton/appc.py)): a show's cue ring is
+unrolled into two states per cue (running and held), a menu is one state plus
+one per launching gesture, looks are raw bytes, and there is no parser. A menu
+plus a two-cue show with two stop lists in it is about 180 bytes.
+
+**Nothing changes for a board with no `app.pkg` on it.** `apppkg.load` returns
+None, `ButtonPeripheral.app` stays None, and every branch that reaches this
+code is skipped - which is deliberate, because the failure mode of a firmware
+bug here would otherwise be a board that has to be re-flashed to debug. To go
+back to host-only, delete the file:
+
+```bash
+python -m mpremote rm :app.pkg + reset
+```
+
+A connected host still owns the button completely. The app is handed the LED
+on disconnect and hands it back on connect, so the two never write it at once.
 
 ## Editing in VS Code
 

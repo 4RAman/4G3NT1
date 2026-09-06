@@ -305,7 +305,7 @@ def _pages_config(**over):
             {
                 "name": "Home", "template": "actions",
                 "activation": {"type": "always"},
-                "long_press": {"action": "enter_mode", "target": "Menu"},
+                "tap_4": {"action": "enter_mode", "target": "Menu"},
             },
             {
                 "name": "Menu", "template": "control",
@@ -332,7 +332,7 @@ async def test_a_control_page_wears_the_look_it_names(tmp_path):
     seen = {}
 
     async def script(device):
-        await _enter(device, TriggerType.LONG_PRESS)  # Home -> Menu
+        await _enter(device, TriggerType.TAP_4)  # Home -> Menu
         seen["effect"] = device.led_effect
         seen["state"] = device.led_state
 
@@ -348,7 +348,7 @@ async def test_entering_a_sub_page_changes_the_pushed_look(tmp_path):
     seen = {}
 
     async def script(device):
-        await _enter(device, TriggerType.LONG_PRESS)   # Home -> Menu
+        await _enter(device, TriggerType.TAP_4)   # Home -> Menu
         seen["menu"] = device.led_effect
         await _enter(device, TriggerType.SHORT_PRESS)  # Menu -> Mix
         seen["mix"] = device.led_effect
@@ -365,7 +365,7 @@ async def test_leaving_a_sub_page_restores_the_parents_look(tmp_path):
     seen = {}
 
     async def script(device):
-        await _enter(device, TriggerType.LONG_PRESS)   # Home -> Menu
+        await _enter(device, TriggerType.TAP_4)   # Home -> Menu
         await _enter(device, TriggerType.SHORT_PRESS)  # Menu -> Mix
         await _enter(device, TriggerType.LONG_PRESS)   # leave Mix -> Menu
         seen["effect"] = device.led_effect
@@ -385,7 +385,7 @@ async def test_a_pages_look_survives_an_actions_success_flash(tmp_path):
     seen = {}
 
     async def script(device):
-        await _enter(device, TriggerType.LONG_PRESS)   # Home -> Menu
+        await _enter(device, TriggerType.TAP_4)   # Home -> Menu
         await _enter(device, TriggerType.DOUBLE_TAP)   # menu_thing, logged
         await asyncio.sleep(main._CONTROL_CONFIRM_S + 0.1)
         seen["effect"] = device.led_effect
@@ -406,7 +406,7 @@ async def test_a_page_naming_no_look_costs_no_wire_traffic(tmp_path):
     seen = {}
 
     async def script(device):
-        await _enter(device, TriggerType.LONG_PRESS)  # Home -> Menu
+        await _enter(device, TriggerType.TAP_4)  # Home -> Menu
         seen["effect"] = device.led_effect
         seen["state"] = device.led_state
 
@@ -746,3 +746,127 @@ def test_the_buttons_own_states_have_no_app_to_supply_a_drive_at_all():
     assert complaint is not None, warnings
     assert "state_looks['SUCCESS']" in complaint
     assert "on the clock instead" in complaint
+
+
+# --- Morse (TODO 83) -----------------------------------------------------
+#
+# The compiler itself (aibutton.morse) is tested in test_morse.py; what
+# belongs here is the look-pool shape around it - dispatch, the flash-floor
+# cap on dpm, and fail-soft on a bad message.
+#
+# Speed is dots per minute, not words per minute: dpm = 60/unit_s directly,
+# with no PARIS-standard "a word is 50 units" convention to invert first.
+# 250 dpm below is the same unit length the old wpm=5 examples used
+# (unit_s = 1.2/5 = 60/250 = 0.24s) - carried over for continuity, not
+# because 250 is special.
+
+def test_a_morse_look_expands_to_a_stop_list():
+    cfg = parse_config({
+        "looks": {"sos": {"morse": "SOS", "dpm": 250, "color": "#ff0000"}},
+        "modes": [],
+    })
+    look = cfg.looks["sos"]
+    assert isinstance(look, sequencer.Sequence)
+    assert look.repeat is True  # the default - a beacon repeats
+    assert look.stops[0] == sequencer.Stop("#ff0000", 60 / 250, 0.0)
+
+
+def test_morse_dpm_is_capped_against_the_flash_floor_and_warns():
+    """At the default 3 Hz floor, sequence_safe would floor every stop to
+    min_flash_period_s/2 anyway - this is the parser saying so instead of
+    quietly rendering slower than the config asked for."""
+    cfg, warnings = parse_with_warnings({
+        "looks": {"sos": {"morse": "SOS", "dpm": 2000, "color": "#ff0000"}},
+        "modes": [],
+    })
+    assert any("dpm" in w and "capped" in w for w in warnings), warnings
+    dot = min(s.hold_s for s in cfg.looks["sos"].stops if s.color == "#ff0000")
+    assert dot == pytest.approx(aibutton.config.SAFE_MIN_PERIOD_S / 2)
+
+
+def test_a_looser_flash_floor_allows_a_faster_morse_message():
+    cfg, warnings = parse_with_warnings({
+        "min_flash_period_s": 0.05,
+        "looks": {"sos": {"morse": "SOS", "dpm": 1000, "color": "#ff0000"}},
+        "modes": [],
+    })
+    assert not any("dpm" in w for w in warnings), warnings
+    dot = next(s.hold_s for s in cfg.looks["sos"].stops if s.color == "#ff0000")
+    assert dot == pytest.approx(60 / 1000)
+
+
+def test_morse_warns_about_characters_it_does_not_know_and_drops_them():
+    with_junk, warnings = parse_with_warnings({
+        "looks": {"sos": {"morse": "SOS!", "dpm": 250, "color": "#ff0000"}},
+        "modes": [],
+    })
+    assert any("morse" in w and "!" in w for w in warnings), warnings
+    plain = parse_config({
+        "looks": {"sos": {"morse": "SOS", "dpm": 250, "color": "#ff0000"}},
+        "modes": [],
+    })
+    assert with_junk.looks["sos"].stops == plain.looks["sos"].stops
+
+
+def test_a_blank_morse_message_falls_back_to_the_default_look():
+    cfg, warnings = parse_with_warnings({
+        "looks": {"sos": {"morse": "   ", "color": "#ff0000"}},
+        "modes": [],
+    })
+    assert cfg.looks["sos"] == LedEffect()
+    assert any("morse" in w for w in warnings), warnings
+
+
+def test_a_morse_message_of_only_unknown_characters_also_falls_back():
+    cfg, warnings = parse_with_warnings({
+        "looks": {"sos": {"morse": "@@@", "color": "#ff0000"}},
+        "modes": [],
+    })
+    assert cfg.looks["sos"] == LedEffect()
+    assert any("nothing left to play" in w for w in warnings), warnings
+
+
+def test_a_morse_ramp_paints_each_symbol_by_its_place_in_the_message():
+    cfg = parse_config({
+        "looks": {"banner": {
+            "morse": "HI", "dpm": 250, "ramp": ["#ff0000", "#0000ff"],
+        }},
+        "modes": [],
+    })
+    look = cfg.looks["banner"]
+    on_colors = [s.color for s in look.stops if s.color != "#000000"]
+    assert on_colors[0] == "#ff0000"
+    # Strictly progressing towards the second ramp stop, never back towards
+    # the first - the same monotonic-progress guarantee test_morse.py pins
+    # at the compiler level.
+    reds = [int(c[1:3], 16) for c in on_colors]
+    assert reds == sorted(reds, reverse=True)
+
+
+def test_a_morse_ramp_wins_over_a_flat_colour_when_both_are_given():
+    cfg = parse_config({
+        "looks": {"banner": {
+            "morse": "E", "dpm": 250, "color": "#00ff00", "ramp": ["#ff0000"],
+        }},
+        "modes": [],
+    })
+    stop = cfg.looks["banner"].stops[0]
+    assert stop.color == "#ff0000"
+
+
+def test_an_empty_or_malformed_ramp_falls_back_to_the_flat_colour():
+    cfg, warnings = parse_with_warnings({
+        "looks": {"banner": {"morse": "E", "color": "#00ff00", "ramp": []}},
+        "modes": [],
+    })
+    assert warnings
+    assert cfg.looks["banner"].stops[0].color == "#00ff00"
+
+
+def test_no_ramp_key_at_all_is_silent_and_uses_the_flat_colour():
+    cfg, warnings = parse_with_warnings({
+        "looks": {"banner": {"morse": "E", "color": "#00ff00"}},
+        "modes": [],
+    })
+    assert not warnings, warnings
+    assert cfg.looks["banner"].stops[0].color == "#00ff00"

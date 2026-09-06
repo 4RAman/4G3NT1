@@ -176,8 +176,17 @@ BEHAVIOUR_FIELDS = _behaviour_fields()
 
 def test_the_readouts_are_still_extractable():
     """The guard on every assertion below: if this file stops finding them,
-    the rest of the tests pass by vacuously checking nothing."""
-    assert len(READOUTS) >= 13, "readout descriptors stopped being extractable"
+    the rest of the tests pass by vacuously checking nothing.
+
+    **Twelve, not thirteen.** `actions` is the one template with no history to
+    show - an everyday gesture map logs whatever its actions log, under their
+    own names, and has nothing of its own to read back. The number came down by
+    one when `alarm` and `reminders` merged into `notice` (TODO 84) and this
+    floor was not moved with them. A floor rather than an equality, so a new
+    template fails where it should - against its own missing descriptor - and
+    not here as well.
+    """
+    assert len(READOUTS) >= 12, "readout descriptors stopped being extractable"
 
 
 @pytest.mark.parametrize("template", sorted(READOUTS))

@@ -83,6 +83,22 @@ function shape(curve, level) {
 
 /** The colour an effect shows at time `t` seconds. Mirrors firmware/led.py. */
 export function colorAt(effect, t) {
+  // A Morse look (TODO 83) compiles to a stop list on the *server*
+  // (config.py's morse.py, plus the ramp it may sample) - there is no
+  // client-side encoder to mirror it with, deliberately: editor_shell.html's
+  // FileApi already explains why a second copy of a Python parser with
+  // nothing testing the two against each other is exactly what CLAUDE.md
+  // warns about. So the swatch shows a representative colour instead of the
+  // true rhythm - the first ramp stop, or the flat colour - and "Show on the
+  // button" (which does round-trip through the real parser) is what proves
+  // the actual message.
+  if (typeof effect.morse === 'string') {
+    if (Array.isArray(effect.ramp) && effect.ramp.length) {
+      const first = effect.ramp[0];
+      return hexToRgb(typeof first === 'string' ? first : first?.color);
+    }
+    return hexToRgb(effect.color);
+  }
   // A stop list (TODO 19b) - the browser twin of sequencer.plan_at, and it
   // keeps that module's honesty rules: fades are quantised to the same 50 ms
   // steps the host actually pushes over the radio, and the first instant of

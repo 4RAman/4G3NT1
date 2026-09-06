@@ -24,8 +24,12 @@ from bleak import BleakClient, BleakScanner
 
 from .button import DOUBLE_WINDOW_S
 from .device import (
+    APP_OK,
+    APP_PACKAGE_UUID,
+    APP_RESULTS,
     ASSUMED_INFO,
     BUTTON_EVENT_UUID,
+    CAP_APP,
     CAP_BUZZER,
     CAP_EFFECT,
     CAP_GESTURE_PARAMS,
@@ -41,6 +45,7 @@ from .device import (
     ButtonDevice,
     LEDState,
     Sound,
+    app_package_frames,
     decode_device_info,
     decode_gesture,
     effect_payload,
@@ -217,12 +222,59 @@ class BLEDevice(ButtonDevice):
             ", ".join(self.info.names) or "none reported",
         )
 
+    async def push_package(self, data: bytes) -> tuple[bool, str]:
+        """Install an app package over the air.
+
+        **Not through the outbox**, and that is the difference between this and
+        every other write on this class. The outbox exists so feedback can be
+        fire-and-forget and *droppable* - a colour that never arrives costs you
+        one frame. A package that half arrives is the failure this design is
+        built to prevent, so these writes are awaited in order, on the live
+        client, and the device is asked afterwards how it went.
+
+        Refused rather than attempted when the firmware does not claim
+        `CAP_APP`: writing into a characteristic an un-reflashed board has
+        never heard of is exactly the "assume" that protocol v1 replaced with
+        "ask" (ROADMAP D8).
+        """
+        client = self._client
+        if client is None or not self._connected:
+            return False, "the button is not connected"
+        if not self.info.has(CAP_APP):
+            return False, "this firmware cannot be sent apps - reflash it first"
+        try:
+            for frame in app_package_frames(data):
+                await client.write_gatt_char(APP_PACKAGE_UUID, frame, response=True)
+            result = await client.read_gatt_char(APP_PACKAGE_UUID)
+            # The device is a different device now in the one way a host cares
+            # about, so re-read what it says it is rather than assuming.
+            await self._adopt_info(client)
+        except Exception as exc:  # noqa: BLE001 - a dropped link mid-push
+            log.warning("BLE: app install failed (%s)", exc)
+            return False, "the link dropped during the install"
+        code = result[0] if result else 0
+        if code == APP_OK:
+            log.info("BLE: installed %d bytes on %s", len(data), self._name)
+            return True, "installed"
+        return False, APP_RESULTS.get(code, "the device refused it (0x%02x)" % code)
+
     def _send(self, uuid: str, payload: bytes) -> None:
         if not self._connected:
             return  # nothing on the other end; feedback is not worth queueing
         if self._outbox.qsize() >= OUTBOX_MAX:
-            log.warning("BLE outbox full - dropping write to %s", uuid[:8])
-            return
+            # OUTBOX_MAX's own comment already calls the backlog stale at this
+            # point - so the oldest entry is the one that goes, not this one.
+            # A burst that outruns the pump (a repeating Morse look, TODO 83,
+            # pushes a colour every 0.15-0.7s while each write awaits a real
+            # over-the-air response) used to have the newest, most-current
+            # write refused instead, which is backwards: it left the device
+            # catching up on ever-more-ancient colours and never the one that
+            # actually mattered by the time it was sent.
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._outbox.get_nowait()
+            log.warning(
+                "BLE outbox full - dropping oldest write to make room for %s", uuid[:8]
+            )
         self._outbox.put_nowait((uuid, payload))
 
     # --- gestures in --------------------------------------------------

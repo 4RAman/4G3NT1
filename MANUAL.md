@@ -45,6 +45,16 @@ app you opened from the launcher comes back to the launcher when you leave,
 so the gesture always travels exactly one level rather than one or two
 depending on how you got there.
 
+**At your menus there is no level above, so a long press there puts the button
+to sleep** — the light fades out over about a second and stays dark, and every
+gesture is ignored until another long press wakes it. The *fade* is what tells
+you it was deliberate: a button that has crashed goes dark instantly, and one
+you sent to sleep goes out slowly. Nothing else stops — anything you scheduled
+still rings, and a reaction fired by something else still runs. Sleeping is the
+button not answering *you*, not the button switching off. Because the gesture
+belongs to sleep, a menu has five gestures to give away rather than six, and
+the editor does not offer the long press.
+
 **A press is never instant, and that is deliberate.** A single press is held
 back until the multi-tap window closes — about 0.4 seconds — because until
 then the button cannot know a second press isn't coming. It always waits: no
@@ -160,9 +170,9 @@ exactly like a working one until you go hunting for it on the button.
 **Home** is your baseline menu and the only mode that is always on. Its double
 tap opens the **Launcher** — a menu too, since all it does is let a press pick
 between things — which reaches every app you add later without you wiring
-anything (§7), and its long press opens the Pomodoro. Those four modes are
-also the floor a broken config falls back to, so this list is what the button
-does when nothing else is true.
+anything (§7); its long press puts the button to sleep, as it does at any menu
+(§2). Those four modes are also the floor a broken config falls back to, so
+this list is what the button does when nothing else is true.
 
 Your **named actions** and your **reactions** live together under **Actions**,
 because a reaction is a circumstance with an action attached and the pool is
@@ -318,6 +328,15 @@ The page also calls out a gesture pointing at a mode that does not exist — a
 name left behind by a rename or a deletion. Nothing is repointed for you: the
 button fails loudly there rather than quietly doing something nobody chose.
 
+**On its own** — at the foot of the same page — is the other half of the
+question, and a smaller list. With the service stopped or the PC asleep, the
+button runs a compiled copy of *part* of your setup: a webhook needs a
+network, a DAW command needs a DAW, and a stopwatch needs somewhere to keep a
+number. The section names what would go, what stays host-only and what it is
+waiting on, gesture by gesture — and says whether what is on the button now
+still matches. **Install on the button** sends it. Save first: the comparison
+is against the file on disk, not the page you are typing into.
+
 ### 4.7 An app's page is the app
 
 Open one of your apps and the first thing on the page is **what it has
@@ -329,6 +348,16 @@ None of this is new data. It is the event log, filtered to that app's own
 rows, which is why it costs nothing and why it is only as good as what the app
 logs: an app whose event-name field is blank keeps no history, and its page
 says so rather than showing an empty list.
+
+**“Is one of these best?”** decides whether the page crowns one. It is blank
+by default, and that is the honest answer for most apps: the same stopwatch
+times a mile run, where quicker is better, and a loaf of bread, where it is
+not. Say *lower is better* on the mile run and its history marks the fastest
+and colours each run against the one before it; leave it alone on the bread
+and you get the runs, longest and shortest, with nothing called best. It sits
+with the app's other settings, under **Tinker**, on the stopwatch, the
+countdown and the metronome — the three that measure something the app itself
+cannot have an opinion about. Press **Refresh** on the history to redraw it.
 
 An app with **more than one of something** — two alarms, three countdowns —
 also lists the others at the top of the page, so you move between them without
@@ -728,10 +757,11 @@ nine, and the launcher, are started by a gesture and offer only **Only when
 another mode starts it**. The menu offers each mode kind exactly the
 activations it can actually use, so there is no wrong combination to pick.
 
-With nine apps and six gestures, wiring one gesture per app runs out fast —
-that is what the **App launcher** is for. Point one gesture at the launcher
-and it steps through your apps: short press moves to the next, double tap
-opens it, long press comes home.
+With nine apps and five gestures a menu can give away — the sixth is sleep
+(§2) — wiring one gesture per app runs out fast. That is what the **App
+launcher** is for. Point one gesture at the launcher and it steps through your
+apps: short press moves to the next, double tap opens it, long press comes
+home.
 
 How they interact when you press the button:
 
@@ -749,9 +779,10 @@ is running, the alarm takes priority.
 
 **Some of this already works.** A button with no config of its own starts with
 **Home**, your baseline menu — short press logs `button_press`, double tap
-opens the **Launcher**, long press opens a **Pomodoro** — and a **Stopwatch**
-waiting behind the launcher. So the first recipes here change what you already
-have; the later ones add what nothing ships.
+opens the **Launcher**, long press sleeps — and a **Stopwatch**, a
+**Pomodoro** and a **Countdown** waiting behind the launcher. So the first
+recipes here change what you already have; the later ones add what nothing
+ships.
 
 **Change what the everyday press logs**
 Open **Home** → **Short press**. It is already **Log an event**, named
@@ -774,13 +805,14 @@ double tap wait out the tap window to prove it is not the start of a triple,
 so your launcher stops opening the instant you tap it (§2). Worth it for a
 habit you check every day; not worth it for one you don't.
 
-**Swap the app on the long press**
-Long press already opens the Pomodoro, so this is a substitution, not a build.
-Either open **Home** → **Long press** → **Launch an app** and pick a different
-app — or leave the gesture alone and edit the **Pomodoro** mode itself, since
-Tabata and HIIT are that same app with different numbers in it (§5.4).
-Clearing the long press entirely is a fine third option: every app is still a
-double tap and a few short presses away through the launcher.
+**Give one app a gesture of its own**
+The launcher reaches every app in a few presses, which is the right answer for
+most of them and the wrong one for the app you open ten times a day. Open
+**Home** → **Four taps** → **Launch an app** and pick it. Four and five taps
+are deliberately awkward to perform (§2), which makes them the right home for
+something you would hate to fire by accident and a fair place for something
+you reach on purpose. The long press is not on the list: at a menu it is
+sleep, and it is the same gesture in every app you open.
 
 **Add an app without spending a gesture**
 Apps tab → Tally → Install → name it "Water" (event `water`) → **Only when another mode
@@ -1017,6 +1049,10 @@ Home Assistant, or your own script.
   named action, or write one straight onto the gesture.
 - **You are stuck inside something** → long press. Out of an app, out of the
   menu, back to your menus, every time.
+- **The light is dark and nothing you press does anything** → it is probably
+  asleep rather than broken (§2): a long press at your menus turns it off, and
+  another one wakes it. If a long press does nothing either, check the web UI —
+  the state badge says `STANDBY` while it is asleep.
 
 ---
 

@@ -68,7 +68,7 @@ def _action(raw):
             "name": "Home", "template": "actions",
             "activation": {"type": "always"},
             "short_press": raw,
-            "long_press": {"action": "log", "event": "still_here"},
+            "tap_4": {"action": "log", "event": "still_here"},
         }],
     })
     assert cfg.modes[0].name == "Home", "fell back to defaults"

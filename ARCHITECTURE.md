@@ -373,9 +373,9 @@ Each phase is independently useful and nothing gets thrown away.
 
 | Phase | Work | Visible change | Risk |
 |---|---|---|---|
-| **A** | Define the app format. Build the **host-side** interpreter. Migrate the eight templates onto it behind the existing UI | **None** — same behaviour, same tests | Low. Pure host-side. **Start here** |
+| **A** | Define the app format. Build the **host-side** interpreter. Migrate the eight templates onto it behind the existing UI | **None** — same behaviour, same tests | Low. Pure host-side. **Started 2026-08-30 (TODO 111)**: the format exists and the light show compiles to it; the other templates have not moved |
 | **B** | Protocol v1: capability negotiation, ephemeral effects, parameterised gestures, OTA handshake (TODO 0b) | Per-app colours; richer gestures | One reflash |
-| **C** | Port the interpreter to firmware. Apps run on-device, PC still acts as "the phone" | Presses feel instant; feedback survives a stalled host | Medium |
+| **C** | Port the interpreter to firmware. Apps run on-device, PC still acts as "the phone" | Presses feel instant; feedback survives a stalled host | Medium. **Started 2026-08-30 (TODO 111)** — and it turned out to be cheap, because A and C are the *same* pure interpreter: `firmware/runtime.py` is imported by the host suite rather than reimplemented. Untested on hardware |
 | **D** | On-device storage, event ring buffer, RTC | **The tether breaks.** Alarms ring with the PC asleep | Medium |
 | **E** | Phone app takes over from the PC host | The product | Highest, and by then everything under it is proven |
 

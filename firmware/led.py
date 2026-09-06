@@ -14,6 +14,7 @@ import asyncio
 
 import hardware
 import protocol
+import sequence
 from clock import now_s
 
 _FRAME_S = 0.05  # 20 fps - smooth fades, nothing for a 240 MHz MCU
@@ -315,6 +316,14 @@ class LEDController:
         self._state = None
         self._start(Effect(style, color, color2, period_s))
 
+    def palette_color(self, code):
+        """The colour a state currently wears, for something that needs to fade
+        *from* it - standalone.py's sleep does. (0, 0, 0) for a state that is
+        not in the palette, which is the same answer as "nothing to fade from".
+        """
+        effect = self._palette.get(code)
+        return effect.color if effect is not None else (0, 0, 0)
+
     @property
     def usable(self):
         """Whether an LED actually came up - reported over DEVICE_INFO."""
@@ -325,6 +334,41 @@ class LEDController:
             self._task.cancel()
             self._task = None
         self._backend.off()
+
+    def show_sequence(self, stops, repeat):
+        """Walk a stop list until the next set_state()/show_effect().
+
+        The counterpart of `show_effect` for the other kind of look (see
+        sequence.py): an effect is a style this file animates, a stop list is a
+        timeline it steps through. Same ownership rule as `show_effect` - the
+        palette is untouched and `_state` is cleared, because nothing *named*
+        is on screen while a schedule is playing.
+
+        This is what the host's `main._drive_sequence` does, on the device and
+        with no radio in the middle. Which is the whole point: a fade that used
+        to cost twenty BLE writes a second now costs none.
+        """
+        self._state = None
+        if self._task is not None:
+            self._task.cancel()
+        self._task = asyncio.create_task(self._run_sequence(stops, repeat))
+
+    async def _run_sequence(self, stops, repeat):
+        start = now_s()
+        try:
+            while True:
+                color, wait = sequence.plan_at(
+                    stops, repeat, now_s() - start, _FRAME_S
+                )
+                if color is None:  # a one-shot finished
+                    self._backend.off()
+                    return
+                self._backend.set(*_norm(color))
+                await asyncio.sleep(wait if wait and wait > 0 else _FRAME_S)
+        except asyncio.CancelledError:
+            pass  # a newer look took over
+        except Exception as exc:  # noqa: BLE001 - as _run: never kill the BLE tasks
+            print("led: sequence crashed (%s)" % exc)
 
     def _start(self, effect):
         if self._task is not None:

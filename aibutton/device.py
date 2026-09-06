@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 log = logging.getLogger(__name__)
@@ -88,6 +88,7 @@ DEVICE_INFO_UUID = "f3641405-00b0-4240-ba50-05ca45bf8abc"
 OTA_CONTROL_UUID = "f3641406-00b0-4240-ba50-05ca45bf8abc"  # reserved, unimplemented
 LED_EFFECT_UUID = "f3641407-00b0-4240-ba50-05ca45bf8abc"
 GESTURE_CONFIG_UUID = "f3641408-00b0-4240-ba50-05ca45bf8abc"
+APP_PACKAGE_UUID = "f3641409-00b0-4240-ba50-05ca45bf8abc"
 
 # --- what the device says it is ---------------------------------------
 #
@@ -115,6 +116,10 @@ CAP_RAINBOW_LEVEL = 0x0400
 # ...and its saturation from the effect's second colour, the same encoding one
 # field over - see protocol.CAP_RAINBOW_SAT.
 CAP_RAINBOW_SAT = 0x0800
+# Apps can be installed over the air (APP_PACKAGE). Gated on a bit like every
+# other capability, so a host talking to un-reflashed firmware finds out by
+# asking rather than by writing into a characteristic that is not there.
+CAP_APP = 0x1000
 
 CAPABILITY_NAMES = {
     CAP_LED: "led",
@@ -129,9 +134,15 @@ CAPABILITY_NAMES = {
     CAP_GESTURE_PARAMS: "gesture-params",
     CAP_RAINBOW_LEVEL: "rainbow-level",
     CAP_RAINBOW_SAT: "rainbow-sat",
+    CAP_APP: "app-install",
 }
 
-DEVICE_INFO_LEN = 6
+# The *minimum* a DEVICE_INFO read must contain to be worth parsing - not the
+# length the current firmware emits, which is longer and will get longer again.
+# Deliberately not equal to `protocol.DEVICE_INFO_LEN`: that one is "what we
+# send", this one is "what we insist on", and the whole append-don't-insert rule
+# lives in the gap between them.
+DEVICE_INFO_MIN_LEN = 6
 
 
 @dataclass(frozen=True)
@@ -141,6 +152,10 @@ class DeviceInfo:
     protocol_version: int = 0
     firmware_version: tuple[int, int, int] = (0, 0, 0)
     capabilities: int = 0
+    # The CRC of the app package installed on the device, or 0 for none. Zero
+    # is also what an older device reports by not sending the field at all,
+    # which is the same answer for the purpose it serves: nothing to compare.
+    package_crc: int = 0
 
     def has(self, capability: int) -> bool:
         return bool(self.capabilities & capability)
@@ -188,13 +203,91 @@ def decode_device_info(data) -> DeviceInfo | None:
     appending, so a newer device must stay readable by an older host. That is
     the half of forward compatibility the host is responsible for.
     """
-    if data is None or len(data) < DEVICE_INFO_LEN:
+    if data is None or len(data) < DEVICE_INFO_MIN_LEN:
         return None
     return DeviceInfo(
         protocol_version=data[0],
         firmware_version=(data[1], data[2], data[3]),
         capabilities=(data[4] << 8) | data[5],
+        package_crc=((data[6] << 8) | data[7]) if len(data) >= 8 else 0,
     )
+
+
+# --- app package (written down) ---------------------------------------
+#
+# The host half of protocol.py's install transfer. Pure: bytes in, writes out,
+# no radio - so the framing is testable without a board and the firmware's
+# decoder is tested against exactly what this produces.
+
+APP_BEGIN = 0x01
+APP_CHUNK = 0x02
+APP_COMMIT = 0x03
+APP_ABORT = 0x04
+
+APP_IDLE = 0x00
+APP_OK = 0x01
+APP_ERR_STATE = 0x02
+APP_ERR_SIZE = 0x03
+APP_ERR_CRC = 0x04
+APP_ERR_DECODE = 0x05
+APP_ERR_WRITE = 0x06
+
+APP_RESULTS = {
+    APP_IDLE: "nothing pushed yet",
+    APP_OK: "installed",
+    APP_ERR_STATE: "a chunk arrived with no transfer open",
+    APP_ERR_SIZE: "wrong size",
+    APP_ERR_CRC: "checksum failed",
+    APP_ERR_DECODE: "not a package this firmware can read",
+    APP_ERR_WRITE: "the device could not write it to flash",
+}
+
+MAX_PACKAGE_BYTES = 4096
+# How much package rides in one write. The ATT MTU is negotiated and usually
+# larger than this, but a floor that always fits is worth more than a ceiling
+# that sometimes does: a package is a few hundred bytes, so the difference is
+# one or two extra writes and never a failed install.
+APP_CHUNK_BYTES = 96
+
+
+def app_package_frames(data: bytes) -> list[bytes]:
+    """The whole install, as the sequence of writes it becomes.
+
+    Framing lives here rather than in `BLEDevice` for the reason every other
+    encoder does: it is pure, so `tests/test_app_push.py` can hand the output
+    straight to the firmware's decoder and prove the two agree without a radio
+    in between.
+
+    **BEGIN carries the length and nothing else.** A package already ends in a
+    CRC over its own body, so a second checksum on the wire would be either
+    redundant or - as it briefly was - a constant. The length catches a torn
+    transfer and the package's own CRC catches a corrupt one.
+    """
+    frames = [bytes([APP_BEGIN, len(data) >> 8, len(data) & 0xFF])]
+    for offset in range(0, len(data), APP_CHUNK_BYTES):
+        chunk = data[offset:offset + APP_CHUNK_BYTES]
+        frames.append(bytes([APP_CHUNK, offset >> 8, offset & 0xFF]) + chunk)
+    frames.append(bytes([APP_COMMIT]))
+    return frames
+
+
+def package_crc(data: bytes) -> int:
+    """A package's fingerprint: the CRC it already carries in its last two
+    bytes. Mirrors `apppkg.stamp` on the device.
+
+    **Read, never recomputed - and that is not an optimisation.** A
+    CRC-16/CCITT taken over a file that *ends* in its own CRC comes out a
+    constant: 0x0000, for every well-formed package there will ever be. A
+    recomputed stamp would therefore have compared equal forever, and the
+    staleness check built on top of it would have reported "up to date" no
+    matter what you edited. It was written that way first; `test_app_push.py`
+    caught it by compiling two different configs and expecting two different
+    answers, which is why that test does not assert on one package.
+    """
+    if data is None or len(data) < 2:
+        return 0
+    return (data[-2] << 8) | data[-1]
+
 
 # The three original one-byte codes. Frozen: a device in someone else's
 # pocket still sends these and they must not come to mean anything else.
@@ -449,6 +542,23 @@ class ButtonDevice(ABC):
         """
         self.max_taps = max(DEFAULT_MAX_TAPS, min(int(max_taps), MAX_TAPS))
 
+    async def push_package(self, data: bytes) -> tuple[bool, str]:
+        """Install an app package on the device. Returns (ok, what happened).
+
+        **Why this earns a place on a seam CLAUDE.md says to resist widening.**
+        It is device state the host *asserts*, which is exactly the argument
+        that got `set_palette` and `set_gesture_config` in: the host decides
+        what the button holds and tells it. What makes it look different is
+        that it is a transfer rather than a poke, so it is `async` and it
+        answers - a push that silently half-arrived is the one failure this
+        design exists to prevent. It is never called from the mode machine,
+        only from the web API, so nothing in the run loop can block on it.
+
+        The default is the honest answer for a device that is its own hardware
+        and has no flash to install into.
+        """
+        return False, "this device does not install packages"
+
     @property
     def connected(self) -> bool:
         """Whether feedback would actually reach hardware. Always true for a
@@ -490,9 +600,25 @@ class MockDevice(ButtonDevice):
         self.info = DeviceInfo(
             protocol_version=PROTOCOL_VERSION,
             capabilities=(
-                CAP_LED | CAP_BUZZER | CAP_PALETTE | CAP_EFFECT | CAP_GESTURE_PARAMS
+                CAP_LED | CAP_BUZZER | CAP_PALETTE | CAP_EFFECT
+                | CAP_GESTURE_PARAMS | CAP_APP
             ),
         )
+        # What a push installed, so the install button does something
+        # observable with no board attached - and so the staleness check has
+        # something to compare against in dev mode.
+        self.package: bytes | None = None
+
+    async def push_package(self, data: bytes) -> tuple[bool, str]:
+        """Accept it and remember it. The mock has no runtime to hand it to -
+        running a package is firmware's job - so what this proves is the *host*
+        half: the config compiled, the transfer was framed, the UI got an
+        answer."""
+        if len(data) > MAX_PACKAGE_BYTES:
+            return False, "wrong size"
+        self.package = bytes(data)
+        self.info = replace(self.info, package_crc=package_crc(data))
+        return True, "installed"
 
     def set_led(self, state: LEDState, effect=None) -> None:
         self.led_state = state

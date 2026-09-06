@@ -589,7 +589,14 @@ def _js_action_list(name: str) -> list[str]:
     sides comparable without writing the same six names in four places.
     """
     match = re.search(rf"export const {name} = \[(.*?)\];", SCHEMA_JS, re.S)
-    assert match, f"{name} is not a flat array literal any more"
+    if match is None:
+        # A whole list may also *be* another one - `POOL_ACTIONS = HOOK_ACTIONS`
+        # mirrors `POOL_ACTIONS: tuple[type, ...] = HOOK_ACTIONS` in config.py,
+        # and writing the six names out again on either side to keep this
+        # reader happy is exactly the copy the derivation removed.
+        alias = re.search(rf"export const {name} = (\w+);", SCHEMA_JS)
+        assert alias, f"{name} is not an array literal or an alias any more"
+        return _js_action_list(alias.group(1))
     out: list[str] = []
     for spread, literal in re.findall(r"\.\.\.(\w+)|'(\w+)'", match.group(1)):
         out.extend(_js_action_list(spread) if spread else [literal])
@@ -611,6 +618,83 @@ def test_the_two_lifecycle_hooks_are_the_same_two_on_both_sides():
         r"key: '(\w+)'", _inside(SCHEMA_JS, "export const MODE_HOOKS = [")
     )
     assert tuple(keys) == cfg.MODE_HOOKS
+
+
+def test_which_ends_can_be_called_best_match_on_both_sides():
+    """TODO 109. The editor offering a word the parser drops is a "best" that
+    vanishes on the next Save, with the history quietly reverting to the
+    template's answer - which is what it said before you touched it, so
+    nothing looks broken."""
+    match = re.search(r"export const MODE_BETTER = \[(.*?)\];", SCHEMA_JS, re.S)
+    assert match, "MODE_BETTER is not a flat array literal any more"
+    assert tuple(re.findall(r"'(\w+)'", match.group(1))) == cfg.MODE_BETTER
+
+
+def test_the_better_field_only_offers_words_the_parser_takes():
+    """The blank option is the exception and it is deliberate: absent is how
+    "the template decides" round-trips, and `_parse_mode_better` reads a
+    missing key rather than an empty string.
+
+    Read off the shared descriptor rather than through `_fields_by_template`,
+    which keeps scalars only - a select's `options` is an array and so is not
+    one of the pairs it collects."""
+    offered = set(re.findall(
+        r"value: '(\w*)'", _inside(SCHEMA_JS, "const BETTER_FIELD = {"),
+    ))
+    assert offered, "BETTER_FIELD stopped being extractable"
+    assert offered - {""} == set(cfg.MODE_BETTER)
+
+
+def test_the_better_field_is_offered_by_exactly_the_templates_it_can_reach():
+    """TODO 109's three, derived rather than listed - and deriving them is what
+    says *why* it is three.
+
+    `better` is read by the two measures that put a magnitude on an axis
+    (`duration`, `value`), and `outcome` counts two states so it never is. So
+    among *those* two, the field belongs exactly where it would be read *and*
+    the template declined to answer: a stopwatch, a countdown and a metronome.
+    Withholding it from a new timing app would be the gap this item closed.
+
+    `tally` is not part of this derivation - see
+    test_a_tally_may_also_declare_a_best for why it is a separate, narrower
+    decision rather than a third measure folded into this regex.
+
+    The two games are the other side of the duration/value line and stay off
+    it: a reaction timer's "fastest" and Hot/Cold's "closest" are facts about
+    the app, so there is nothing for an item to override."""
+    reaches = {
+        name for name, chunk in _template_chunks().items()
+        if (readout := re.search(r"readout: \{(.*?)\},$", chunk, re.S | re.M))
+        and re.search(r"measure: '(duration|value)'", readout.group(1))
+        and "better: null" in readout.group(1)
+    }
+    offers = {
+        name for name, specs in _fields_by_template().items()
+        if any(spec.get("key") == "better" for spec in specs)
+    } - {"counter"}  # the tally exception - see test_a_tally_may_also_declare_a_best
+    assert reaches == {"stopwatch", "countdown", "metronome"}, reaches
+    assert offers == reaches, f"offered where it is not read, or missing: {reaches ^ offers}"
+
+
+def test_a_tally_may_also_declare_a_best():
+    """Low-hanging fruit, 2026-09-05: "most push-ups in a day" is a real
+    question, so `renderTally` now reads `better` exactly like `renderMeasured`
+    does - a busiest day by default, a quietest one when an item says lower is
+    better (a bad-habit counter, say).
+
+    This is deliberately *not* folded into the mechanical duration/value
+    derivation above: unlike those two, not every `tally` template has a best
+    to crown. A counter's number is a fact about *this item* (its owner picked
+    what it counts), so it offers the choice; a launcher's tally is how many
+    times *the menu itself* opened, which is nobody's goal to raise or lower,
+    so it does not. That is a per-template editorial call, not something a
+    regex over `measure: 'tally'` could derive correctly."""
+    offers = {
+        name for name, specs in _fields_by_template().items()
+        if any(spec.get("key") == "better" for spec in specs)
+    }
+    assert "counter" in offers
+    assert "launcher" not in offers
 
 
 def test_which_actions_a_hook_may_run_matches_on_both_sides():
@@ -683,6 +767,15 @@ def test_which_actions_a_reflex_may_run_matches_on_both_sides():
     loop, so starting an app is exactly what it is for (TODO 71)."""
     js = _js_action_list("REFLEX_ACTIONS")
     assert js == [_wire_kind(c) for c in cfg.REFLEX_ACTIONS]
+
+
+def test_which_actions_may_be_named_in_the_pool_matches_on_both_sides():
+    """The hook set only - loop-changing actions (enter_mode, readout, standby)
+    do not belong in a shared library, because the pool is dispatched from
+    multiple contexts. Naming is optional and used once is better written
+    inline; only fire-and-forget actions belong here (TODO 30a)."""
+    js = _js_action_list("POOL_ACTIONS")
+    assert js == [_wire_kind(c) for c in cfg.POOL_ACTIONS]
 
 
 def test_a_hooks_allow_list_only_names_actions_that_exist():

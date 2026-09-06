@@ -80,7 +80,7 @@ def test_full_valid_v3_config(tmp_path):
                 "template": "actions",
                 "activation": {"type": "window", "between": ["09:00", "17:00"]},
                 "short_press": {"action": "timer_toggle", "log_as": "deep_work"},
-                "long_press": {"action": "webhook", "url": "https://hook.example/x",
+                "triple_tap": {"action": "webhook", "url": "https://hook.example/x",
                                "payload": {"note": "hi"}},
             },
             {
@@ -102,7 +102,7 @@ def test_full_valid_v3_config(tmp_path):
     assert meds.activation.days == frozenset({0, 2, 4})  # case-insensitive day names
     assert meds.behavior.actions["double_tap"] == LogAction(event="meds_taken")
     assert workday.behavior.actions["short_press"] == TimerToggleAction(log_as="deep_work")
-    assert workday.behavior.actions["long_press"] == WebhookAction(
+    assert workday.behavior.actions["triple_tap"] == WebhookAction(
         url="https://hook.example/x", payload={"note": "hi"}
     )
     assert workday.activation.days is None
@@ -120,9 +120,9 @@ def test_default_modes_when_empty(tmp_path):
 # --- the ambient floor is a structural guarantee, not a stored flag (TODO 5) --
 
 def test_default_modes_shape_is_home_plus_three_apps():
-    """_default_modes() seeds Home (the ambient floor) plus the three apps its
-    own bindings promise to reach - a from-scratch config.json has to be able
-    to keep that promise the moment it exists."""
+    """_default_modes() seeds Home (the ambient floor) plus the launcher and
+    the apps behind it - a from-scratch config.json has to be able to keep
+    that promise the moment it exists."""
     home, launcher, pomodoro, stopwatch = AppConfig().modes
 
     assert home.name == "Home"
@@ -130,7 +130,9 @@ def test_default_modes_shape_is_home_plus_three_apps():
     assert isinstance(home.activation, AlwaysActivation)
     assert home.behavior.actions["short_press"] == LogAction(event="button_press")
     assert home.behavior.actions["double_tap"] == EnterModeAction(target="Launcher")
-    assert home.behavior.actions["long_press"] == EnterModeAction(target="Pomodoro")
+    # And nothing on the long press: at a menu that gesture is sleep (TODO
+    # 104), so the floor a broken config falls back to must not spend it.
+    assert "long_press" not in home.behavior.actions
 
     assert (launcher.name, launcher.template) == ("Launcher", "launcher")
     assert isinstance(launcher.activation, ManualActivation)
@@ -146,10 +148,10 @@ def test_default_modes_shape_is_home_plus_three_apps():
 
 
 def test_default_modes_enter_mode_targets_resolve():
-    # Home's double_tap/long_press name Launcher/Pomodoro by string - the
-    # forward references EnterModeAction leaves for the runtime to resolve
-    # (see EnterModeAction's docstring). A fresh config has to actually ship
-    # modes by those names, or Home's own bindings would point nowhere.
+    # Home's double_tap names the Launcher by string - the forward reference
+    # EnterModeAction leaves for the runtime to resolve (see EnterModeAction's
+    # docstring). A fresh config has to actually ship a mode by that name, or
+    # Home's own binding would point nowhere.
     cfg = AppConfig()
     names = {m.name for m in cfg.modes}
     targets = {
@@ -157,7 +159,7 @@ def test_default_modes_enter_mode_targets_resolve():
         for action in cfg.modes[0].behavior.actions.values()
         if isinstance(action, EnterModeAction)
     }
-    assert targets == {"Launcher", "Pomodoro"}
+    assert targets == {"Launcher"}
     assert targets <= names
 
 
@@ -372,7 +374,7 @@ def test_invalid_action_skipped_within_actions_mode(tmp_path):
                 "template": "actions",
                 "activation": {"type": "always"},
                 "short_press": {"action": "log", "event": "good"},
-                "long_press": {"action": "webhook", "url": "ftp://nope"},   # bad scheme
+                "triple_tap": {"action": "webhook", "url": "ftp://nope"},   # bad scheme
                 "double_tap": {"action": "teleport"},                       # unknown type
             },
         ],
@@ -750,13 +752,13 @@ def test_enter_mode_action_parses(tmp_path):
     cfg = load_config(write(tmp_path, {
         "modes": [
             {"name": "Default", "template": "actions", "activation": {"type": "always"},
-             "long_press": {"action": "enter_mode", "target": "Focus"}},
+             "triple_tap": {"action": "enter_mode", "target": "Focus"}},
             {"name": "Focus", "template": "stopwatch",
              "activation": {"type": "manual"}, "log_as": "focus"},
         ],
     }))
     default = cfg.modes[0]
-    assert default.behavior.actions["long_press"] == EnterModeAction(target="Focus")
+    assert default.behavior.actions["triple_tap"] == EnterModeAction(target="Focus")
 
 
 def test_enter_mode_empty_target_is_dropped(tmp_path):
@@ -765,12 +767,12 @@ def test_enter_mode_empty_target_is_dropped(tmp_path):
     cfg = load_config(write(tmp_path, {
         "modes": [
             {"name": "Default", "template": "actions", "activation": {"type": "always"},
-             "long_press": {"action": "enter_mode", "target": ""},
+             "triple_tap": {"action": "enter_mode", "target": ""},
              "short_press": {"action": "log", "event": "x"}},
         ],
     }))
     mode = cfg.modes[0]
-    assert "long_press" not in mode.behavior.actions
+    assert "triple_tap" not in mode.behavior.actions
     assert mode.behavior.actions["short_press"] == LogAction(event="x")
 
 
@@ -778,11 +780,11 @@ def test_enter_mode_missing_target_is_dropped(tmp_path):
     cfg = load_config(write(tmp_path, {
         "modes": [
             {"name": "Default", "template": "actions", "activation": {"type": "always"},
-             "long_press": {"action": "enter_mode"},  # no target key
+             "triple_tap": {"action": "enter_mode"},  # no target key
              "short_press": {"action": "log", "event": "x"}},
         ],
     }))
-    assert "long_press" not in cfg.modes[0].behavior.actions
+    assert "triple_tap" not in cfg.modes[0].behavior.actions
 
 
 def test_enter_mode_target_not_validated_at_parse_time(tmp_path):
@@ -811,7 +813,7 @@ def test_as_dict_roundtrips_actions_and_alarm(tmp_path):
              "short_press": {"action": "timer_toggle", "log_as": "focus"}},
             {"name": "Meds", "template": "actions", "activation": {"type": "always"},
              "unless_logged_today": "meds_taken",
-             "long_press": {"action": "log", "event": "meds_taken"}},
+             "triple_tap": {"action": "log", "event": "meds_taken"}},
             {"name": "Wake up", "template": "alarm",
              "activation": {"type": "schedule", "at": "07:00", "days": ["mon", "fri"]},
              "message": "Wake up", "label": "WU", "snooze_minutes": 9, "dismiss_event": "woke_up"},
@@ -853,7 +855,7 @@ def test_all_four_templates_and_enter_mode_roundtrip(tmp_path):
     cfg = load_config(write(tmp_path, {
         "modes": [
             {"name": "Default", "template": "actions", "activation": {"type": "always"},
-             "long_press": {"action": "enter_mode", "target": "Focus"},
+             "triple_tap": {"action": "enter_mode", "target": "Focus"},
              "double_tap": {"action": "enter_mode", "target": "Water"}},
             {"name": "Wake up", "template": "alarm",
              "activation": {"type": "schedule", "at": "07:00"},
@@ -865,7 +867,7 @@ def test_all_four_templates_and_enter_mode_roundtrip(tmp_path):
         ],
     }))
     dumped = as_dict(cfg)
-    assert dumped["modes"][0]["long_press"] == {"action": "enter_mode", "target": "Focus"}
+    assert dumped["modes"][0]["triple_tap"] == {"action": "enter_mode", "target": "Focus"}
     stopwatch = dumped["modes"][2]
     # The ladder is asserted separately from the rest: pinning the whole dict
     # made this test fail every time a template gained a field, which says
@@ -875,9 +877,13 @@ def test_all_four_templates_and_enter_mode_roundtrip(tmp_path):
         "activation": {"type": "manual"}, "log_as": "focus",
     }
     assert stopwatch["ladder"]["enabled"] is False  # opt-in, never by surprise
+    # `durable` is written even when it is off (TODO 34): a counter that keeps
+    # its number past midnight and one that recounts today's rows are two
+    # different apps, and which one this is has to survive a round trip rather
+    # than being inferred from a missing key.
     assert dumped["modes"][3] == {
         "name": "Water", "template": "counter",
-        "activation": {"type": "manual"}, "event": "water",
+        "activation": {"type": "manual"}, "event": "water", "durable": False,
     }
     assert parse_config(dumped) == cfg  # exact round-trip
 
@@ -1417,6 +1423,36 @@ def test_hooks_round_trip_through_the_editor():
     assert as_dict(once)["modes"] == as_dict(twice)["modes"]
     # And a named hook stays the bare string it was written as.
     assert as_dict(once)["modes"][0]["on_exit"] == "desk-lamp"
+
+
+# --- which end is best (TODO 109) ------------------------------------------
+# The same template times a mile run, where quicker is better, and a loaf of
+# bread, where it is not - so the answer belongs to the item and the template
+# only supplies a default.
+
+def test_an_item_can_say_which_end_of_its_numbers_is_best():
+    cfg = parse_config(_takeover_with(better="low"))
+    assert cfg.modes[0].better == "low"
+    assert as_dict(cfg)["modes"][0]["better"] == "low"
+
+
+def test_an_item_that_says_nothing_writes_nothing():
+    """Absent is "the template decides", and it has to stay absent on the way
+    out or every config written before this key existed stops round-tripping
+    byte for byte - the same rule the hooks above follow."""
+    cfg = parse_config(_takeover_with())
+    assert cfg.modes[0].better is None
+    assert "better" not in as_dict(cfg)["modes"][0]
+
+
+def test_an_end_nobody_recognises_is_dropped_and_the_mode_survives():
+    """A best is a sentence on a history page. Losing the stopwatch over one
+    would be wildly disproportionate, so it falls back to the template's answer
+    and says so - `_parse_mode_looks`'s rule, one field along."""
+    cfg, warnings = parse_with_warnings(_takeover_with(better="quickest"))
+    assert cfg.modes[0].better is None
+    assert cfg.modes[0].behavior.log_as == "focus"
+    assert any("quickest" in w for w in warnings)
 
 
 def test_no_two_top_level_definitions_share_a_name():

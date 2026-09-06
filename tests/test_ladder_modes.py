@@ -136,7 +136,7 @@ CONFIG = {
     "web_enabled": False,
     "modes": [
         {"name": "Home", "template": "actions", "activation": {"type": "always"},
-         "long_press": {"action": "enter_mode", "target": "Focus"}},
+         "tap_4": {"action": "enter_mode", "target": "Focus"}},
         {"name": "Focus", "template": "stopwatch", "activation": {"type": "manual"},
          "log_as": "focus", "ladder": LADDER},
     ],
@@ -154,7 +154,7 @@ async def _running_stopwatch(tmp_path, monkeypatch, config=CONFIG):
     args = main._parse_args(["--no-web", "--config", str(cfg_path)])
     task = asyncio.create_task(main.run(args, device=device))
     await asyncio.sleep(0.15)
-    device.press(TriggerType.LONG_PRESS)  # enter the stopwatch
+    device.press(TriggerType.TAP_4)  # enter the stopwatch
     await asyncio.sleep(0.25)
     return task, device
 
@@ -225,7 +225,7 @@ async def test_the_metronome_colours_beats_without_being_tapped(tmp_path, monkey
     tap - the light should be keeping time the moment you enter."""
     beats = dict(CONFIG, modes=[
         {"name": "Home", "template": "actions", "activation": {"type": "always"},
-         "long_press": {"action": "enter_mode", "target": "Beat"}},
+         "tap_4": {"action": "enter_mode", "target": "Beat"}},
         {"name": "Beat", "template": "metronome", "activation": {"type": "manual"},
          "log_as": "metronome", "start_bpm": 240, "sound_on_tap": False,
          "ladder": {"enabled": True, "base": "#000000", "rungs": [
@@ -252,7 +252,7 @@ async def test_a_metronome_without_a_ladder_still_pulses_at_the_tempo(tmp_path, 
     behaviour has to be untouched."""
     plain = dict(CONFIG, modes=[
         {"name": "Home", "template": "actions", "activation": {"type": "always"},
-         "long_press": {"action": "enter_mode", "target": "Beat"}},
+         "tap_4": {"action": "enter_mode", "target": "Beat"}},
         {"name": "Beat", "template": "metronome", "activation": {"type": "manual"},
          "log_as": "metronome", "start_bpm": 120, "sound_on_tap": False},
     ])

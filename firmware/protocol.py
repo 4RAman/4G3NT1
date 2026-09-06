@@ -9,6 +9,7 @@
 #   LED_PALETTE     write   what one state looks like
 #   LED_EFFECT      write   render *this look*, now, without naming a state
 #   GESTURE_CONFIG  write   how many taps to look for
+#   APP_PACKAGE     write   install an app package; read back the last result
 #   OTA_CONTROL     -       reserved, not implemented (see below)
 #
 # Add never repurpose, ask never assume, append never insert: the rules for
@@ -23,6 +24,7 @@ LED_PALETTE_UUID = "f3641404-00b0-4240-ba50-05ca45bf8abc"
 DEVICE_INFO_UUID = "f3641405-00b0-4240-ba50-05ca45bf8abc"
 LED_EFFECT_UUID = "f3641407-00b0-4240-ba50-05ca45bf8abc"
 GESTURE_CONFIG_UUID = "f3641408-00b0-4240-ba50-05ca45bf8abc"
+APP_PACKAGE_UUID = "f3641409-00b0-4240-ba50-05ca45bf8abc"
 
 # Reserved, deliberately unimplemented. Claiming the UUID costs nothing now and
 # means the day OTA is built it is not also a protocol break - "you cannot fix a
@@ -38,6 +40,12 @@ OTA_CONTROL_UUID = "f3641406-00b0-4240-ba50-05ca45bf8abc"
 #   [0]    protocol version
 #   [1:4]  firmware version   major, minor, patch
 #   [4:6]  capability bitmap, big-endian
+#   [6:8]  installed app package CRC, big-endian; 0 when none  (appended v0.9)
+#
+# The CRC is here rather than on APP_PACKAGE because it answers *what is this
+# device*, which is the question DEVICE_INFO exists for and the one a host asks
+# on every connect. It is what lets a host say "the button is running an older
+# package" instead of leaving you to find out by unplugging it.
 #
 # PROTOCOL_VERSION is mirrored on the host - both sides must agree what version
 # 1 *means*. FIRMWARE_VERSION is not: the host reads it off the device, and a
@@ -45,10 +53,12 @@ OTA_CONTROL_UUID = "f3641406-00b0-4240-ba50-05ca45bf8abc"
 
 PROTOCOL_VERSION = 1
 # Bumped on any behaviour change, wire change or not, because the version is the
-# only way to tell a flashed board from an un-flashed one. 0.8.0: the board's
-# own BOOT button is a second input, always on, in parallel with the wired one
+# only way to tell a flashed board from an un-flashed one. 0.9.0: the device
+# runs compiled app packages with no host attached (apppkg/runtime/standalone),
+# and accepts them over the air on APP_PACKAGE. 0.8.0: the board's own BOOT
+# button is a second input, always on, in parallel with the wired one
 # (hardware.BOOT_BUTTON_PIN).
-FIRMWARE_VERSION = (0, 8, 0)
+FIRMWARE_VERSION = (0, 9, 0)
 
 CAP_LED = 0x0001      # an LED came up and can be driven
 CAP_BUZZER = 0x0002   # a buzzer came up and can be driven
@@ -61,6 +71,8 @@ CAP_BATTERY = 0x0010
 CAP_IMU = 0x0020
 CAP_MIC = 0x0040
 CAP_OTA = 0x0080
+
+CAP_APP = 0x1000  # APP_PACKAGE is understood: apps can be installed over the air
 
 CAP_EFFECT = 0x0100          # LED_EFFECT: a look can be pushed without a state code
 CAP_GESTURE_PARAMS = 0x0200  # gestures carry a parameter, and GESTURE_CONFIG is read
@@ -75,17 +87,73 @@ CAP_RAINBOW_LEVEL = 0x0400
 # from one that works.
 CAP_RAINBOW_SAT = 0x0800
 
-DEVICE_INFO_LEN = 6
+DEVICE_INFO_LEN = 8
 
 
-def device_info_payload(capabilities, firmware=None, protocol_version=PROTOCOL_VERSION):
-    """The DEVICE_INFO value for this device."""
+def device_info_payload(
+    capabilities, firmware=None, protocol_version=PROTOCOL_VERSION, package_crc=0,
+):
+    """The DEVICE_INFO value for this device.
+
+    `package_crc` is appended, never inserted: a host that predates it reads the
+    first six bytes and ignores the rest, which is the half of forward
+    compatibility the *host* owns (device.decode_device_info).
+    """
     major, minor, patch = firmware if firmware is not None else FIRMWARE_VERSION
     return bytes([
         protocol_version & 0xFF,
         major & 0xFF, minor & 0xFF, patch & 0xFF,
         (capabilities >> 8) & 0xFF, capabilities & 0xFF,
+        (package_crc >> 8) & 0xFF, package_crc & 0xFF,
     ])
+
+
+# --- app package (written down) ---------------------------------------
+#
+# Installing an app, in four opcodes. A transfer rather than a poke, because a
+# package is bigger than one ATT write and because the device must be able to
+# refuse a half-arrived one:
+#
+#   [0x01, len_hi, len_lo]                   BEGIN   how much is coming
+#   [0x02, off_hi, off_lo, ...bytes]         CHUNK   at this offset
+#   [0x03]                                   COMMIT  verify, decode, store, apply
+#   [0x04]                                   ABORT   forget it
+#
+# **BEGIN carries the length and no checksum.** A package already ends in a CRC
+# over its own body, and a second CRC taken over the whole file - body plus that
+# CRC - is a mathematical constant rather than a check. The length catches a
+# torn transfer; the package's own CRC catches a corrupt one.
+#
+# **The device verifies before it stores, and keeps what it had if anything is
+# wrong.** Length, CRC and a full decode all have to pass; only then is the file
+# written. A failed push must never cost you the app that was already working -
+# which is the same rule as "a package must never stop the button", applied to
+# the moment the package arrives.
+#
+# **The payload is opaque to the transport.** Whoever compiled it - the PC
+# today, a phone later, a store one day - the device sees bytes and a checksum
+# and nothing else. That is deliberate: it is what makes the phone app a
+# *client* of this protocol rather than a second implementation of it.
+#
+# A read of the characteristic answers one byte: how the last transfer went.
+# What is *installed* is DEVICE_INFO's business, not this one's.
+
+APP_BEGIN = 0x01
+APP_CHUNK = 0x02
+APP_COMMIT = 0x03
+APP_ABORT = 0x04
+
+APP_IDLE = 0x00        # nothing has been pushed since boot
+APP_OK = 0x01          # the last package installed
+APP_ERR_STATE = 0x02   # a chunk or commit with no begin
+APP_ERR_SIZE = 0x03    # bigger than MAX_PACKAGE_BYTES, or the wrong length
+APP_ERR_CRC = 0x04     # arrived intact-shaped but hashed wrong
+APP_ERR_DECODE = 0x05  # a well-formed transfer of something that is not a package
+APP_ERR_WRITE = 0x06   # the filesystem refused it
+
+# Bigger than any package this compiler can produce and small enough that a
+# hostile write cannot exhaust RAM: the buffer is allocated as it arrives.
+MAX_PACKAGE_BYTES = 4096
 
 # --- gestures (notified up) -------------------------------------------
 #

@@ -99,7 +99,7 @@ def test_first_match_wins_order():
 def test_no_match_returns_none():
     only_meds = (MEDS,)
     assert resolve(only_meds, "double_tap", at(12)) is None
-    assert resolve(only_meds, "long_press", at(6)) is None
+    assert resolve(only_meds, "triple_tap", at(6)) is None
 
 
 def test_alarm_modes_are_not_gesture_resolved():
@@ -157,28 +157,28 @@ def test_unless_logged_today_without_callback_does_not_skip():
 def test_enter_mode_action_resolves_from_ambient_mode():
     # An ambient actions mode whose gesture is an enter_mode action resolves
     # normally and returns that EnterModeAction (main.py then dispatches it).
-    starter = ambient("Default", {"long_press": EnterModeAction(target="Focus")})
-    mode, action = resolve((starter,), "long_press", at(12))
+    starter = ambient("Default", {"tap_4": EnterModeAction(target="Focus")})
+    mode, action = resolve((starter,), "tap_4", at(12))
     assert mode.name == "Default"
     assert action == EnterModeAction(target="Focus")
 
 
 def test_default_modes_resolve_their_enter_mode_bindings():
     # Exercises the actual shipped defaults (config._default_modes via
-    # AppConfig()) rather than a hand-built fixture: Home's double_tap and
-    # long_press should resolve to the enter_mode actions that reach the
-    # Launcher and Pomodoro it ships alongside (TODO 5). Home is ambient, so
-    # resolve() finds it directly - the Launcher/Pomodoro/Stopwatch modes
-    # those actions target are manual takeovers, reached only by dispatching
-    # the returned action (main.py's job, not rules.py's).
+    # AppConfig()) rather than a hand-built fixture: Home's double_tap should
+    # resolve to the enter_mode action that reaches the Launcher it ships
+    # alongside (TODO 5). Home is ambient, so resolve() finds it directly -
+    # the Launcher/Pomodoro/Stopwatch modes those actions target are manual
+    # takeovers, reached only by dispatching the returned action (main.py's
+    # job, not rules.py's).
     modes = AppConfig().modes
     mode, action = resolve(modes, "double_tap", at(12))
     assert mode.name == "Home"
     assert action == EnterModeAction(target="Launcher")
 
-    mode, action = resolve(modes, "long_press", at(12))
-    assert mode.name == "Home"
-    assert action == EnterModeAction(target="Pomodoro")
+    # And nothing answers a long press: at a menu it is sleep, handled by the
+    # run loop before resolution (TODO 104).
+    assert resolve(modes, "long_press", at(12)) is None
 
 
 def test_stopwatch_and_counter_modes_are_never_resolved():
@@ -189,7 +189,7 @@ def test_stopwatch_and_counter_modes_are_never_resolved():
     water = Mode(name="Water", activation=ManualActivation(),
                  behavior=CounterBehavior(event="water"))
     assert resolve((focus, water), "short_press", at(12)) is None
-    assert resolve((focus, water), "long_press", at(12)) is None
+    assert resolve((focus, water), "tap_4", at(12)) is None
     assert resolve((focus, water), "double_tap", at(12)) is None
     # ...and they don't shadow an ambient mode that does define the gesture.
     mode, _ = resolve((focus, water, DEFAULT), "short_press", at(12))

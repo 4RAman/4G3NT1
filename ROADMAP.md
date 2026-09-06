@@ -316,6 +316,16 @@ is over an hour a day. If the board doesn't populate a 32.768 kHz crystal,
 disconnected scheduling is unreliable and that is a BOM item for Stage 4, not
 a firmware bug.
 
+### First movement, 2026-08-30
+
+TODO **111**: the app package format, a pure interpreter, and a device that
+runs one app with no host attached — demonstrated on the light show, which
+compiles to 140 bytes. It is a slice rather than the stage: no expressions, no
+variables, no ring buffer, no sync, and one template. What it does settle is
+that **A and C are one piece of work**, not two — the interpreter is pure, so
+the host suite drives the same file the board runs, and there is no second
+implementation to keep in step.
+
 ### Stage 3 exit gate
 
 A new app ships as **one manifest + one pure step function + one test**,
@@ -438,7 +448,7 @@ back and undoing things" the brief is trying to avoid.
 | **D9** ✔ | Do apps own data, or only write history? | **Decided: a small bounded document per app instance, beside the log** — slots declared in the manifest, read like variables, written by a `Set` effect. See ARCHITECTURE.md "Apps own data"; build items are TODO **33**/**34** | — | — |
 | **D8** ✔ | How do hosts and devices stay compatible? | **Decided and shipped: capability negotiation via `DEVICE_INFO`** — never assume, always ask. Protocol v1 | — | — |
 | **D10** ✔ | Is a trigger a *field on a mode*, or an *object of its own*? | **Decided 2026-08-26: an object.** A *reflex* is a circumstance with an action attached, and it settles this because **most reflexes start no app at all** — "the DAW began recording, so change the light" enters no mode and has no mode to be a field on. A reflex's `then` is any action the button already has, so this adds a source of events and **no new vocabulary of consequences**. **Schedules are deliberately not migrated**: an activation says when an app may run, a reflex says what makes something happen. TODO **70**–**75**, **77**–**79** | — | — |
-| **D11** | What does "asleep" mean, and what is allowed to wake it? | **Two things with one name, decided separately.** A host-side *quiet mode* (light off, gestures ignored, clock and reactions still running) needs no firmware and can ship now; the device's deep sleep is TODO **29** and stays blocked on measurement. What may pierce either is a property of the *notice*, not of sleep - TODO **105**'s `interrupts`. TODO **104**, **105** | Before the runtime moves onto the device (Stage 3) | The device-side runtime has to know which events are allowed to wake it, and that is a wire question once the brain is over there |
+| **D11** | What does "asleep" mean, and what is allowed to wake it? | **Two things with one name, decided separately - and the host-side half shipped 2026-08-29.** *Quiet mode* (a long press at the root: light faded down, gestures ignored, clock and reactions still running) needed no firmware and is in as TODO **104** ✔; the device's deep sleep is TODO **29** and stays blocked on measurement. What may pierce either is a property of the *notice*, not of sleep - TODO **105**'s `interrupts`, still open | Before the runtime moves onto the device (Stage 3) | The device-side runtime has to know which events are allowed to wake it, and that is a wire question once the brain is over there |
 
 **D4, D5 and D6 were one piece of work with D8 — and D8 went first, on
 purpose.** The reason to batch protocol changes is that each one costs a

@@ -1,4 +1,4 @@
-"""Executors for the log/timer_toggle/webhook/osc/midi action primitives.
+"""Executors for the log/timer_toggle/webhook/osc/artnet/midi action primitives.
 
 execute() returns an ActionResult instead of raising for expected failures (a
 webhook 5xx or unreachable host) - main.py maps ok/not-ok onto the LED and
@@ -13,6 +13,11 @@ which listens on UDP rather than HTTP. It is a separate action rather than a
 webhook setting because the two differ in kind: one is a request with an
 answer, the other is a datagram that either leaves or does not. See
 [osc.py](osc.py).
+
+The artnet primitive is osc's sibling for lighting desks and Art-Net nodes
+(TODO 93) - DMX512 over the same kind of fire-and-forget UDP datagram, a
+different room's show-control language rather than a different contract. See
+[artnet.py](artnet.py).
 
 The midi primitive is its sibling for software that does not speak OSC. Its
 two halves are elsewhere for the same reason osc's encoder is:
@@ -36,9 +41,10 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import keys_io, midi, midi_io, osc, summary
+from . import artnet, keys_io, midi, midi_io, osc, summary
 from .config import (
     Action,
+    ArtnetAction,
     KeysAction,
     LogAction,
     MidiAction,
@@ -262,6 +268,26 @@ async def execute(
             )
         except (OSError, ValueError) as exc:
             return ActionResult(False, f"OSC failed: {type(exc).__name__}: {exc}")
+
+    if isinstance(action, ArtnetAction):
+        payload = artnet.dmx(action.universe, action.channels)
+        try:
+            # Same resolve-then-send shape as the osc branch, for the same
+            # reason: a hostname must not cost a blocking DNS lookup mid-press.
+            loop = asyncio.get_running_loop()
+            info = await loop.getaddrinfo(
+                action.host, action.port, type=socket.SOCK_DGRAM
+            )
+            family, socktype, proto, _canon, sockaddr = info[0]
+            with socket.socket(family, socktype, proto) as sock:
+                sock.setblocking(False)
+                sock.sendto(payload, sockaddr)
+            return ActionResult(
+                True,
+                f"Art-Net universe {action.universe} -> {action.host}:{action.port}",
+            )
+        except (OSError, ValueError) as exc:
+            return ActionResult(False, f"Art-Net failed: {type(exc).__name__}: {exc}")
 
     if isinstance(action, MidiAction):
         return _send_midi(action)

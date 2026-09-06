@@ -72,6 +72,14 @@ export class ModeEditor {
       // reflex's webhook has no app, and saying so beats inventing one.
       summaryKeys: () => (TEMPLATE_BY_TYPE[this.mode.template] || {}).summaryKeys || [],
       modeName: () => this.mode.name || null,
+      // The pool, for any *field* that offers a name - a sequence's steps are
+      // the one that does. Easy to miss because the gesture picker above
+      // reaches `_actionPool()` directly: the binding and the fields under it
+      // are built by different code, so a pool handed to one is not handed to
+      // the other. Without this a step's "Named action" list came up empty on
+      // every mode page while the same widget worked on the Actions page,
+      // which is where menu.js passes it (four ctx objects, all of them).
+      getActions: () => this._actionPool(),
     };
   }
 
@@ -912,6 +920,16 @@ export class ModeEditor {
     const offered = only ? GESTURES.filter((g) => only.includes(g.key)) : GESTURES;
     const wrap = el('div', { className: 'gestures' });
     for (const gesture of offered) wrap.append(this._gesture(gesture));
+    // Why a gesture is missing, said where it is missing (TODO 104): a list
+    // that is five long where the button has six is a question, and the answer
+    // belongs next to it rather than in a manual. Data on the descriptor, like
+    // the list itself, so a template that narrows its gestures can explain
+    // itself without a branch here.
+    if (descriptor && descriptor.gesturesNote) {
+      wrap.append(el('p', {
+        className: 'menu-hint', textContent: descriptor.gesturesNote,
+      }));
+    }
     return wrap;
   }
 

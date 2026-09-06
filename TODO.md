@@ -145,14 +145,14 @@ what to do next. This is the other view.
 | **Composition** — hooks, session summaries | 23 ✔, **31** ✔, **32** ✔ | Done |
 | **Actions as a first-class idea** | 30a ✔, 33 ✔, 34 ✔ | **Done.** The pool, the sequence and app documents with `set_value` - all three halves of **30** |
 | **Reach and hosting** — launcher, ten apps, remote UI | 0a ✔, 7 ✔, **8**, **40**, 42 ✔, **43**, **90** | The page works at phone width (42); reaching it is 8(d), an install not a feature. **40**, **43** and **90** are all "where does the host live", answered differently — and **90** is the one that forces the choice |
-| **Reaching the rest of the world** — integrations, credentials, polling | **96**, **99**, **100**, **93** | New 2026-08-29. **100** is the finding that reorders it: the best first integrations need no credential, so they are not blocked on **96**'s secret store |
+| **Reaching the rest of the world** — integrations, credentials, polling | **96**, **99**, **100**, 93 ✔ | New 2026-08-29. **100** is the finding that reorders it: the best first integrations need no credential, so they are not blocked on **96**'s secret store |
 | **Becoming a product** — security, manufacturing, the pitch | **97**, **98**, ROADMAP Stage 4/5 | New 2026-08-29, and the honest answer today is "not yet". **97** is a map with owners missing; **98** says the demo is the spec |
 | **Reaching other software** — OSC, MIDI out, clock in | 22 ✔, 24 ✔, **25** | **The outbound half is proven on real hardware** (2026-08-27): the button drives Studio One's transport. **25**'s remaining half is the DAW's Send To pointed back, which is **77**'s test |
-| **Saying a number** — ambient counting, count readout | 15 ✔, 17 ✔, **83**, **91**, **106** | The two-digit readout works; **91** lifts the 0-99 cap and adds Morse and binary, and **83** is the compiler all three share. **106** (the hour chime) is that compiler's second caller and needs no renderer of its own |
+| **Saying a number** — ambient counting, count readout | 15 ✔, 17 ✔, 83 ✔, **91**, **106** | The two-digit readout works; **91** lifts the 0-99 cap and adds Morse and binary, reusing **83**'s now-shipped compiler for the Morse scheme. **106** (the hour chime) is that compiler's second caller and needs no renderer of its own |
 | **Play** — timing and guessing games | 16 ✔ | Done for forgiving games; tight rhythm needs Stage 3 |
 | **The light as a show** — a playlist app, and the ring itself | 52a ✔, **52b** | The show ships on today's wire and cost no wire code; per-pixel (52b) is still a proposal |
 | **Getting around** — launcher, control surfaces, colour coding | 0a ✔, 26 ✔, 27 ✔, 28 ✔ | Only **26b**, an eyeball test |
-| **Power** — sleep, wake, deliberate off | **29**, **104**, **105** | **Unblocked on one half, 2026-08-29.** **104** splits a host-side *quiet mode* (no firmware, ships now) from 29's device deep sleep (still blocked on measurement), and **105** is what decides which notices may pierce it |
+| **Power** — sleep, wake, deliberate off | 104 ✔, **29**, **105** | **Half shipped, 2026-08-29.** **104** is in: a long press at the root fades the light down and stops the button answering, host-side, with schedules and reflexes still running. **29**'s device deep sleep is the other half and stays blocked on measurement; **105** decides which notices may pierce either |
 | **The shell and its vocabulary** — what things are called, where they sit | 46 ✔, 45 ✔, 48c ✔, 53 ✔, 47 ✔, 54-68 ✔, 81 ✔, 82 ✔, 85 ✔, 86 ✔, 87 ✔, 88 ✔, 92 ✔, 101 ✔, 102 ✔, 103 ✔, 107 ✔ | **Done.** The imagined read-back closed with **62** and **65**; then the owner used it, and **81-88** is what that found — all shipped (**88** absorbed into **101**, which with **102** is one change: the Actions destination is what empties the Reflexes group) |
 | **The app paradigm** — an app installed once, holding many items | 48a ✔, 48c ✔, 49 ✔, 50 ✔, 51 ✔ | **Done.** The list groups by app, the page reports reachability, and an app's own page is now the app (51) rather than its settings. Nesting the *format* is parked as **48b**, with the measurement that put it there |
 
@@ -173,6 +173,15 @@ undecided question — ROADMAP D10 (a reflex is an object, not a field on a
 mode) was the last one, and **70** in TODO_FINISHED.md has the reasoning if
 you need it.
 
+### The device now runs an app on its own — and it has never been flashed
+
+**111** shipped 2026-08-30: a compiled light show runs on the ESP32 with no
+host connected, and the host suite drives every part of it. What it has not
+had is a board. Flashing needs the service stopped (one BLE central), so it is
+a deliberate sitting rather than something to slip in: copy the four new
+firmware files plus `app.pkg`, reset, stop the service, and press the button.
+Everything else in 111's "what is left" is downstream of that working.
+
 ### The DAW rig comes first — it's a desk, not an editor
 
 **77**'s code shipped; what's left is the rig test: a second loopMIDI port,
@@ -187,23 +196,49 @@ to debug the protocol conversation over a cable that already works.
 
 ### Low-hanging fruit
 
-Nothing is currently queued here — the pick-up-cold list cleared out on
-2026-08-29 (**81, 82, 84, 85, 86, 92, 101, 102, 103, 107** all shipped and
-moved to TODO_FINISHED.md). Re-populate this at the next checkpoint (**10**).
+Re-populated 2026-09-03, after a pass that shipped **109** and 111's staleness
+UI. What is left here is genuinely pick-up-cold: each one is bounded, decided,
+and needs no hardware.
+
+- **95's picker** — the check is done (see the item): a theme is not usefully a
+  scene, so what remains is a palette set the Lights tab can apply. A table in
+  schema.js plus a row beside the system states. Two of the three themes can be
+  authored today; the ring-cast one waits on **0c**.
+- ~~**The `better` field on a counter**~~ **Shipped 2026-09-05**: `renderTally`
+  now reads `better` exactly like `renderMeasured` does, so a counter's editor
+  offers "Is one of these best?" and a `better: 'low'` counter's readout
+  crowns the quietest day instead of the busiest. Deliberately *not* extended
+  to every `tally` template - a launcher's tally (how many times the menu
+  itself opened) has no best to crown, so only the counter offers the field;
+  `test_a_tally_may_also_declare_a_best` pins that split. The frontend widget
+  is unverified by an automated test (DOM-producing code, per CLAUDE.md's
+  own convention for `tests/js/`) but was checked live against a running
+  preview instance.
+- ~~**A capability bit for standalone apps**~~ (111) — **already true, not a
+  gap**: checked 2026-09-05, `CAP_APP` already answers this. Firmware sets it
+  once `apppkg`/`runtime`/`standalone` import cleanly (they're unconditional
+  imports in firmware/main.py as of 0.9.0, so an old build without them simply
+  can't boot this main.py at all), and `webui.py`'s `/api/app` already reports
+  `"supported": ctx.device.info.has(device_module.CAP_APP)`. No separate bit
+  was needed because installing a package and running one standalone shipped
+  as one firmware capability, not two.
 
 ### The rest, in the order I would take it
 
-- **104 then 105** — long press at the root means sleep, then the tier that
-  decides what's allowed to interrupt it. 104 is bigger than it reads: three
-  real configs bind long press in a menu today, including the shipped
-  default scene, and all three need rewriting.
+- **105** — the tier that decides what is allowed to interrupt sleep, now
+  that there is a sleep to interrupt (**104** shipped 2026-08-29). Four
+  ordered tiers on a Notice, `when_free` the default; nothing else changed
+  underneath it, so this is the field, the waiting rule and the editor.
+  **A `when_free` notice waiting for an app to exit is the part with no
+  precedent** - everything else reuses 84's timeout and miss.
 - **84b** — fire or log a missed Notice window on reconnect. Needs its own
   questions answered first (what counts as "offline", whether a host-only
   action already fires with no device connected) — not low-hanging fruit.
-- **83 then 91, and 106 comes free after them** — the Morse look, then the
-  counter-as-pool, then the hour chime. One body of work: Morse, place-value
-  colours and binary are all *number → stop list*; 83's compiler is 91's
-  first scheme and 106's only requirement.
+- **83 shipped 2026-09-05** (compiler, look-pool shape, a colour-ramp overlay
+  across the message, and the editor widget) — **91 and 106 come next**, and
+  cheaper for it: place-value colours and binary are the only two schemes
+  91 still has to write, since its Morse scheme is 83's compiler called
+  directly, and 106's only remaining requirement is the recurring schedule.
 - **99 with 100 in front of it** — a reflex that polls a URL, built to reach
   the keyless endpoints (calendars, feeds) first since **96**'s secret store
   doesn't exist yet.
@@ -217,9 +252,17 @@ moved to TODO_FINISHED.md). Re-populate this at the next checkpoint (**10**).
   several sprints, and no amount of code moves them.
 - **Small, if a session stalls**: **79** (media keys as a reflex source —
   its own recommendation is *don't, until something wants it*), **52b**
-  (per-pixel ring, a protocol proposal against a frozen v1), and **109**
-  (does a stopwatch have a "fastest" — one field, needs an answer rather
-  than code).
+  (per-pixel ring, a protocol proposal against a frozen v1), and **110** (a
+  sequence cannot show a count — one seam, and the argument for waiting is
+  that Stage 3 re-decides it anyway).
+
+- **Triaged 2026-09-05 and not started**: **113** (the light library - a
+  searchable page replacing the preset dropdown, generated rather than
+  authored), **114** (a scene library per customer archetype; its research
+  half is [ARCHETYPES.csv](ARCHETYPES.csv), already written). **112**, **115**
+  and **116** went to the parking lot - a tinkerer's cipher app for the
+  release-day bank, and the two halves of multi-button work, which are
+  structural and want deciding before more hardware exists rather than after.
 
 **Known live state you may trip over:** the `no-store` header on `/static`
 needs a service restart to take effect — until then a browser will happily
@@ -230,6 +273,138 @@ from a snapshot**: after `tools/build_editor.py`, navigate to the file again
 rather than reloading, or you will test the previous build.
 
 ## Sprint
+
+### 111. The device runs its own app - Phase C, one app at a time
+
+**Asked 2026-08-30**: *"get me something that will run the lightshow app (at
+the very least) without depending on a Bluetooth connection."* Shipped the same
+day, for the light show, on the ESP32-S3 that is already on the desk.
+
+**What is on the device now.** `apppkg.py` decodes a compiled package,
+`runtime.py` is the step function over it - `(app, state, kind, param) ->
+(state, ops)`, pure, no allocation - `standalone.py` gives that a clock and a
+light, and `sequence.py` is `sequencer.py`'s rendering half so a *stop list*
+plays on-device rather than being pushed a frame at a time over the radio. The
+compiler is host-side: `aibutton/appc.py`, driven by `tools/install_app.py`.
+
+**The numbers, because they are the argument.** The owner's real config
+compiles to a **180-byte** package: the ambient menu, the light show behind it
+(two cues, both stop lists, one a 15.5 s triple fade) and a second menu. The
+whole live config is 5,893 bytes of JSON. Against 4 MB of flash.
+
+#### What can reasonably run without a host, measured 2026-08-30
+
+Derived from what each template actually keeps, not from taste:
+
+| Runs standalone now | Needs one compiler pass | Needs a runtime feature |
+|---|---|---|
+| **lightshow** - cue ring unrolled | **countdown** - its ramp is a one-shot stop list; no new runtime feature, and the *ladder* would not come | **stopwatch, counter** - variables and the durable document |
+| **signal** - one state per position (its per-position *message* stays host-side) | | **pomodoro, metronome, hotcold, reaction** - expressions |
+| **actions** - one state, plus one per launching gesture | | **notice** - a real clock, and the 32.768 kHz crystal on the BOM |
+| | | **control** - the phone, by design: every command it sends is MIDI or OSC |
+| | | **launcher** - an app list the device can enumerate |
+
+So **three of thirteen templates run today**, a fourth is a compiler pass, and
+the rest split cleanly into "needs expressions", "needs storage or a clock" and
+"needs the phone forever". `tools/install_app.py` prints this per config,
+naming every gesture and mode left behind - because what a standalone button
+will not do is a thing to read before flashing, not to discover by pressing.
+
+Six decisions worth not re-litigating:
+
+- **The compiler unrolls, the runtime walks.** "Next cue, wrapping" is not
+  arithmetic on the device: it is two states per cue (running and held)
+  pointing at each other. That is what buys a runtime with no expression
+  evaluator, no variables and no allocation - and it is the honest first slice
+  rather than a shortcut, because the apps that genuinely need arithmetic are
+  exactly the ones ARCHITECTURE.md already says need expressions.
+- **One interpreter, not two.** ARCHITECTURE.md anticipates a device runtime
+  and a host runtime guarded by a conformance suite. Until the web UI grows one
+  in JavaScript, `firmware/runtime.py` imported by the host suite is strictly
+  better than two files that agree today. The *format* is mirrored (encoder
+  host-side, decoder device-side) and is tested as one.
+- **No package means nothing changed.** Every branch is behind
+  `apppkg.load()` returning something. A board with no `app.pkg` is the board
+  it was last week, which is the safety argument for putting any of this on a
+  device you have to re-flash to debug.
+- **The host wins while it is connected.** The app takes the LED on disconnect
+  and hands it back on connect; they never write it together.
+- **The floor moved to compile time** for this path, and CLAUDE.md now names
+  all three paths to the light. A package renders with no host to clamp it.
+- **A package holds several apps, and the start app is the ambient menu.**
+  That is what makes it a button rather than one app in a box: the menu's
+  gestures `OP_ENTER` the others, leaving one returns to it, and leaving *it*
+  has nowhere above to go, so it sleeps. `_return_to` is a single slot, not a
+  stack, because `return_after` is one level host-side too.
+
+**Two bugs found by the tests rather than by a board.** The second: a menu's
+launching gesture was emitted as a *transition* whose target was the app index
+- but a transition points at a **state**, so it jumped inside the menu and the
+runtime printed "transition to missing state". Launching is an **op**; the
+gesture now goes to a one-op state whose only job is the `OP_ENTER`. The
+unrolling rule, one layer up from where it was first needed.
+
+**The first, and why the sweep samples past one cycle**: the two stop-list walkers accumulated a cycle's length in different
+orders - `at + (fade + hold)` versus `(at + fade) + hold` - differed by one
+ulp, and therefore disagreed *completely* at the loop seam, where the modulo
+landed at the end of the previous cycle instead of the start of the next.
+Identical for 30 frames, then one frame of a totally wrong colour, every loop.
+
+#### What is left, in the order it matters
+
+- **Untested on hardware.** Everything above is driven by the host suite and a
+  by-hand simulation; the board has not been flashed. That is the next thing
+  and it needs a service stop.
+- **The countdown**, which is the next cheap one: its ramp compiles to a
+  one-shot stop list and its ring is an `OP_PLAY`. No runtime change. What
+  would not come is the ladder, which is a second animation layer over the
+  same light.
+- **Expressions**, for the metronome. The stress case ARCHITECTURE.md names,
+  and the thing the unrolling trick deliberately postpones.
+- **The event ring buffer** (128 KB at 8k events), which is what actually
+  breaks the tether: presses while disconnected are still dropped, and the
+  firmware still says so in a comment.
+- ~~**Sync.**~~ **Done 2026-08-30, the same day**: `APP_PACKAGE` installs a
+  package over BLE through the running service (`install_app.py --push`, or
+  `POST /api/app/install`). Three decisions in it:
+  - **The payload is opaque to the transport.** Whoever compiled it - the PC
+    today, a phone later, a store one day - the device sees a length, bytes and
+    the package's own checksum. That is what makes the phone app a *client* of
+    this protocol rather than a second implementation of it, and it is the
+    reason to have designed the transport this way before the phone exists.
+  - **The old package survives every failure.** Length, CRC and a full decode
+    all pass before anything is written, and the first error is the one
+    reported (a transfer refused at BEGIN must not read back as "a chunk
+    arrived with no transfer open").
+  - **A package's fingerprint is the CRC it already carries, read not
+    recomputed.** A CRC-16/CCITT over a file that *ends* in its own CRC is the
+    constant 0x0000 - so the recomputed version, which is what was written
+    first, would have matched for every package ever built and the staleness
+    check would have been silently dead. `test_app_push.py` caught it by
+    compiling two different configs and expecting two different answers.
+
+  What is left of sync is the other direction: events up, time down. Nothing
+  goes up yet.
+- ~~**The staleness warning has an endpoint and no UI.**~~ **Shipped
+  2026-09-03**: an "On its own" section at the foot of the Apps page, which is
+  the page that already answers "can anything get to this?" one level up.
+  `standaloneVerdict` (schema.js, pure, table-tested) turns `/api/app` into one
+  of five states - unsupported, unbuildable, empty, stale, current - and the
+  section names the start menu, the apps that made it, every mode that stays
+  host-only with what it is waiting on, every gesture dropped with why, and an
+  **Install on the button** button. Three things worth not re-deciding: the
+  answer is fetched **once per load, not per render**, because the server
+  compares against what is on *disk* and typing cannot move it (Save and
+  Install drop the cached answer instead, and an unsaved page says so beside
+  the button); **`installed_crc: 0` is "no package", not a checksum**, which is
+  what a never-flashed board actually reports and would otherwise have read as
+  merely out of date; and a service too old to answer costs the *section*, not
+  the page.
+- **A capability bit.** Nothing on the host negotiates "runs apps standalone"
+  yet, so no bit was burned. Add one when a host needs to ask.
+- **Power.** None of this touches ROADMAP **3c**, and 3c is still what decides
+  whether MicroPython holds the runtime plus storage plus sync inside budget.
+
 
 ### 77. The DAW tells the button what it is doing, and the light says so
 
@@ -452,61 +627,9 @@ The point of that test is to prove the *protocol* conversation works - which
 notes, which velocities, which device type - and it is much cheaper to debug
 with a cable that already exists than through a new one being written.
 
-**83 and 84b are what's left of the shell read-back's second pass** — raised
-2026-08-29 alongside 81, 82, 84, 85, 86, 87 and 88, all of which shipped the
-same week and now live in [TODO_FINISHED.md](TODO_FINISHED.md).
-
-### 83. A Morse code look — *decided: it is a stop-list generator, not a drive*
-
-**Asked 2026-08-29:** *"I see this fitting in the Sequence 'Driven By' — the
-user selects 'Morse Code Message', types the message, and the light plays it,
-with a playback speed."*
-
-**The message is right and the home is not, and it matters which.** `drive`
-answers *"what moves this stop list along"* — a clock, an app's `progress`, a
-metronome's `beats` — and it is sampled or walked against a number the app
-supplies. Morse supplies no such number: it is a fixed timeline, which is
-precisely what `drive: "clock"` already means. Putting it in `DRIVES` would
-add a fourth thing that is not the same kind of thing as the other three.
-
-**What Morse actually is: a way of writing a stop list.** A dot is on for one
-unit, a dash for three, the gap inside a letter is one, between letters three,
-between words seven — every one of those is a `Stop` with a `hold_s` and no
-fade. So this needs **no runtime at all**: it needs a pure compiler from text
-to `tuple[Stop, ...]`, and everything downstream (the walker, the flash floor,
-the device, the editor's preview) treats the result as the ordinary stop list
-it is. That also means it survives the move onto the device unchanged, which a
-new drive would not.
-
-The shape:
-
-- `aibutton/morse.py` — pure, no imports from the package, like
-  [ramp.py](aibutton/ramp.py) and [ladder.py](aibutton/ladder.py) beside it.
-  `encode(message, unit_s, color) -> tuple[Stop, ...]`, plus the alphabet as
-  data. Unknown characters are **dropped with a warning, not guessed**.
-- A look-pool entry gains a `morse` shape beside `stops`: `{"morse": "SOS",
-  "wpm": 8, "color": "#ff0000"}`, expanded at parse time in `_parse_look`.
-  Stored as written and expanded on load, so the editor shows the message and
-  not two hundred stops.
-- `repeat` is the existing field and already means the right thing: a beacon
-  repeats, a one-shot announcement does not.
-
-**The catch, and it is the reason to write this down before building it.**
-`config.sequence_safe` floors every stop's dwell at half the flash period.
-With `min_flash_period_s` at its 3 Hz default that floor is 0.167 s, and the
-one-shot exemption (≤3 stops) cannot apply to a message. Morse's unit is
-`1.2 / wpm` seconds, so **the floor caps this at about 7 WPM** — and at the
-0.3 s currently configured here, about 8. That is slow for an operator and
-about right for a light a person reads by eye, so the honest answer is to cap
-`wpm` in the parser at what the floor allows, warn when a config asks for
-more, and let anyone who means it lower the flash floor deliberately the way
-that setting already allows. **Do not add an exemption**; the floor is doing
-exactly the job it exists for.
-
-**Done when**: a look can hold a message, the editor previews it on the
-button through the colour engine like any other stop list, the speed is
-capped against the live flash floor with a warning rather than clamped in
-silence, and `tests/` has the alphabet checked against a table.
+**84b is what's left of the shell read-back's second pass** — raised
+2026-08-29 alongside 81, 82, 83, 84, 85, 86, 87 and 88; all but 84b have
+shipped and now live in [TODO_FINISHED.md](TODO_FINISHED.md).
 
 ### 84b. Fire (or at least log) a missed window on reconnect, not just live
 
@@ -710,7 +833,9 @@ list should lead with.
 at 0-99** (`_READOUT_MAX`). The ask is three schemes and no cap:
 
 1. **Morse.** Numbers are five symbols each and unambiguous - and this is
-   **83**'s compiler, reused. If 83 is built first this costs almost nothing.
+   **83**'s compiler, reused directly (`morse.encode(str(n), unit_s, color)`
+   handles digits already). 83 shipped 2026-09-05, so this scheme is close to
+   free.
 2. **Place-value colours.** A colour per decimal place (1s blue, 10s cyan,
    100s green, 1000s yellow, user-editable and extendable), each place blinking
    its digit 1-9 times, on a steady strobe. 1021 is yellow, cyan, cyan, blue.
@@ -729,30 +854,6 @@ lean on the clamp, and any new scheme has to do the same or say why.
 **Done when**: a number of any size can be read back in any of the three
 schemes, the scheme and its colours are configured on the counter rather than
 on each binding, and the tests are tables of `(value, scheme) -> stops`.
-
-### 93. DMX — *decided: Art-Net over UDP is an action, wired DMX is hardware*
-
-**Asked 2026-08-29: "DMX integrations possible?"** Yes, and the split is
-clean.
-
-- **Art-Net and sACN (E1.31) are DMX over UDP**, which is the shape
-  [osc.py](aibutton/osc.py) already has: a datagram that either leaves or does
-  not, no dependency, no reply. Every serious lighting desk, QLab, Resolume,
-  Chamsys and a £30 Art-Net node speak it. **This is an action, and it is the
-  same size as `osc` was.**
-- **Wired DMX512 is RS-485** and needs a transceiver on the ESP32 or a USB
-  interface on the host. Real, but hardware, and Art-Net nodes are cheap
-  enough that it is hard to justify.
-
-The interesting idea underneath, worth naming and not building yet: **the
-button's own look driving DMX channels**, so the room follows the light in
-your hand. That is a `Sequence` sampled into channel values, which the
-sequencer can already do - but it is a second renderer, and renderers are
-where this system keeps its discipline. Decide it deliberately.
-
-**Done when**: an `artnet` action sends a universe's worth of channels to a
-host and port. The room-follows-the-button idea gets its own number if it is
-ever wanted.
 
 ### 94. One "Lights" app out of Light Show and Signal
 
@@ -806,8 +907,35 @@ What might still be missing after that check: shipped themes worth having
 (one high-contrast, one warm, one that is legible on the 3V3 ring's colour
 cast - see **0c**), and a way to preview one without committing.
 
-**Done when**: either a handful of theme scenes ship with a picker, or there
-is a written reason why a theme is not a scene.
+#### The check was run 2026-09-03, and the answer is "mechanically yes, usefully no"
+
+**Mechanically a theme is a scene.** `scenes.merge` is shallow and key-by-key,
+so a file carrying only `led_palette`, `looks` and `state_looks` inherits the
+modes, the settings and everything else from the base. Nothing needed
+building for that to be true.
+
+**But a scene is a *slot*, not a layer, and the slot is already taken.** One
+scene is active at a time (`scenes.active` is a single id), and this config's
+active scene is `personal`, which carries the whole thing - modes included.
+Switching to a theme scene would not tint the arrangement, it would *replace*
+it. Stacking a second overlay is exactly what "there is one parser and scenes
+merge before it" exists to prevent, and `ConfigManager.write_path` compounds
+it: edits go to the active scene, so a theme in that slot would quietly become
+where every subsequent edit lands.
+
+**So this is the UI item the write-up predicted** - "apply a palette set",
+writing the colours into whatever is already active, rather than a second
+config layer. A picker on the Lights tab beside the system states, and a table
+of palettes in schema.js.
+
+**One of the three asked-for themes cannot be authored yet.** "Legible on the
+3V3 ring's colour cast" needs **0c**'s eyeball test - its `#ffffff`-reads-as-
+white question is still open - so shipping that one before the bench sitting
+would be inventing numbers. The high-contrast and warm ones do not wait on
+anything.
+
+**Done when**: a handful of themes ship as a palette set the Lights tab can
+apply. Not as scenes - that question is answered above.
 
 ### 96. Pre-built integrations — *and the secret store that has to come first*
 
@@ -983,66 +1111,10 @@ which need a URL, and the first one built is a URL.
 living with the finished nav. **101, 102, 103 and 107 shipped** and now live
 in [TODO_FINISHED.md](TODO_FINISHED.md). What's left:
 
-### 104. Long press at the root means sleep - and sleep is host-side first
-
-**Asked 2026-08-29.** *"Long press should be removed from Actions. If it is
-the outer-most menu, let's make long press 'sleep'. Then long press again
-wakes the device."*
-
-**This does not break CLAUDE.md's invariant, it completes it.** Long press
-means *up one level, everywhere*. At the root there is no level above, and the
-honest answer to "up" there is **off**. One sentence, no exceptions added.
-
-#### The split that makes this shippable now
-
-**Quiet mode is host-side and needs no firmware.** LED off, every gesture
-except the wake one ignored, no app entered, and **schedules and reactions
-keep being evaluated** - the host is awake, it simply stops speaking. Zero
-protocol change, testable end-to-end against `MockDevice`.
-
-**Deep sleep is the device, and that is 29**, which is blocked on measuring
-what the board actually draws and needs `GESTURE_HOLD`. Do not wait for it.
-The two share a name in the UI and nothing else; write quiet mode so that 29
-can later make it *also* cut power, without the meaning changing.
-
-#### What it costs today, and it is not nothing
-
-`long_press` stops being bindable in an `actions` mode, which is the same move
-`_parse_control_body` already makes for a control surface: **dropped with a
-warning, not rejected.** Precedent exists and is in CLAUDE.md's invariants.
-
-**Three real configs bind it and all three must be rewritten:**
-
-| File | Mode | Currently |
-|---|---|---|
-| `config.json` | Main Menu | `enter_mode` to Pomodoro 2 |
-| `scenes/default.json` | Home | `enter_mode` to Pomodoro |
-| `scenes/personal.json` | Main Menu | `readout` of "Habit" |
-
-`scenes/default.json` is a **shipped artefact** (**92**), so this is a change
-to what a new user opens, not a scratch edit. Move both `enter_mode` bindings
-onto a triple tap or a launcher, and decide where the Habit readout goes.
-
-#### Four decisions, three of them recommended here
-
-- **Only a long press wakes.** A short press would wake it in a pocket, and
-  the gesture should be the same one on the way in and out.
-- **The wake press is swallowed.** 29 already names this; without it, the
-  first thing waking does is fire whatever short press is bound.
-- **Going down is visible.** 29's own words: *off must be distinguishable from
-  broken.* Fade to black over about a second rather than snapping - that is a
-  three-stop one-shot sequence and costs nothing.
-- **There is nothing to return to.** Sleep is bound at the root, so waking
-  lands at the root. That is the reason it is bound there rather than being a
-  gesture apps have to opt out of.
-
-**Done when**: a long press with no app running turns the light off and the
-button stops answering; a long press turns it back on without firing anything;
-the shipped default scene no longer binds long press in a menu.
-
 ### 105. A notice says how far it is allowed to interrupt
 
-**Asked 2026-08-29, alongside 104**, and it is the question sleep forces:
+**Asked 2026-08-29, alongside 104** (which shipped the same day), and it is
+the question sleep forces:
 *"some notices should take over no matter what, even when asleep. Some notices
 take over only when idle or in a menu."* **Settled the same day at four tiers,
 not three** - the owner's completion was that *"While Awake"* has to be
@@ -1250,42 +1322,28 @@ not for one small LED on a desk") instead of asserting a seizure risk.
 `tests/test_flash_floor.py` pins the **silence**, because a warning creeping
 back is a regression nobody notices until it has been in a log for a week.
 
-**Steps 1, 2 and 4 remain**: the number is still edited on the Device page
-rather than asked once at setup, and `metronome_flash` still divides above
-180 BPM whatever the effective floor is.
+**Steps 1 and 2 remain**: the number is still edited on the Device page
+rather than asked once at setup.
+
+**Step 4 was already true, checked 2026-09-03** - the sentence that used to
+stand here ("`metronome_flash` still divides above 180 BPM whatever the
+effective floor is") was wrong. It takes `min_period_s` and both call sites
+pass `cm.config.min_flash_period_s`, so the division is derived from the
+*effective* floor and nothing else. Measured, with this config's chosen
+0.300 s beside the 0.333 s default:
+
+| BPM | default floor | at `min_flash_period_s: 0.300` |
+|---|---|---|
+| 180 | every beat | every beat |
+| 200 | **every 2nd** | every beat |
+| 240 | every 2nd | every 2nd |
+| 300 | every 2nd | every 2nd |
+
+So there is nothing to drop: lowering the floor already buys the beats back,
+and 240 needs 0.25 s. What is left of step 4 is step 2 deciding the number.
 
 **Done when**: no warning fires on load for a deliberately chosen floor, the
 choice is made once at setup, and a 240 BPM metronome flashes on every beat.
-
-### 109. Does a stopwatch have a "fastest"?
-
-**Raised 2026-08-29 while building 101(b), and it is a one-word change with a
-real question under it.** The sidebar sketch asked for *Fastest: 7:57* under a
-"Mile Run" stopwatch. What shipped is *12 runs so far · last Aug 20*, because
-the stopwatch's readout descriptor sets `better: null` and the note above that
-field says why: set it *"only where best is a fact about the app rather than a
-guess about the person using it."*
-
-A stopwatch is the case that tests that rule. The same template times a mile
-run, where quicker is better, and a loaf of bread, where it is not.
-
-Three options, and the second is the recommendation:
-
-- **Set `better: 'low'` on the stopwatch.** One word. Every stopwatch then
-  advertises its fastest, including the ones where that is meaningless.
-- **Let the *item* carry it** - a `better` field on the mode, defaulting to the
-  template's. Honest, and it is what "Mile Run" and "Cake" actually differ by.
-  Costs a config key, a parser fallback, a schema.js field and a mirror test,
-  which is why it is an item rather than a word.
-- **Leave it.** The count and the recency are true of every app and cost
-  nothing; "fastest" was one line of a sketch rather than a stated need.
-
-**The same question reaches the countdown and the metronome**, which also set
-`better: null` for the same reason - so whichever way this goes, it goes for
-all three at once.
-
-**Done when**: a stopwatch either shows a best, or is recorded here as
-deliberately not showing one.
 
 ### 52b. Per-pixel ring patterns *(a protocol proposal, not a decision)*
 
@@ -1736,6 +1794,22 @@ certbot, add a docker-compose service and a reverse-proxy vhost.
 
 ### 10. Checkpoint — review and re-triage
 
+**Eight red tests, 2026-09-03, and not one of them was a bug in the code.**
+Worth recording because it is the shape this file's own rule predicts: a
+lingering red test is cheap, but eight of them stop saying anything. Four were
+tests left behind by decisions that had already shipped — the readout guard
+still counted the templates from before `alarm` and `reminders` merged into
+`notice` (**84**), the round-trip still expected a counter without `durable`
+(**34**), a reminder still asserted that a timeout logs *nothing* when 84 made
+outcome logging unconditional, and the mirror reader could not follow
+`POOL_ACTIONS = HOOK_ACTIONS` because it only read array literals. The other
+four were migration artefacts: `long_press` became `tap_4` in a shared test
+config (**104**), which made all three max-taps cases answer 4, and two
+document tests pressed three times 0.12 s apart *inside* the 2 s SUCCESS hold
+the run loop deliberately discards behind. **The lesson for the next pass: a
+decision that changes what is logged or serialised needs a grep for tests
+asserting the old rule, in the same sitting.**
+
 **Last run: 2026-08-29** — a context-cost pass, not a feature sprint. Moved
 every fully-shipped item (whole items only, per "How to work this list") to
 the new [TODO_FINISHED.md](TODO_FINISHED.md), rewrote the Sprint list's
@@ -1913,7 +1987,151 @@ back on 2026-08-21 (**0c**), so "wake on a button press" is testable again -
 **once the board has been reflashed onto the new pins**, which is what makes a
 physical press reach the host at all.
 
+### 110. A sequence cannot show a count, and the reason is a seam
+
+**Reported 2026-08-29**: *"Read count isn't available in the 'Do several
+things in order' dropdown."* Correct, and deliberate today - `readout` is
+absent from `SEQUENCE_ACTIONS` (config.py, mirrored in schema.js, drift-tested)
+alongside `enter_mode` and `standby`. What makes it worth an item rather than a
+line of documentation is that **"log it, then show me the total" is the most
+natural sequence anyone would write for a habit button**, and it is the one
+sequence that cannot be written.
+
+**Two obstacles, and the second is the interesting one.**
+
+1. **`actions.execute()` has no light.** Its collaborators are `store`,
+   `documents`, `webhook_transport` and `session` - deliberately, since it runs
+   fire-and-forget primitives and a sequence's steps run inside it. A readout's
+   entire output *is* the light, so no amount of editor work reaches it.
+2. **The SUCCESS flash would cut it off.** `handle()` plays SUCCESS after any
+   ordinary action, and `set_led` cancels the running stop list on every call -
+   which is exactly why `ReadoutAction` returns early from `handle()` and never
+   goes near `execute()`. Give `execute` a light and a readout at the end of a
+   sequence still dies about 200 ms in.
+
+**The shape of a fix, if it is worth it.** An optional `show=` callback on
+`execute()`, in the same shape as its other injected collaborators, plus a way
+for a result to say *"do not flash over me"* - the honest form of which is
+`ActionResult` growing a flag that `handle()` reads, rather than `handle()`
+sniffing the action tree for a readout step. That flag is the part to think
+about before building: it is a second thing an action can say about *how it
+should be presented*, and there is exactly one caller for it today.
+
+**Cheaper alternatives that need no core change**, in order of how much they
+give up: bind the readout to its own gesture beside the sequence (what the
+button does now); or accept that a sequence's feedback is SUCCESS and put the
+number on the web UI instead.
+
+**Not blocked on anything.** It is a decision about widening one seam, and the
+argument for waiting is that `run_countdown`-style loops move to the device in
+Stage 3 while `execute()` does not - so a light seam added to `execute` today
+is a seam that has to be re-decided there.
+
 ---
+
+### 113. The light library - a page, not a dropdown
+
+**Asked 2026-09-05**: *"Remove our current light presets menu in favor of a
+light library - a separate page with a massive bank of categorized, searchable
+light presets... I'm hoping for at LEAST tens of thousands of options."*
+Triaged, not started.
+
+**What exists.** `LOOK_PRESETS` in schema.js is **142 entries** in one strict
+JSON array, grouped nine ways, offered as a group-scoped dropdown by
+`modeEditor.js` and by `colorEngine.js`'s look editor. `test_look_presets.py`
+slices the array out of the source and feeds **every** entry through the real
+Python parser, so no preset can ship a colour the config rejects or a rate the
+flash floor would rewrite.
+
+**Why the current shape cannot hold the ask.** Three limits, all real:
+
+- **schema.js is shipped whole.** 142 entries is ~20 KB. 30,000 is ~4 MB, in
+  an ES module the browser parses before the editor draws, and
+  `tools/build_editor.py` **inlines it into one offline HTML file**. The
+  library has to become a separate, fetched, paged data file; schema.js keeps
+  a curated few dozen for the inline "start from a preset" path, or that path
+  becomes a link to the library page.
+- **A dropdown is not a search.** Tens of thousands needs a query, tags and
+  facets (source, colour family, style, motion, "safe in a strobe-sensitive
+  room"), not `<optgroup>`.
+- **Nobody can hand-author 30,000 looks.** They have to be **generated** from
+  source tables x recipes: ~200 national flags, club and franchise colour
+  pairs, holidays and festivals, game and film palettes, common Morse
+  messages (83's compiler already emits those as stop lists), colour-theory
+  sets. `tools/build_light_library.py` writing a dated data file is the shape;
+  hand-written entries stay a curated overlay on top of it.
+
+**The honest ceiling, worth saying out loud before promising a number.** One
+RGB LED means a look is *colour x colour2 x style (6) x period x optional stop
+list*. Tens of thousands of **rows** is easy; tens of thousands of
+**distinguishable** looks is not - past a few thousand, two entries differ by
+20 ms of period and nobody can tell. So the generator must **dedupe on
+perceptual distance**, and the number that gets advertised should be the one
+that survives it. A library of 8,000 looks anybody can find in three keystrokes
+beats 40,000 nobody can tell apart.
+
+**The rules it must not break.**
+
+- **The flash floor is a generation-time gate here**, exactly as `appc.py`'s
+  `_look_bytes` is for packages. An entry the parser would clamp must not be
+  emitted at all - clamping a preset silently makes the preset a lie, which is
+  the same argument CLAUDE.md makes for `min_flash_period_s`. A sequence entry
+  clears the second floor (`config.sequence_safe`) too.
+- **`test_look_presets.py` keeps its teeth.** It cannot parse 30,000 entries
+  per run, so it validates the curated overlay whole plus a fixed **seeded
+  sample** of the generated file, and the generator carries the gate. The
+  invariant survives; the runtime does not blow up.
+- **A preset is still a starting point, never a stored thing.** Picking one
+  copies its body. Nothing in the library reaches `config.json`, which is the
+  only reason it can be this big at all.
+
+**The "+" the ask names** is the other half: the library page is also where a
+named look is *composed* - click "+" to push a colour onto a look you have
+named, rather than editing one effect at a time. That is a second editor
+surface over the same look object, not a new config shape.
+
+**One question to answer before release, not after.** Colour pairs are not
+protectable; **club and franchise names are trademarks**. Shipping a preset
+called by a club's name invites a letter; shipping "Green Bay - Green & Gold"
+does not, and users still find it by searching the team name if the *tags*
+carry it. Decide the naming policy at generator level, once, or it has to be
+unpicked across every generated row. Flags, holidays, colour theory and Morse
+carry no such problem.
+
+### 114. A real scene library, and the archetypes it is built from
+
+**Asked 2026-09-05**: *"Let's actually build a running scene library... files
+for many different customer identity archetypes."* The research half is
+**done** ([ARCHETYPES.csv](ARCHETYPES.csv), 2026-09-05); the scenes are not
+started.
+
+**What exists.** `scenes/` holds two files - `default.json` and
+`personal.json`. A scene is a raw dict layered over `config.json` inside
+`load_config_full`, so every parser fallback already applies to it and a broken
+scene is reported rather than fatal. That machinery is finished; what is
+missing is *content*, plus the small amount of metadata a picker needs.
+
+**What a library needs that a scene does not have today.**
+
+- **Self-description.** A title, a one-line blurb, who it is for, and what it
+  assumes (a DAW, a MIDI port, a webhook endpoint, more than one button).
+  Today a scene is anonymous data; a gallery needs a header. Cheapest shape is
+  reserved top-level keys promoted to real fields.
+- **Honest degradation at pick time.** A musician scene naming a loopMIDI port
+  this machine does not have must land with a warning the picker *shows*, not
+  a silent no-op. `needs_restart` is the precedent - same idea, different
+  failure.
+- **A gallery, not a dropdown.** Same argument as **113**, one order of
+  magnitude smaller.
+
+**[ARCHETYPES.csv](ARCHETYPES.csv) is the input, and it is also a roadmap
+feed.** Each row scores how likely marketing is to land (1-100), says what the
+button solves for that person, and names **2-3 things they would want that the
+button cannot do today**. Those gap columns are where the next app ideas come
+from - read them before inventing one. The top-scoring archetypes are the
+scenes to write first; the low scorers are written down to record *why not*,
+so the question is not re-opened every quarter.
+
 
 ## Smaller, worth doing
 
@@ -2078,6 +2296,103 @@ physical press reach the host at all.
   version first.
 
 ---
+
+- **112. "Secret Message" - a private alphabet in dots, dashes and colour.**
+  Asked 2026-09-05, filed **C-tier, for the release-day bank of apps** rather
+  than for now. *"A person can use their own distinct combinations of dots,
+  dashes, and colors to represent individual characters... they can print a
+  small decoder sheet."*
+
+  **Most of it already exists.** **83** shipped the message compiler: text ->
+  stop list, with a colour ramp overlaid across the message and an editor
+  widget. Secret Message is that compiler pointed at a **user-defined
+  alphabet** instead of the Morse table - a map from character to
+  `(symbols, colour)` - and it is therefore a *table plus a picker*, not a new
+  runtime feature. It compiles to a stop list, so it installs into a package
+  and plays standalone (111's "needs one compiler pass" column).
+
+  **The genuinely new part is the decoder sheet**, and it is the reason to
+  build the app at all: a printable page mapping each character to its symbol
+  and colour, generated from the same table the button plays. That is a new
+  *output* for the editor - a print stylesheet over generated HTML - and
+  nothing else in the project produces paper. Cheap, but it is the work.
+
+  **Two things to decide when it is picked up.** Whether an alphabet is a
+  config object of its own (shareable, nameable, reusable across modes) or a
+  field on the app - the pool pattern in CLAUDE.md argues for the former. And
+  whether colour carries meaning *per character* or *per word*: per character
+  multiplies the alphabet by the number of distinguishable colours and makes
+  short messages possible, which is the point, but it is also the part a human
+  reading the sheet will get wrong first.
+
+- **115. Sync and Crowd Sync - one name over two very different problems.**
+  Asked 2026-09-05: a light show that runs across several buttons - *"at
+  sports games you can blast your teams colors in a gradient across the stands
+  and even have coordinated lightshows."* Parked as **next-gen**, and blocked
+  behind **116**, but the triage is worth keeping because the two halves cost
+  wildly different amounts.
+
+  **Split them, because one is nearly free and one is a product.**
+
+  - **Sync** = several buttons, one host, one owner. The host already owns all
+    state and already renders the show; making two lights show the same thing
+    is not a clock problem, it is the *singular device seam* (see **116**).
+    Cost is almost entirely 116's.
+  - **Crowd Sync** = strangers, a server, and a shared clock. That is an
+    account system, a backend, a phone doing the networking (the button has no
+    internet and never will), and time base good enough that a 0.45 s strobe
+    does not visibly scatter across a stand. ARCHITECTURE.md's latency budget
+    is the arbiter here, not taste.
+
+  **The stadium gradient is not a sync problem, and noticing that is the cheap
+  first slice.** One LED is one pixel; "a gradient across the stands" is each
+  button knowing *its seat* and looking up a colour. That is a lookup plus a
+  join code - no coordinated animation, no tight clock - and it would demo
+  most of the vision. Coordinated *animation* is the expensive half, and it
+  wants a start-time-plus-show-description push (play show X starting at time
+  T) rather than a stream of frames, so that jitter costs alignment and not
+  the whole show.
+
+  **The image-as-pixels idea belongs here**, not in 116: once each button
+  knows a seat index, "each button is one pixel of an image" is the same
+  lookup with a bigger table.
+
+- **116. More than one button - the mesh, and apps that unlock at N.**
+  Asked 2026-09-05: *"people can combine whatever number of buttons can
+  realistically network together... certain apps would unlock when you have
+  the minimum required number of buttons connected. When any button triggers
+  a synced app, it takes over all of the others until the app is closed."*
+  Parked as **next-gen**; it is the structural item **115** waits on.
+
+  **The blocker is that "the device" is singular everywhere.** `main` holds
+  one `ButtonDevice`; `BLEDevice` connects to one peripheral; the web UI shows
+  one status line and one virtual panel; `config.json` is one button's gesture
+  map. None of that is wrong today - it is exactly the interface segregation
+  CLAUDE.md argues for - but every one of those is a place where "which
+  button?" has no answer yet. **Decide the addressing model before writing
+  any of it**, because it reaches config, the protocol and the UI at once.
+
+  **One question decides the shape.** Is a second button *another device the
+  host owns*, or *a peripheral of the first button*? Today's architecture says
+  the first and is cheap; ARCHITECTURE.md's direction of travel (the brain
+  moves onto the device) says the second and is not. The wrong answer is
+  expensive after hardware ships - which is the standing reason this file
+  cares about it early.
+
+  **The cheap slice that needs no mesh at all**: an app declares how many
+  buttons it needs, and the launcher hides the ones whose minimum is not met.
+  That is a config field plus a filter over `launcher_targets`, it can be
+  written and tested with a mock second device, and it is the piece every
+  later idea assumes.
+
+  **App ideas from the ask, triaged by what they are actually worth.** A full
+  QWERTY across N buttons is an *advert*, and should be built as one - it is
+  not a product. Bigger menus and a macro hub (keys/OSC/MIDI over several
+  buttons) are the real use, and they reuse actions that already exist. A
+  walkie-talkie / pager over morse is the one with a genuinely new
+  requirement, and it is device-to-device messaging, which is the mesh itself
+  rather than an app on top of it.
+
 
 ## Done
 

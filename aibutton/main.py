@@ -68,12 +68,20 @@ _ERROR_DISPLAY_S = 1.5
 # SUCCESS hold time; the device's green window matches it.
 _SUCCESS_DISPLAY_S = 2.0
 
-# What IDLE looks like while the ambient layer is asleep (config.StandbyAction).
-# Dim rather than off, and solid rather than animated: "asleep" and "unplugged"
-# have to be different things to look at, and a light that is not moving is the
-# least attention this build can ask for while still answering the only
-# question standby raises - is it still on?
-_STANDBY_COLOR = "#101010"
+# What IDLE looks like while the ambient layer is asleep (config.StandbyAction,
+# and the long press at the root - TODO 104). **Off, not dimmed.** A dim ember
+# was tried first, on the argument that "asleep" and "unplugged" have to look
+# different; the owner's answer is that sleep means dark, and the difference is
+# carried by _SLEEP_FADE_S below instead - you *watch* it go out, which nothing
+# broken does. Solid black rather than no effect at all, because "no effect"
+# means the palette's own IDLE entry and that is the light being asked for.
+_STANDBY_COLOR = "#000000"
+# How long the light takes to go down. Going to sleep is *watched* - it is a
+# deliberate gesture and the thing it does is make the button stop answering,
+# so a snap to dark would be indistinguishable from the crash it most resembles
+# (ROADMAP 29: off must be distinguishable from broken). Coming back is a cut,
+# not a fade: a wake should feel like an answer, not an entrance.
+_SLEEP_FADE_S = 1.0
 
 # How long a control surface holds its per-command confirmation. Much shorter
 # than _SUCCESS_DISPLAY_S on purpose: that one ends with a drop back to IDLE,
@@ -482,6 +490,59 @@ async def run(
             # downstream has to know one was involved.
             self.sequence_task: asyncio.Task | None = None
 
+        def standby_look(self, state: LEDState):
+            """The dark IDLE wears while the ambient layer is asleep, or None
+            for "whatever this state normally wears".
+
+            One definition with two callers - `set_led` substitutes it and
+            `_drive_sequence` lands a finished one-shot on it - because "what
+            does asleep look like" answered in two places is the drift CLAUDE.md
+            names about floors, one layer up.
+            """
+            if self.standby and state is LEDState.IDLE:
+                return LedEffect(style="solid", color=_STANDBY_COLOR)
+            return None
+
+        def set_standby(self, asleep: bool) -> None:
+            """Put the ambient layer to sleep, or wake it, and show the change
+            (TODO 104).
+
+            **Going down is visible**: a one-shot fade from whatever IDLE is
+            wearing to black. A one-shot fades from black by construction
+            (`sequencer.Sequence`), so the first stop is a hard cut to where the
+            light already is and the second is the movement - two stops, which
+            is inside `sequence_safe`'s one-shot exemption, so the fade is not
+            floored into a jump.
+
+            **The flag flips after the push, and that is load-bearing**:
+            `set_led` substitutes the dark for anything IDLE wears while
+            `standby` is true, so setting it first would replace this fade with
+            the very colour it is fading to. Nothing can arrive in between -
+            there is no await here - and `_drive_sequence` reads the flag when
+            the fade *ends*, which is when it should be true.
+            """
+            if not asleep:
+                self.standby = False
+                self.set_led(LEDState.IDLE)
+                self.set_status("IDLE")
+                return
+            base = self.base_look(LEDState.IDLE)
+            self.set_led(LEDState.IDLE, sequencer.Sequence(
+                stops=(
+                    sequencer.Stop(
+                        color=getattr(base, "color", None) or _STANDBY_COLOR,
+                        hold_s=0.0, fade_s=0.0,
+                    ),
+                    sequencer.Stop(
+                        color=_STANDBY_COLOR, hold_s=0.0,
+                        fade_s=_SLEEP_FADE_S, curve="ease_in",
+                    ),
+                ),
+                repeat=False,
+            ))
+            self.standby = True
+            self.set_status("STANDBY")
+
         async def _drive_sequence(self, state: LEDState, seq: sequencer.Sequence) -> None:
             """Walk `seq`'s planner, pushing each frame as a plain solid
             `LedEffect` - never a Sequence itself, since `device.set_led`
@@ -509,9 +570,14 @@ async def run(
                     # device) already mean by "no override" - falling back to the
                     # palette entry, not to whatever `active_mode` still names for
                     # this state, which would just restart the same sequence.
-                    self.device.set_led(state, None)
+                    # Unless the layer is asleep, where the palette's IDLE is the
+                    # bright light this one-shot has just faded out of (TODO 104):
+                    # dark is what IDLE *means* then, so landing anywhere else
+                    # would undo the fade at the moment it finished.
+                    resting = self.standby_look(state)
+                    self.device.set_led(state, resting)
                     self.status.led_state = state.value
-                    self.status.led_effect = None
+                    self.status.led_effect = resting
                     return
                 effect = LedEffect(style="solid", color=frame.color)
                 self.device.set_led(state, effect)
@@ -547,7 +613,7 @@ async def run(
 
             if effect is None:
                 effect = look_for(self.cm.config, self.active_mode, state)
-            if self.standby and state is LEDState.IDLE:
+            if (dozing := self.standby_look(state)) is not None:
                 # Standby dims the *resting* light and only that: it is the ambient
                 # layer that is asleep, and an alarm ringing through a standby must
                 # still look like an alarm. Substituted here, where a mode's own
@@ -557,8 +623,9 @@ async def run(
                 # one thing this light has to say, and a configured IDLE look is
                 # exactly what would hide it. Nothing reachable pushes an explicit
                 # IDLE effect while asleep - the readout is ambient, so `handle`'s
-                # gate turned it away already.
-                effect = LedEffect(style="solid", color=_STANDBY_COLOR)
+                # gate turned it away already, and `set_standby` starts its fade
+                # while the flag is still down for exactly this reason.
+                effect = dozing
 
             if isinstance(effect, sequencer.Sequence):
                 # THE ONE GATE for a sequence's floor, mirroring flash_safe just
@@ -2837,7 +2904,40 @@ async def run(
         set_led(LEDState.IDLE)
         set_status("IDLE")
 
+    def toggle_standby(mode_name: str | None) -> None:
+        """Sleep or wake, and say so on the status line. One place, two ways in
+        - the long press at the root and a bound `standby` action - because
+        they are the same thing happening and a second copy of the wording is a
+        second thing to keep true."""
+        lighting.set_standby(not lighting.standby)
+        status.last_mode = mode_name
+        status.last_ok = True
+        status.last_message = (
+            "asleep - the everyday gestures are off; a long press wakes it"
+            if lighting.standby
+            else "awake - the everyday gestures are answering again"
+        )
+        log.info("standby %s", "on" if lighting.standby else "off")
+
     async def handle(trigger: TriggerType) -> None:
+        if trigger is TriggerType.LONG_PRESS:
+            # **The root's own gesture** (TODO 104). Long press means "up one
+            # level" everywhere, and this is the level with nothing above it -
+            # the honest answer to "up" here is off. Answered before anything
+            # is resolved because no ambient mode can bind it any more
+            # (`_parse_actions_body` drops it): one gesture, one meaning, not a
+            # default a config can quietly take away.
+            #
+            # It runs *ahead of the standby gate below*, which is what makes it
+            # the way back as well as the way down. The press is swallowed
+            # either way - waking must not also fire whatever it landed on.
+            play_sound(Sound.ACK)
+            status.last_trigger = trigger.value
+            # No LISTENING flash on the way down: the fade is the feedback, and
+            # a flash first would be the light getting brighter as it goes out.
+            toggle_standby(None)
+            return
+
         resolved = resolve(
             cm.config.modes, trigger.value, clock.now(), logged_today=store.logged_today
         )
@@ -2849,9 +2949,10 @@ async def run(
         if lighting.standby and not isinstance(action, StandbyAction):
             # Asleep: the ambient layer answers nothing and does not let on
             # that it was asked - no ack, no light, no event, no status line
-            # moving. The one gesture that still lands is the one that can undo
-            # this, because a standby only a restart could leave would be a
-            # button that looks broken.
+            # moving. What still lands is whatever can undo this, because a
+            # standby only a restart could leave would be a button that looks
+            # broken: the long press above always, and a bound `standby`
+            # action here for a config that spends a gesture on one.
             log.debug("standby: %s ignored", trigger.value)
             return
 
@@ -2871,19 +2972,11 @@ async def run(
         elif isinstance(action, StandbyAction):
             # Handled here rather than in execute() for the reason enter_mode
             # and readout are: it changes what the *loop* does with the next
-            # gesture, and that is state only the loop owns.
-            lighting.standby = not lighting.standby
-            status.last_mode = resolved[0].name
-            status.last_ok = True
-            status.last_message = (
-                "standby - the ambient layer is asleep"
-                if lighting.standby else "awake - the ambient layer is answering again"
-            )
-            log.info("standby %s", "on" if lighting.standby else "off")
-            # No explicit look either way: set_led already knows what IDLE
-            # means while asleep, so the same call dims it and undims it.
-            set_led(LEDState.IDLE)
-            set_status("STANDBY" if lighting.standby else "IDLE")
+            # gesture, and that is state only the loop owns. The long press at
+            # the root does the same thing without a binding (TODO 104); this
+            # is the same call, so a config that binds `standby` to a five-tap
+            # keeps working and looks identical while it does.
+            toggle_standby(resolved[0].name)
             return
         elif isinstance(action, SetPositionAction):
             # Reachable only from a config that bound this to a gesture, which
@@ -3161,6 +3254,12 @@ async def run(
     try:
         if args.demo:
             for trigger in TriggerType:
+                if trigger is TriggerType.LONG_PRESS:
+                    # The root's long press is sleep (TODO 104), and a demo that
+                    # put itself to sleep would silently swallow every gesture
+                    # after it - which is exactly what the demo exists to show.
+                    log.info("--- demo: %s (sleep - skipped) ---", trigger.value)
+                    continue
                 log.info("--- demo: %s ---", trigger.value)
                 await handle(trigger)
             return

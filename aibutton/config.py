@@ -63,7 +63,7 @@ from dataclasses import dataclass, field, fields, replace
 from datetime import time
 from typing import get_args
 
-from . import keys, ladder, midi, ramp, scenes, sequencer
+from . import artnet, keys, ladder, midi, morse, ramp, scenes, sequencer
 from .device import LED_STYLES, SAFE_MIN_PERIOD_S, STYLE_STROBES, LEDState, TriggerType
 from .scenes import SceneSettings
 
@@ -131,6 +131,23 @@ class OscAction:
     port: int
     address: str  # the OSC path, e.g. "/transport/play"
     args: tuple = ()
+
+
+@dataclass(frozen=True)
+class ArtnetAction:
+    """Fire one Art-Net ArtDmx packet: `channels` on `universe`, at a lighting
+    desk or Art-Net node listening on UDP (TODO 93). `OscAction`'s sibling
+    for DMX rather than OSC - the same fire-and-forget contract, over a
+    different wire; see [artnet.py](artnet.py).
+
+    `channels` are 0-255 each; the port is the standard one almost nobody
+    changes, so it defaults rather than being asked for on every use.
+    """
+
+    host: str
+    universe: int
+    channels: tuple[int, ...]
+    port: int = 6454
 
 
 @dataclass(frozen=True)
@@ -322,8 +339,8 @@ class NamedAction:
 
 Action = (
     LogAction | ReadoutAction | TimerToggleAction | WebhookAction | OscAction
-    | MidiAction | KeysAction | EnterModeAction | NamedAction | StandbyAction
-    | SetPositionAction | SetValueAction | SequenceAction
+    | ArtnetAction | MidiAction | KeysAction | EnterModeAction | NamedAction
+    | StandbyAction | SetPositionAction | SetValueAction | SequenceAction
 )
 
 
@@ -371,9 +388,15 @@ Activation = AlwaysActivation | WindowActivation | ScheduleActivation | ManualAc
 class ActionsBehavior:
     """The everyday ambient template: a gesture -> action map, with an
     optional `unless_logged_today` that stands the whole mode down for the
-    rest of the day once the named event has been logged."""
+    rest of the day once the named event has been logged.
 
-    actions: dict[str, Action]  # trigger value -> action
+    **Five gestures, not six** (TODO 104), exactly like a control surface: the
+    long press belongs to sleep here, since an everyday map is the level with
+    nothing above it. `_parse_actions_body` drops a binding on it, which is
+    what makes that a fact about the button rather than advice in the editor.
+    """
+
+    actions: dict[str, Action]  # trigger value -> action, never long_press
     unless_logged_today: str | None = None
 
     @property
@@ -1145,6 +1168,18 @@ SYSTEM_LED_STATES: tuple[str, ...] = tuple(
 # app's edges"). One field serves every takeover: adding an app adds no hook.
 MODE_HOOKS: tuple[str, ...] = ("on_enter", "on_exit")
 
+# Which end of an app's own numbers counts as best (TODO 109). A mode-level
+# field rather than a template one because it is the item, not the template,
+# that knows: the same stopwatch times a mile run, where quicker is better, and
+# a loaf of bread, where it is not. Absent means "whatever the template says",
+# which for every template offering the field today is *no best at all* - so
+# there is no third word for "neither" until a template with an opinion wants
+# one overridden. Read only by the readout (schema.js, appReadout.js): nothing
+# the button does depends on it, which is why it lives on `Mode` beside `looks`
+# and not inside a behaviour.
+# Mirrored as MODE_BETTER in schema.js; test_schema_mirror.py fails on drift.
+MODE_BETTER: tuple[str, ...] = ("low", "high")
+
 # What a hook may be: the fire-and-forget primitives `actions.execute()` runs.
 # The three that are missing are the three `main.handle()` keeps for itself -
 # `enter_mode`, `readout` and `standby` each change what the *loop* does next,
@@ -1162,8 +1197,8 @@ MODE_HOOKS: tuple[str, ...] = ("on_enter", "on_exit")
 # button straight back. Named once because three allow-lists are built from it
 # and they must not drift apart.
 FIRE_AND_FORGET_ACTIONS: tuple[type, ...] = (
-    LogAction, TimerToggleAction, WebhookAction, OscAction, MidiAction,
-    KeysAction, SetValueAction,
+    LogAction, TimerToggleAction, WebhookAction, OscAction, ArtnetAction,
+    MidiAction, KeysAction, SetValueAction,
 )
 
 # What a step of a `SequenceAction` may be (TODO 33): the primitives, and
@@ -1182,6 +1217,16 @@ MAX_SEQUENCE_STEPS = 8
 MAX_SEQUENCE_S = 10.0
 
 HOOK_ACTIONS: tuple[type, ...] = (*FIRE_AND_FORGET_ACTIONS, SequenceAction)
+
+# What may be named in the action pool: the hook set only. The three missing
+# here — `EnterModeAction`, `ReadoutAction`, and `StandbyAction` — each change
+# what the mode *loop* does next, and that is ambient-only state that does not
+# belong in a shared library of "do this and hand the button back". An action
+# in the pool must be truly fire-and-forget (primitives or sequences), because
+# it may be dispatched from any context — a gesture, a hook, a reflex — and
+# any of the loop-changing actions would break one or more of those paths.
+# Mirrored as POOL_ACTIONS in schema.js; test_schema_mirror.py fails on drift.
+POOL_ACTIONS: tuple[type, ...] = HOOK_ACTIONS
 
 # What a reflex may fire (TODO 71): the hook set, plus `enter_mode`. That one
 # difference is the point - a hook fires *beside* the run loop, while a reflex
@@ -1316,6 +1361,10 @@ class Mode:
     # hooks is one `getattr` per session.
     on_enter: Action | None = None
     on_exit: Action | None = None
+    # Which end of this item's logged numbers is the good end (MODE_BETTER
+    # above). None is "the template decides", which is the honest default: a
+    # best nobody asked for is a judgement the config never made.
+    better: str | None = None
 
     @property
     def template(self) -> str:
@@ -1353,9 +1402,13 @@ def _home_mode() -> Mode:
     exactly this one mode when a hand-edited config is caught with none -
     not the three apps below it, which only a from-scratch config needs.
 
-    It binds three of the six gestures rather than all of them: a longer tap
+    It binds two of the five gestures rather than all of them: a longer tap
     costs every shorter one its instant response (see `max_taps_for`), so the
-    default config must not spend one nobody asked for."""
+    default config must not spend one nobody asked for. Five, not six, because
+    the long press is sleep here (TODO 104) - the floor a broken config falls
+    back to is the last place that rule should have an exception, and the
+    launcher on the double tap already reaches every app the third binding
+    used to."""
     return Mode(
         name="Home",
         activation=AlwaysActivation(),
@@ -1363,7 +1416,6 @@ def _home_mode() -> Mode:
             actions={
                 "short_press": LogAction(event="button_press"),
                 "double_tap": EnterModeAction(target="Launcher"),
-                "long_press": EnterModeAction(target="Pomodoro"),
             },
         ),
     )
@@ -1371,9 +1423,9 @@ def _home_mode() -> Mode:
 
 def _default_modes() -> tuple[Mode, ...]:
     """The fail-soft floor a from-scratch config gets: "Home" (see
-    `_home_mode`) plus the three apps its own bindings promise to reach, so
-    that promise is true the moment the file exists rather than only once
-    someone adds those modes by hand.
+    `_home_mode`) plus the launcher its one app binding promises, and the two
+    apps that launcher promises in turn - so the promise is true the moment
+    the file exists rather than only once someone adds those modes by hand.
 
     double_tap goes to the Launcher rather than straight to an app: a fresh
     config with no launcher binding would fail the Stage-2 gate that every app
@@ -1753,17 +1805,114 @@ def _parse_sequence(raw: dict, where: str, default: LedEffect) -> LedEffect | se
     return sequencer.Sequence(stops=tuple(stops), repeat=repeat, drive=drive)
 
 
-def _parse_look(raw, where: str, default: LedEffect) -> LedEffect | sequencer.Sequence:
-    """One look, either shape it may take: a plain effect, or - when `raw` has
-    a `stops` key - a stop list.
+def _parse_look(
+    raw, where: str, default: LedEffect, min_flash_period_s: float = SAFE_MIN_PERIOD_S,
+) -> LedEffect | sequencer.Sequence:
+    """One look, any shape it may take: a plain effect, a stop list (`raw` has
+    a `stops` key), or a Morse message (`raw` has a `morse` key, TODO 83).
 
-    The dispatch is that key's presence alone, not a `"type"` field: a look is
-    either "the one colour and style it wears" or "the playlist it wears", and
-    those two questions have different required keys already.
+    The dispatch is a key's presence alone, not a `"type"` field: a look is
+    "the one colour and style it wears", "the playlist it wears", or "the
+    message it spells out", and each question has different required keys
+    already. `min_flash_period_s` only a Morse look reads, to cap its own
+    speed - see `_parse_morse_look`.
     """
+    if isinstance(raw, dict) and "morse" in raw:
+        return _parse_morse_look(raw, where, default, min_flash_period_s)
     if isinstance(raw, dict) and "stops" in raw:
         return _parse_sequence(raw, where, default)
     return _parse_effect(raw, where, default)
+
+
+# A message any faster than this floods `sequence_safe`'s per-stop floor
+# before the parser has had a chance to say why - see `_max_morse_dpm`.
+_DEFAULT_MORSE_DPM = 400.0
+
+
+def _max_morse_dpm(min_flash_period_s: float) -> float:
+    """The fastest `dpm` whose shortest element - one unit, a dot or the gap
+    between symbols - still clears `sequence_safe`'s per-stop floor of
+    `min_flash_period_s / 2`.
+
+    `unit_s = morse.UNIT_S_PER_DPM / dpm`, so solving `unit_s >=
+    min_flash_period_s / 2` for `dpm` gives this. At the 3 Hz default that is
+    about 360 dots/min - TODO 83 has the reasoning for why that is the
+    honest speed rather than a bug to work around, and why there is no
+    exemption.
+    """
+    return 2 * morse.UNIT_S_PER_DPM / min_flash_period_s
+
+
+def _parse_morse_look(
+    raw: dict, where: str, default: LedEffect, min_flash_period_s: float,
+) -> LedEffect | sequencer.Sequence:
+    """A look-pool entry shaped `{"morse": "SOS", "dpm": 400, "color": "#ff0000"}`
+    (TODO 83) - stored as written, and expanded here into the stop list that
+    actually plays. The raw dict round-trips through `GET`/`PUT /api/config`
+    untouched (`_read_raw`), so the editor shows the message and not two
+    hundred stops; only this function, reached while building the *effective*
+    config, ever sees the expansion.
+
+    `dpm` (dots per minute) is deliberately not "words per minute" - a WPM
+    figure needs the PARIS-standard "a word is 50 units" convention before it
+    means a duration at all, where dpm is just `unit_s = 60 / dpm`: nothing
+    to look up, and it says what it is.
+
+    `color` may instead be a `ramp` - `["#ff0000", "#0000ff"]` or the full
+    `{"color", "at"}` form `_parse_ramp` already knows - painting each dot and
+    dash by how far into the message it falls rather than one flat colour.
+    `ramp` wins when both are present, the same "the richer field overrides"
+    relationship a Pomodoro's ramp already has with its states' colours; a
+    gap stays plain black either way; see `morse.encode`'s callable-colour
+    docstring for why the sampling lives here and not in that module.
+    """
+    message = raw.get("morse")
+    if not isinstance(message, str) or not message.strip():
+        log.error(
+            "config: %s.morse must be a non-empty string - using the default look",
+            where,
+        )
+        return default
+
+    unknown = morse.unknown_chars(message)
+    if unknown:
+        log.warning(
+            "config: %s.morse has characters this alphabet does not know (%s) - dropped",
+            where, "".join(unknown),
+        )
+
+    dpm = _nonneg(raw, "dpm", where, _DEFAULT_MORSE_DPM)
+    if dpm <= 0:
+        log.error(
+            "config: %s.dpm must be greater than 0 - using %s", where, _DEFAULT_MORSE_DPM,
+        )
+        dpm = _DEFAULT_MORSE_DPM
+    max_dpm = _max_morse_dpm(min_flash_period_s)
+    if dpm > max_dpm:
+        log.warning(
+            "config: %s.dpm %.3g is faster than min_flash_period_s (%.3gs) allows - "
+            "capped to %.1f (lower the flash floor to go faster)",
+            where, dpm, min_flash_period_s, max_dpm,
+        )
+        dpm = max_dpm
+
+    ramp_stops: tuple[ramp.Stop, ...] = ()
+    if "ramp" in raw:
+        ramp_stops = _parse_ramp(raw["ramp"], f"{where}.ramp", ())
+    if ramp_stops:
+        def color(progress: float) -> str:
+            return ramp.color_at(ramp_stops, progress)
+    else:
+        color = _parse_color(raw.get("color"), f"{where}.color", "#ff0000")
+    repeat = _flag(raw, "repeat", where, True)
+    stops = morse.encode(message, morse.UNIT_S_PER_DPM / dpm, color, repeat=repeat)
+    if not stops:
+        log.error(
+            "config: %s.morse has nothing left to play after dropping unknown "
+            "characters - using the default look", where,
+        )
+        return default
+    return sequencer.Sequence(stops=stops, repeat=repeat, drive="clock")
 
 
 def _parse_palette(raw) -> dict[str, LedEffect]:
@@ -1785,7 +1934,9 @@ def _parse_palette(raw) -> dict[str, LedEffect]:
     return palette
 
 
-def _parse_looks(raw) -> dict[str, LedEffect | sequencer.Sequence]:
+def _parse_looks(
+    raw, min_flash_period_s: float = SAFE_MIN_PERIOD_S,
+) -> dict[str, LedEffect | sequencer.Sequence]:
     """The named-look pool: `{"focus-warm": {...}}`.
 
     A pool rather than an inline effect per mode, for three reasons that all
@@ -1794,10 +1945,11 @@ def _parse_looks(raw) -> dict[str, LedEffect | sequencer.Sequence]:
     already pushes down the wire (ROADMAP D4). Empty by default - a pool of
     invented names would be noise.
 
-    A pool entry may be a plain effect or a stop list (`_parse_look`), where
-    the system palette stays effect-only (`_parse_palette`): a palette entry
-    ships to the device and renders unattended, and a sequence is a schedule
-    only the host can walk. One broken look costs you that look, not the pool.
+    A pool entry may be a plain effect, a stop list or a Morse message
+    (`_parse_look`), where the system palette stays effect-only
+    (`_parse_palette`): a palette entry ships to the device and renders
+    unattended, and a sequence is a schedule only the host can walk. One
+    broken look costs you that look, not the pool.
     """
     looks: dict[str, LedEffect | sequencer.Sequence] = {}
     if "looks" not in raw:
@@ -1810,7 +1962,7 @@ def _parse_looks(raw) -> dict[str, LedEffect | sequencer.Sequence]:
         if not (isinstance(name, str) and name.strip()):
             log.error("config: looks has an unusable name %r - ignored", name)
             continue
-        looks[name] = _parse_look(entry, f"looks.{name}", LedEffect())
+        looks[name] = _parse_look(entry, f"looks.{name}", LedEffect(), min_flash_period_s)
     return looks
 
 
@@ -2182,6 +2334,30 @@ def _parse_mode_looks(
     return chosen
 
 
+def _parse_mode_better(raw, where: str) -> str | None:
+    """One mode's `better` (MODE_BETTER), or None for "the template decides".
+
+    Never fatal, for the reason `_parse_mode_looks` gives just above: this is
+    a sentence on a history page, and losing the mode over it would be wildly
+    disproportionate. An unusable value falls back to the template's, which is
+    exactly what the config said before the key was added.
+    """
+    entry = raw.get("better")
+    # "" is how a select with a blank option writes "no answer", so it means
+    # absent and must not warn: the editor would otherwise complain on every
+    # save of every stopwatch, which is exactly the noise TODO 108 removed.
+    if entry is None or entry == "":
+        return None
+    if entry in MODE_BETTER:
+        return entry
+    log.warning(
+        "config: %s.better is %r, which is not one of %s - ignored, so this "
+        "app's history calls nothing best",
+        where, entry, "/".join(MODE_BETTER),
+    )
+    return None
+
+
 def _parse_hooks(
     raw, where: str, template: str, actions: set[str] | None,
 ) -> dict[str, Action]:
@@ -2475,6 +2651,27 @@ def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | No
         # address is the one field where a typo silently reaches the wrong
         # handler on the receiving end, so a malformed one is dropped loudly
         # rather than repaired quietly.
+    elif kind == "artnet":
+        host = raw.get("host", "127.0.0.1")
+        port = raw.get("port", 6454)
+        universe = raw.get("universe", 0)
+        channels = raw.get("channels", [])
+        if (
+            isinstance(host, str)
+            and host
+            and _is_int_in(port, 1, 65535)
+            and _is_int_in(universe, 0, 0x7FFF)
+            and isinstance(channels, list)
+            and 1 <= len(channels) <= artnet.MAX_CHANNELS
+            and all(_is_int_in(v, 0, 255) for v in channels)
+        ):
+            return ArtnetAction(
+                host=host, port=port, universe=universe, channels=tuple(channels),
+            )
+        # Every field is checked here rather than left to artnet.dmx's clamp,
+        # for the same reason the osc branch checks its address: a channel
+        # value or count out of range is a config mistake the editor should
+        # hear about, not a light that quietly comes up wrong.
     elif kind == "midi":
         port = raw.get("port", "")
         channel = raw.get("channel", 1)
@@ -2629,7 +2826,15 @@ def _parse_actions_body(
     A binding that merely *names* a missing action is not invalid and does not
     count against that rule: it is a reference the pool has yet to fill, and
     losing the mode over one would be exactly the silent rewrite
-    `NamedAction` exists to avoid."""
+    `NamedAction` exists to avoid.
+
+    **`long_press` is dropped with a warning** (TODO 104), the same move
+    `_parse_control_body` makes one layer up and for the same reason. Long
+    press means "up one level" everywhere, and an everyday gesture map *is*
+    the top level: up from here is off, so the gesture is answered by
+    `main.handle` as sleep rather than left as a slot a config can quietly
+    take away. Dropped rather than refused, because losing a whole menu over
+    one stale binding is the harsher of the two failures."""
     unless_logged_today = None
     if "unless_logged_today" in raw:
         value = raw["unless_logged_today"]
@@ -2644,10 +2849,17 @@ def _parse_actions_body(
 
     actions: dict[str, Action] = {}
     for trigger in TRIGGER_TYPES:
-        if trigger in raw:
-            action = _parse_action(raw[trigger], f"{where}.{trigger}", known)
-            if action is not None:
-                actions[trigger] = action
+        if trigger not in raw:
+            continue
+        if trigger == "long_press":
+            log.error(
+                "config: %s.long_press puts the button to sleep and cannot be "
+                "bound - ignored", where,
+            )
+            continue
+        action = _parse_action(raw[trigger], f"{where}.{trigger}", known)
+        if action is not None:
+            actions[trigger] = action
     if not actions:
         log.error("config: %s (%r) has no valid gesture actions - skipped", where, name)
         return None
@@ -3320,6 +3532,7 @@ def _parse_mode(
         behavior=behavior,
         activation=activation,
         looks=_parse_mode_looks(raw, where, template, looks or {}),
+        better=_parse_mode_better(raw, where),
         **_parse_hooks(raw, where, template, actions),
     )
 
@@ -3468,10 +3681,15 @@ def parse_config(raw: dict) -> AppConfig:
         if key not in known:
             log.warning("config: unknown key %r - ignored", key)
 
+    # The flash floor is parsed before the looks pool, because a Morse look
+    # (TODO 83) caps its own dpm against it - the one config value the look
+    # parser needs that is not itself a look.
+    min_flash_period_s = _parse_min_flash_period(raw)
+
     # Both pools are parsed before the modes, so a mode naming something that
     # does not exist is reported here rather than at the moment the light
     # should have changed colour or the gesture should have done something.
-    looks = _parse_looks(raw)
+    looks = _parse_looks(raw, min_flash_period_s)
     action_pool = _parse_action_pool(raw)
     # And the modes before the reflexes, for the third instance of the same
     # rule: a reflex scoped to an app that is not there is worth saying at
@@ -3494,7 +3712,7 @@ def parse_config(raw: dict) -> AppConfig:
         ),
         state_looks=_parse_state_looks(raw, looks),
         scenes=scenes.parse_settings(raw.get("scenes")),
-        min_flash_period_s=_parse_min_flash_period(raw),
+        min_flash_period_s=min_flash_period_s,
     )
     _warn_about_documents(config)
     return config
@@ -3954,9 +4172,9 @@ def parse_action_with_warnings(
 
 
 def parse_look_with_warnings(
-    raw, where: str = "look"
+    raw, where: str = "look", min_flash_period_s: float = SAFE_MIN_PERIOD_S,
 ) -> tuple[LedEffect | sequencer.Sequence, list[str]]:
-    """`parse_effect_with_warnings`, but a `stops` body parses as a
+    """`parse_effect_with_warnings`, but a `stops` or `morse` body parses as a
     `sequencer.Sequence` too - the same dispatch `_parse_looks` uses for the
     named-look pool (see `_parse_look`).
 
@@ -3964,11 +4182,14 @@ def parse_look_with_warnings(
     that one's return type is depended on as always-`LedEffect` (test_look_
     presets.py, and everywhere a preview is asserted to be a plain effect),
     and a look-pool entry or a test-bench push are the only two places that
-    legitimately need the wider answer.
+    legitimately need the wider answer. `min_flash_period_s` defaults to the
+    recommendation for a caller with no live config in hand; pass the real
+    one when there is one, or a Morse preview gets capped against a floor
+    that is not the one actually driving the button.
     """
     warnings: list[str] = []
     with _collecting(warnings):
-        look = _parse_look(raw, where, LedEffect())
+        look = _parse_look(raw, where, LedEffect(), min_flash_period_s)
     return look, warnings
 
 
@@ -4068,6 +4289,11 @@ def _action_to_dict(action: Action) -> dict | str:
         return {
             "action": "osc", "host": action.host, "port": action.port,
             "address": action.address, "args": list(action.args),
+        }
+    if isinstance(action, ArtnetAction):
+        return {
+            "action": "artnet", "host": action.host, "port": action.port,
+            "universe": action.universe, "channels": list(action.channels),
         }
     if isinstance(action, MidiAction):
         return {
@@ -4195,6 +4421,10 @@ def _mode_to_dict(mode: Mode) -> dict:
     }
     if mode.looks:  # omitted when empty, so a mode that uses the palette
         entry["looks"] = dict(mode.looks)  # round-trips as the plain object it was
+    # Same rule: absent means "the template decides", so a mode that never set
+    # one writes no key and every config that predates this round-trips.
+    if mode.better is not None:
+        entry["better"] = mode.better
     # Same rule, same reason: a mode with no hooks writes no hook keys, so every
     # config written before they existed round-trips byte for byte.
     for hook in MODE_HOOKS:
