@@ -29,3 +29,12 @@ dist/
 # through the UI or by hand, and none of those belong in this repo either.
 scenes/*.json
 !scenes/default.json
+# Xcode's own project, which it generates and rewrites: the iOS app's sources
+# live in ios/App and ios/ButtonKit, and the .xcodeproj that stitches them
+# together is per-machine (see ios/README.md for the five minutes that
+# recreates it). Its user state is per-person twice over.
+ios/Xcode/
+*.xcuserstate
+xcuserdata/
+.swiftpm/
+ios/ButtonKit/.build/

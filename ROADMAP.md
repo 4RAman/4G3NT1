@@ -520,9 +520,12 @@ parked:
   feature, expensive now and natural later. Trigger conditions and the power /
   RAM numbers it waits on are [TODO.md](TODO.md) item **21**.
 - **Offline press buffering** — needs a time sync, and is a subset of D1.
-- **Phone app** — the REST API already supports it; it's a Stage 3/4
-  deliverable once D1 says what the phone actually *is* (a host, or a remote
-  control for a device that no longer needs one).
+- ~~**Phone app**~~ — **started 2026-09-06** as TODO **90(a)**: `ios/`, a
+  SwiftUI window on the running service over the existing REST API. It is
+  deliberately thin and decides nothing, because D1 already answered what the
+  phone *is* — preferences and heavy lifting for a device that runs its own
+  brain — so anything that would make it work with the PC off belongs in
+  Phases D/E, not in Swift. Unbuilt on hardware: no Swift toolchain here.
 - **Button-to-button communication** — a genuine architecture change (today's
   model is one host, one button). Parking-lot-worthy even after the
   recorded-communication mode exists.

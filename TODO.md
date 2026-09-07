@@ -778,6 +778,42 @@ So: **(a) is worth building now** (it is genuinely useful and nothing is
 wasted - the REST API is the same API the phone will use later), **(b) should
 not be built**, and (c) is what makes the app small.
 
+#### Decided 2026-09-06: (a), built, and (c) is still the destination
+
+**(a) it is**, and the first slice is in `ios/`: a SwiftUI app that shows the
+status, the light, the modes and the log, and fires any gesture the host says
+it has. `ios/README.md` is the whole handoff - what it is, the five minutes
+that recreates the Xcode project, and the four rules anything added here has
+to keep.
+
+**One thing changed since 2026-08-29 and it strengthened the answer rather
+than weakening it.** TODO **111** shipped: the device runs compiled app
+packages standalone, so (c) is no longer years away - which makes a second
+brain in Swift *worse* value than it was, because more of it would be deleted.
+The app is deliberately thin for that reason, not merely for speed.
+
+Three shapes it took, all of which are the same decision applied:
+
+- **The app has no gesture table.** `/api/status`'s `active_modes` is keyed by
+  the host's `TRIGGER_TYPES`, so the phone reads the list off the wire and a
+  tap count added host-side (D5 made that a data change) reaches it with no
+  Swift edit. Same for looks: styles are strings with a generic fallback, and
+  nothing in the app knows which templates are takeovers.
+- **What it *does* mirror is tested from Python.**
+  [test_ios_client.py](tests/test_ios_client.py) reads the route table and the
+  captured sample bodies straight out of the Swift files and checks them
+  against the live FastAPI app - so a renamed endpoint fails on the PC, with
+  no Mac in the room. The rule is [CLAUDE.md](CLAUDE.md)'s, unchanged.
+- **`PreviewHost` is this tier's `MockDevice`.** Every view is written against
+  a `HostClient` protocol, so the app walks with no service, no network and no
+  button - which is also what makes the SwiftUI previews work at all.
+
+**Still open, and it needs the Mac**: none of the Swift has been compiled -
+this was written on the Windows host, where there is no toolchain. First run
+is `cd ios/ButtonKit && swift test`, then the Xcode steps in `ios/README.md`.
+Expect the usual first-build corrections; the pure half is where the risk is
+lowest and the tests are.
+
 #### What the native capabilities actually cost, checked rather than assumed
 
 - **Camera shutter** is **38**, and needs no app: BLE HID volume-up is the
@@ -800,8 +836,12 @@ not be built**, and (c) is what makes the app small.
   subscribing to the gesture characteristic is the same conversation
   [ble_device.py](aibutton/ble_device.py) already has.
 
-**Done when**: there is a decision recorded here about (a) vs (c), and if (a),
-an app that shows the config and fires a gesture. Not before the decision.
+**Done when**: ~~a decision recorded here about (a) vs (c)~~ ✔, and ~~an app
+that shows the config and fires a gesture~~ ✔ *written* - the remaining half of
+that clause is that it has been **compiled and run against a real service on a
+phone**, which is Mac work and has not happened. Editing, scenes and App
+Intents are the next three and are listed in `ios/README.md`; none of them
+belongs in this item.
 
 ### 91. The counter stops being an app
 
@@ -886,6 +926,94 @@ same commit rather than quietly broken.
 **Done when**: one template, both presets, every existing `signal` and
 `lightshow` config loads and behaves the same, and CLAUDE.md's rule says the
 new thing.
+
+#### Widened 2026-09-05: found by a real bug, scoped to the ceiling on request
+
+**The bug that started it.** `_mode_to_dict` writes a light show's `cues`
+back as a list of `{look, hold_s}` objects, but the field editing them is a
+plain textarea expecting a newline string - so after any reload the box shows
+`[object Object],[object Object]` while the show keeps playing correctly
+(`_parse_show_cues` already accepts both shapes). The honest fix is not a
+smarter textarea; a textarea cannot show a per-cue hold override at all today
+- nothing in the UI can set one, only a hand-edited `config.json` can. The
+right editor is a real row list (add/remove/reorder, each row a look picked
+from the pool plus an optional hold override), the same shape the sequence
+editor and a control surface's positions already use. That is also most of
+94's "one template" for free, which is why the two are now one item.
+
+**The owner's ask, verbatim: make this "extraordinarily powerful" -
+"everything between a single one colour flash, and a synchronized light
+show over a crowd."** Scoped out below, not built - session was ending.
+Three tiers, because the top one is a different kind of project from the
+other two.
+
+**Tier 1 - buildable now, no new primitives.** One template, one list of
+*entries* (name, wording TBD - "cue" and "position" both already mean this).
+Each entry:
+
+- **A look from the pool** - any shape the pool already has (effect,
+  sequence, Morse, a ramp-coloured Morse). This alone already spans "a single
+  colour flash" (a one-entry show whose entry is a solid look) to "a
+  synchronized-*looking* sequence" (a sequence look with curves and holds is
+  already a small show in one entry).
+- **How it advances**, a per-*template* setting covering what both existing
+  templates and the control surface do today: `press` (Signal), `clock` with
+  a `dwell_s` and a per-entry override (Light show), or **externally only**
+  (Control's positions, TODO 77/78 - `set_position` reaching every preset
+  rather than one is the same bonus 94 already named). All three are one
+  concept - what moves the index - so this is a `select`, not three
+  templates' worth of code.
+- **An optional action** (Signal has this; Light show does not) - fired on
+  arrival, an ordinary `Action` so a new primitive works here for free, same
+  as `SignalState` already argues.
+- **Loop or hold** at the end of the list - Signal effectively holds forever
+  (it has no "end"); Light show loops. Both are real answers and neither
+  should have to mean the other.
+
+This tier is 94 as scoped, plus the row editor the bug forces anyway, plus
+folding in what Control's positions already prove (named look, externally
+set) as a third `advance` value instead of a separate concept. No new pool
+shape, no new protocol, no device change - a bigger `LightShowBehavior`,
+one editor, one CLAUDE.md rule rewritten once.
+
+**Tier 2 - "its own ladders": a fourth look-pool shape, concretely scoped
+the way Morse (83) was.** `ladder.py` is already pure and already looks up a
+colour from `elapsed_s` - stopwatch, countdown and metronome each drive one
+from their *own* clock today (`LadderSpec` is a field on those three
+behaviors, not a look). Pulling it into the pool as `{"ladder": [...]}`
+(rungs, a base colour) makes "tell the time via ladder" something *any*
+look-consuming spot can name, a Lights entry included - the same move that
+turned Morse from a template-only idea into a pool citizen. **The open
+question, unlike Morse:** a ladder needs a continuous elapsed-time clock,
+and a stop list does not have one lying around - a Lights entry would need
+to supply "how long have I been showing this entry" (or "how long has the
+whole show run") the way `sample_at` already supplies `progress`/`beats` to
+a driven sequence. Answer that before building it; do not guess.
+
+**Tier 3 - a synchronized show over a crowd of buttons: named, not scoped,
+and it is a different project.** This is not a config shape - it is
+multiple *devices* agreeing on a clock with no host in the room to hold them
+together, which is Stage 3 territory (ARCHITECTURE.md) at the earliest, and
+needs an actual sync mechanism this project has never built (a shared
+absolute time reference, or a periodic conductor pulse every button
+re-locks to - a phone, a beacon, a sound cue). **What Tier 1 should do about
+it now, cheaply: schedule entries as offsets from "the show started," not
+as a free-running loop with no reference point.** That costs nothing today
+and is the one thing that would otherwise have to be redesigned later for
+several buttons' shows to ever line up. Everything else about Tier 3 - the
+sync protocol, the conductor, whether it needs new hardware - is a future
+item of its own once Stage 3 exists to hang it on.
+
+**Naming.** "Lights" still reads right at this wider scope - it is a big-tent
+word for "what does the light do" the way "Actions" is for gestures. Nothing
+in Tier 1 or 2 forces a different one; revisit only if Tier 3 turns out to
+need a name that says "show," not "light".
+
+**Done when (Tier 1 only - 2 and 3 are the ceiling, not the floor):** one
+template, three `advance` values, every existing `signal`, `lightshow` and
+relevant `control` config loads and behaves the same, the row editor shows a
+look name and an optional hold override (never stringified objects), and
+CLAUDE.md's rule says the new thing.
 
 ### 95. Colour themes — *check whether scenes already are this*
 

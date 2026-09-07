@@ -119,6 +119,29 @@ Stopping: Windows never delivers SIGTERM between processes and
 started from a terminal. A hard kill is safe by construction (the OS drops the
 run lock, the store commits per write); it only skips the device's goodbye.
 
+## The phone app is a window, not a brain
+
+`ios/` is a third client (TODO **90**, decided 2026-09-06): SwiftUI plus the
+same REST API the web UI uses. **It decides nothing.** Firing a gesture posts
+to `/api/trigger/{trigger}` and the host resolves it, because an app that
+talked BLE to the button directly would be a Swift reimplementation of the
+parser, the mode machine and every action, kept in step with Python for ever.
+Four rules, in full in [ios/README.md](ios/README.md):
+
+- **No mirrored tables in Swift.** Gestures come off `/api/status`'s
+  `active_modes` keys, look styles are strings with a fallback, and nothing
+  there knows which templates are takeovers. What *is* mirrored - the routes
+  it calls and one captured body - is checked from Python by
+  [test_ios_client.py](tests/test_ios_client.py), so drift fails on a machine
+  with no Xcode on it.
+- **Every field falls back on its own**, which is `config._take` in Swift.
+- **`PreviewHost` is that tier's `MockDevice`**, and views are written against
+  the `HostClient` protocol so the app runs with nothing plugged in.
+- The `.xcodeproj` is **not committed**; `ios/README.md` recreates it.
+
+Anything needing the button to work with the PC off belongs on the *device*
+(ARCHITECTURE.md Phases D/E), never in Swift.
+
 ## Shape
 
 ```
