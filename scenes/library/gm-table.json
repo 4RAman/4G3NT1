@@ -1,0 +1,72 @@
+{
+  "title": "The GM's Table",
+  "blurb": "A press sets the room's mood light, a second app steps through whose turn it is - a table-side prop that does two jobs without a laptop open.",
+  "for": "Weekly tabletop game masters who want a physical prop at the table, not another screen.",
+  "assumes": [],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": { "action": "enter_mode", "target": "Mood" },
+      "double_tap": { "action": "enter_mode", "target": "Initiative" },
+      "triple_tap": { "action": "enter_mode", "target": "Session length" }
+    },
+    {
+      "name": "Mood",
+      "template": "signal",
+      "activation": { "type": "manual" },
+      "states": [
+        { "name": "Tavern", "color": "#ff9500", "style": "solid" },
+        { "name": "Dungeon", "color": "#0a2e1a", "style": "breathe" },
+        { "name": "Combat", "color": "#ff0000", "style": "flash" },
+        { "name": "Magic", "color": "#7d2bff", "style": "breathe" },
+        { "name": "Rest", "color": "#1560ff", "style": "solid" }
+      ],
+      "start_at": 0,
+      "log_as": "mood"
+    },
+    {
+      "name": "Initiative",
+      "template": "signal",
+      "activation": { "type": "manual" },
+      "states": [
+        { "name": "Player 1", "color": "#00e5ff", "style": "solid" },
+        { "name": "Player 2", "color": "#ffea00", "style": "solid" },
+        { "name": "Player 3", "color": "#00ff2a", "style": "solid" },
+        { "name": "Player 4", "color": "#ff2bd6", "style": "solid" },
+        { "name": "Monsters", "color": "#ff0000", "style": "flash" }
+      ],
+      "start_at": 0,
+      "log_as": ""
+    },
+    {
+      "name": "Session length",
+      "template": "stopwatch",
+      "activation": { "type": "manual" },
+      "log_as": "session",
+      "ladder": {
+        "enabled": true,
+        "tick_s": 1,
+        "base": "#000000",
+        "rungs": [
+          { "every_s": 3600, "color": "#ffffff" },
+          { "every_s": 900, "color": "#ff9500" },
+          { "every_s": 300, "color": "#3a1a00" }
+        ]
+      }
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "fade", "color": "#1a0033", "color2": "#000000", "period_s": 10 },
+    "LISTENING": { "style": "solid", "color": "#7d2bff", "color2": "#000000", "period_s": 3 },
+    "TIMING": { "style": "breathe", "color": "#ff9500", "color2": "#000000", "period_s": 4 }
+  },
+
+  "looks": {},
+  "actions": {},
+  "reflexes": [],
+  "state_looks": {}
+}

@@ -1,0 +1,108 @@
+{
+  "title": "Tinkerer's Bench",
+  "blurb": "A stocked reference config, not a demo - one of every look shape, a reflex listening for a webhook, and a control surface wired to a generic script hook, all ready to rename.",
+  "for": "Makers who read the schematic before the manual and want to see the whole vocabulary in one file before they start editing it.",
+  "assumes": ["an external script that can POST to the button's REST reflex endpoint"],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": "Ping bench script",
+      "double_tap": { "action": "enter_mode", "target": "Bench" },
+      "triple_tap": { "action": "enter_mode", "target": "Light show" },
+      "tap_4": { "action": "enter_mode", "target": "Build counter" }
+    },
+    {
+      "name": "Bench",
+      "template": "control",
+      "activation": { "type": "manual" },
+      "short_press": "Ping bench script",
+      "double_tap": {
+        "action": "sequence",
+        "steps": [
+          { "action": "log", "event": "bench_combo" },
+          { "action": "keys", "combo": "", "click": "left" }
+        ]
+      },
+      "triple_tap": {
+        "action": "osc", "host": "127.0.0.1", "port": 8000,
+        "address": "/bench/ping", "args": [1]
+      },
+      "tap_4": {
+        "action": "set_value", "app": "Build counter", "slot": "count",
+        "op": "add", "value": 1
+      },
+      "log_as": "bench_press",
+      "return_after": true,
+      "positions": [
+        { "name": "Idle", "look": "Idle glow" },
+        { "name": "Armed", "look": "Armed" },
+        { "name": "Fault", "look": "Fault" }
+      ]
+    },
+    {
+      "name": "Light show",
+      "template": "lightshow",
+      "activation": { "type": "manual" },
+      "cues": ["Solid demo", "Sequence demo", "Morse demo"],
+      "dwell_s": 6,
+      "auto": true,
+      "log_as": "show_cue"
+    },
+    {
+      "name": "Build counter",
+      "template": "counter",
+      "activation": { "type": "manual" },
+      "event": "build",
+      "durable": true
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "rainbow", "color": "#141414", "color2": "#4a4a4a", "period_s": 10 },
+    "LISTENING": { "style": "solid", "color": "#00e676", "color2": "#000000", "period_s": 3 },
+    "COUNTING": { "style": "fade", "color": "#39ff14", "color2": "#003300", "period_s": 5 }
+  },
+
+  "looks": {
+    "Idle glow": { "style": "solid", "color": "#00e676", "color2": "#000000", "period_s": 3 },
+    "Armed": { "style": "breathe", "color": "#ffb400", "color2": "#000000", "period_s": 1.5 },
+    "Fault": { "style": "flash", "color": "#ff0033", "color2": "#000000", "period_s": 0.4 },
+    "Solid demo": { "style": "solid", "color": "#00b0ff", "color2": "#000000", "period_s": 3 },
+    "Sequence demo": {
+      "stops": [
+        { "color": "#ff00ff", "hold_s": 0.3, "fade_s": 0.2, "curve": "ease_in_out" },
+        { "color": "#00ffff", "hold_s": 0.3, "fade_s": 0.2, "curve": "ease_in_out" },
+        { "color": "#ffff00", "hold_s": 0.3, "fade_s": 0.2, "curve": "ease_in_out" }
+      ],
+      "repeat": true,
+      "drive": "clock"
+    },
+    "Morse demo": {
+      "morse": "HELLO WORLD",
+      "dpm": 250,
+      "color": "#00ff2a",
+      "repeat": true
+    }
+  },
+
+  "actions": {
+    "Ping bench script": {
+      "action": "webhook",
+      "url": "http://127.0.0.1:8765/bench",
+      "payload": { "source": "button" }
+    }
+  },
+
+  "reflexes": [
+    {
+      "name": "sensor_reading",
+      "then": "Ping bench script",
+      "when": { "field": "value", "op": ">", "value": 0 }
+    }
+  ],
+
+  "state_looks": {}
+}

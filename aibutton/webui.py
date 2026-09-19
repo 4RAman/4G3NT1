@@ -115,6 +115,15 @@ mimetypes.add_type("text/javascript", ".js")
 _WEB = Path(__file__).parent / "web"
 _INDEX = _WEB / "index.html"
 _STATIC = _WEB / "static"
+# The light library (TODO 113) - the manifest and its shards, written by
+# tools/import_light_library.py and read by web/static/lightLibrary.js. It may
+# not exist at all, which is why the mount below does not insist that it does.
+_LIBRARY = _WEB / "library"
+# The scene gallery's manifest and shards (TODO 114b), written by
+# tools/build_scene_index.py from `scenes/library/` and read by
+# web/static/sceneGallery.js. Optional for the same reason as the light
+# library's: a checkout that has never run the builder still serves the editor.
+_SCENE_LIBRARY = _WEB / "scene-library"
 
 # See the mount below: no build step means no cache-busting filenames, so the
 # only safe answer for this page's own assets is not to cache them.
@@ -128,6 +137,21 @@ class _NoStoreStatic(StaticFiles):
         response = super().file_response(*args, **kwargs)
         response.headers.update(_NO_STORE)
         return response
+
+
+class _OptionalStatic(StaticFiles):
+    """StaticFiles whose directory is allowed not to exist.
+
+    `check_dir=False` alone is not enough: it relaxes the constructor, and
+    then Starlette checks again on the *first request* and raises, which would
+    turn "nobody has imported a light library" into a 500 on a page written to
+    read it as a 404. Skipping the re-check leaves the ordinary path lookup to
+    answer, and a path under a directory that is not there is exactly a
+    missing file.
+    """
+
+    async def check_config(self) -> None:  # type: ignore[override]
+        return
 
 
 @dataclass
@@ -205,6 +229,122 @@ def _scene_settings(ctx: WebContext):
     return ctx.cm.config.scenes
 
 
+# --- what a library scene assumes, checked against this machine -------------
+#
+# TODO 114's honest degradation, and the half of it that needs I/O.
+# `scenes.check_assumes` holds the *table* - which phrases exist, which have a
+# probe and why the rest cannot - and takes the probes as an argument, because
+# scenes.py imports nothing from the package (config imports *it*). This is
+# where the probes are supplied, since this is the layer that already has
+# midi_io and the live config.
+#
+# **A probe may only report what it really knows.** Three answers -
+# `ok`, `unmet`, `unchecked` - and `unchecked` is a first-class one: a green
+# tick nobody earned is worse than a blank, because the picker's whole job here
+# is to be believed. `needs_restart` is the precedent this follows: a thing the
+# service can see and the user cannot, said out loud rather than swallowed.
+
+def _probe_midi_port(wanted: str) -> tuple[str, str]:
+    """Is there a MIDI output port whose name contains `wanted`?
+
+    The one assumption in the vocabulary that is genuinely answerable: a
+    loopMIDI port either enumerates or it does not, and `midi_io.match_port`
+    is the same substring match the `midi` action itself uses - so a scene
+    reported as ready is ready by the code that will run it, not by a
+    lookalike. No MIDI backend at all is `unchecked`, not `unmet`: that is this
+    host being unable to see, which is not the scene's failure.
+    """
+    try:
+        names = midi_io.ports()
+    except midi_io.MidiUnavailable as exc:
+        return scenes.UNCHECKED, f"cannot look: {exc}"
+    if midi_io.match_port(names, wanted) is None:
+        return scenes.UNMET, (
+            f"no MIDI output port matching {wanted!r} on this machine "
+            f"(found: {', '.join(names) or 'none'})"
+        )
+    return scenes.OK, f"MIDI port matching {wanted!r} is here"
+
+
+def _scene_probes(ctx: WebContext) -> dict:
+    """The probes for this service, closed over its live config."""
+
+    def rest_endpoint(_argument: str) -> tuple[str, str]:
+        """Half of "an external script that can POST to the reflex endpoint"
+        is checkable and half is not, and the split is the point: the host
+        knows whether it is *listening*, and cannot know whether anybody wrote
+        the script. So this reports a failure it is sure of and never reports
+        a success - `unchecked` carries the table's note about the other half.
+        """
+        if not ctx.cm.config.web_enabled:
+            return scenes.UNMET, (
+                "the button's REST API is switched off (web_enabled is false), "
+                "so nothing can POST to it"
+            )
+        if ctx.fire_reflex is None:
+            return scenes.UNMET, (
+                "this service was started without a reflex hook, so "
+                "POST /api/reaction/{name} has nothing to hand the press to"
+            )
+        return scenes.UNCHECKED, ""
+
+    return {"midi_port": _probe_midi_port, "rest_endpoint": rest_endpoint}
+
+
+# Ids and labels for the one facet that is *not* a fact about the files, and
+# therefore cannot come out of a static manifest: whether this machine
+# satisfies a scene. Supplied to the browser as data, in the shape the
+# manifest's own facets use, so sceneGallery.js still names no facet - it draws
+# whatever facets it is handed and this is one more of them. The counts are the
+# browser's to fill in, because they depend on which rows it has loaded.
+_READY_FACET = {
+    "key": "ready",
+    "label": "Here",
+    "values": [
+        {"id": "ready", "label": "Nothing missing"},
+        {"id": "needs-setup", "label": "Needs setting up"},
+    ],
+}
+
+
+def _scene_library_state(ctx: WebContext) -> dict:
+    """What this machine makes of the shipped scenes' assumptions.
+
+    Keyed by the **exact phrase a scene file writes**, so the browser needs no
+    copy of the alias table and no slug function to match a verdict to a row -
+    it looks up the string it is about to display. Every phrase found in the
+    library is answered, plus the whole known vocabulary, so a gallery built
+    from a newer index than this checkout still finds most of its answers.
+    """
+    directory = scenes.library_dir(ctx.cm.path, _scene_settings(ctx))
+    phrases: list[str] = []
+    for info in scenes.list_scenes(directory):
+        for text in info.meta.assumes:
+            if text not in phrases:
+                phrases.append(text)
+    for text in scenes.ASSUMPTIONS:
+        if text not in phrases:
+            phrases.append(text)
+
+    probes = _scene_probes(ctx)
+    return {
+        "dir": str(directory),
+        "checks": [
+            {
+                "text": status.text,
+                "state": status.state,
+                "detail": status.detail,
+                # Two phrases meaning one requirement answer identically; the
+                # browser shows the scene's own words and can still tell that
+                # it did.
+                "canonical": status.canonical,
+            }
+            for status in scenes.check_assumes(phrases, probes)
+        ],
+        "facet": _READY_FACET,
+    }
+
+
 def _scene_path(ctx: WebContext, scene_id: str) -> Path:
     """The file a scene id names, or a 400 - `path_for` refuses anything that
     could reach outside the scenes directory, and ids arrive in a URL."""
@@ -235,6 +375,14 @@ def _scene_state(ctx: WebContext, warnings: list[str] | None = None) -> dict:
                 "mode_count": info.mode_count,
                 "error": info.error,
                 "active": info.id == loaded.scene_id,
+                # The library header (TODO 114), carried on every scene rather
+                # than only on gallery rows: a scene copied out of the library
+                # keeps its blurb, and the picker is where somebody wants to
+                # be reminded what the thing they installed last month does.
+                "title": info.meta.title,
+                "blurb": info.meta.blurb,
+                "for": info.meta.audience,
+                "assumes": list(info.meta.assumes),
             }
             for info in scenes.list_scenes(scenes.dir_for(ctx.cm.path, settings))
         ],
@@ -245,6 +393,12 @@ def _scene_state(ctx: WebContext, warnings: list[str] | None = None) -> dict:
             w if isinstance(w, str) else w.message for w in (warnings or [])
         ],
         "needs_restart": _needs_restart(ctx),
+        # What this machine makes of the shipped scenes' assumptions - the
+        # gallery's honest-degradation half. It rides on the scene response
+        # rather than an endpoint of its own so the browser's scene bar, which
+        # already fetches this after every scene operation, gets fresh verdicts
+        # without a second request and without api.js learning a new route.
+        "library": _scene_library_state(ctx),
     }
 
 
@@ -266,16 +420,36 @@ def _warned(found) -> dict:
     }
 
 
-def _scene_file_body(body: dict, name: str | None) -> dict:
+def _scene_file_body(body: dict, name: str | None, header: dict | None = None) -> dict:
     """What actually gets written to a scene file.
 
     The editor posts the effective config, which carries a `scenes` block; that
     block belongs to config.json alone (a scene repointing the active scene is
     a loop - see scenes.merge), so it is dropped here rather than written and
     then ignored on every load. `name` leads because humans read these files.
+
+    **`header` is what stops a Save eating a scene's self-description.** The
+    library keys (`title`, `blurb`, `for`, `assumes`) are stripped on the way
+    *in* - `scenes.merge` removes them so the one parser never sees them - so
+    they are simply not in the effective config the editor posts back. Without
+    carrying them across from the file on disk, the first Save on a scene
+    copied out of the gallery would silently turn it back into anonymous data.
+    A key the body itself supplies still wins: that is somebody deliberately
+    editing the header, which nothing here should overrule.
     """
     payload = {key: value for key, value in body.items() if key != "scenes"}
-    return {"name": name, **payload} if name else payload
+    kept = {
+        key: value for key, value in (header or {}).items()
+        if key in scenes.META_KEYS and key != "name" and key not in payload
+    }
+    return {"name": name, **kept, **payload} if name else {**kept, **payload}
+
+
+def _scene_header(path: Path) -> dict:
+    """The reserved keys already on disk at `path`, or nothing. Unreadable is
+    the same answer as absent here - a Save must not fail over a header."""
+    existing = scenes.read_json(path) or {}
+    return {key: existing[key] for key in scenes.META_KEYS if key in existing}
 
 
 def _write_scene(ctx: WebContext, path: Path, payload: dict) -> list:
@@ -328,6 +502,12 @@ def create_app(ctx: WebContext) -> FastAPI:
             "uptime_s": int(time.time() - s.started_at),
             "config_path": ctx.cm.path,
             "mode_count": len(cfg.modes),
+            # Which colour theme the button is wearing *now* (TODO 95), which
+            # is not always the one the file names: `load_theme` moves this
+            # pointer live and deliberately writes nothing to disk, so the
+            # Lights tab has to read it here or it would show the saved answer
+            # while the button wore another one.
+            "theme": cfg.active_theme or "",
             "active_modes": _active_modes(ctx),
             "last_trigger": s.last_trigger,
             "last_mode": s.last_mode,
@@ -401,7 +581,9 @@ def create_app(ctx: WebContext) -> FastAPI:
         path = Path(ctx.cm.write_path)
         if scene_id is not None:
             existing = scenes.read_json(path) or {}
-            payload = _scene_file_body(body, existing.get("name"))
+            payload = _scene_file_body(
+                body, existing.get("name"), _scene_header(path),
+            )
             found = _write_scene(ctx, path, payload)
         else:
             _, found = parse_with_details(body)
@@ -480,7 +662,9 @@ def create_app(ctx: WebContext) -> FastAPI:
         if not (isinstance(name, str) and name.strip()):
             existing = scenes.read_json(path) or {}
             name = existing.get("name")
-        warnings = _write_scene(ctx, path, _scene_file_body(source, name))
+        warnings = _write_scene(
+            ctx, path, _scene_file_body(source, name, _scene_header(path)),
+        )
         if ctx.cm.loaded.scene_id == scene_id:
             ctx.cm.reload()
         return {"id": scene_id, **_scene_state(ctx, warnings)}
@@ -967,6 +1151,48 @@ def create_app(ctx: WebContext) -> FastAPI:
     # the failure look like the edit not having happened. The whole page is a
     # few hundred KB off localhost, so there is nothing to win by caching it.
     app.mount("/static", _NoStoreStatic(directory=_STATIC), name="static")
+
+    # The light library (TODO 113): `index.json` plus one shard per group.
+    #
+    # **Cached normally, unlike /static above, and the difference is what these
+    # files are.** A module in /static is code the user is editing right now,
+    # where yesterday's cached copy runs last week's editor against this week's
+    # service. A shard is versioned *data*: it changes when somebody re-runs
+    # the importer, never between one keystroke and the next, and it is the
+    # only thing this page serves that is big enough for caching to be worth
+    # anything - the format is designed for megabytes, of which the browser
+    # fetches a few kilobytes at a time. StaticFiles' own ETag/Last-Modified
+    # handling is exactly the right strength here: a re-import answers 200 with
+    # the new bytes, everything else answers 304 and costs nothing. What would
+    # be wrong is a long `max-age`, because a shard keeps its filename across a
+    # re-import - there is no content hash to bust - so a browser told to hold
+    # it for a day would hold a stale library for a day.
+    #
+    # Optional because **a missing library is a normal state**. A checkout that
+    # has never run the importer, or one where the directory was deleted, must
+    # still serve the editor: lightLibrary.js treats a 404 as "there is no
+    # library here" and falls back to schema.js's inlined presets, exactly as
+    # it must in the offline editor, where there is no server at all. Refusing
+    # to boot - or answering 500 - over an absent data file would be the
+    # service taking the page's degradation away from it.
+    app.mount(
+        "/library",
+        _OptionalStatic(directory=_LIBRARY, check_dir=False),
+        name="library",
+    )
+
+    # The scene gallery (TODO 114b), written by tools/build_scene_index.py.
+    # Same contract, same reasoning, same optionality as the mount above - the
+    # owner settled on 2026-09-09 that the scene gallery reuses 113's format
+    # whole rather than inventing a second one, and that includes how it is
+    # served. A separate directory rather than a group inside `/library`
+    # because the two are written by different tools from different sources
+    # and a stale-file sweep in one must never delete the other's shards.
+    app.mount(
+        "/scene-library",
+        _OptionalStatic(directory=_SCENE_LIBRARY, check_dir=False),
+        name="scene-library",
+    )
 
     return app
 

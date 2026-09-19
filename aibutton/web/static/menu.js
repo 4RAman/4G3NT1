@@ -11,16 +11,18 @@ import { ConfigApi } from './api.js';
 import {
   ACTIONS, ACTION_BY_TYPE, BUILTIN_MODES, GESTURES, LED_STATE_BY_KEY,
   POOL_ACTIONS, SYSTEM_LED_STATES, MENU_TEMPLATES, MODE_GROUPS, REFLEX_ACTIONS,
-  REFLEX_OPS, SETTINGS_GROUPS, TEMPLATES,
+  REFLEX_OPS, REFLEX_SOURCES, SETTINGS_GROUPS, TEMPLATES,
   TEMPLATE_BY_TYPE, danglingTargets, describeAction, describeActivation,
   describeEffect, describeReflex, describeTemplate, findEntryPoints, modeLook,
   reachableModes, STARTER_BY_KEY, actionRefs, actionUsedBy, readoutStat,
+  contributedActions,
   standaloneVerdict, startedBy,
 } from './schema.js';
 import { ModeEditor } from './modeEditor.js';
 import { SceneBar } from './scenes.js';
 import { createField } from './widgets.js';
 import { createLookEditor } from './colorEngine.js';
+import { createLibraryBrowser, lookFromRow, pushRowOntoLook } from './lightLibrary.js';
 // The one home for how this page writes a duration, a number and a day
 // (CLAUDE.md) - the Events table and an app's readout already write them this
 // way, and a nav line that rounded differently would be a third answer.
@@ -187,7 +189,7 @@ export class ConfigMenu {
     this.mounts.modes.append(this._renderPrimer(), this._renderModesLayout());
     (this.mounts.actions || this.mounts.modes).append(...pools);
     if (this.mounts.apps) this.mounts.apps.append(this._renderAppsSection());
-    this.mounts.lights.append(this._renderPaletteSection());
+    this.mounts.lights.append(this._renderPaletteSection(), this._renderLibrarySection());
     this.mounts.device.append(this._renderSettingsSection());
 
     this.statusEl = el('span', { className: 'menu-status' });
@@ -985,6 +987,121 @@ export class ConfigMenu {
     ]);
   }
 
+  /**
+   * The light library (TODO 113), and the surface that composes with it.
+   *
+   * **A page, not a dropdown.** The bank of ready-made looks is fetched
+   * (lightLibrary.js) rather than shipped, so it can be thousands of rows
+   * instead of the 142 a dropdown could hold - and it degrades to exactly
+   * those 142 where there is nothing to fetch from, saying so. Everything
+   * about searching it, and about which facets exist, belongs to that module;
+   * this method supplies only the thing the library cannot know, which is
+   * *where a chosen look goes*.
+   *
+   * **Two verbs, one look object.** Clicking a row replaces the body of the
+   * look being composed; "+" pushes its colour on the end instead, turning
+   * that look into a stop list if it was not one already. That is TODO 113's
+   * "+": a second editor surface over the same look object, never a new config
+   * shape - what comes out is the ordinary stop list the Sequence tab edits
+   * and `sequencer.py` walks.
+   *
+   * **Nothing from the library reaches config.json.** No id, no reference -
+   * the body is copied in, which is the only reason the library is allowed to
+   * be as big as it is.
+   */
+  _renderLibrarySection() {
+    const status = el('p', { className: 'menu-hint', textContent: '' });
+    const say = (text) => { status.textContent = text; };
+
+    const pick = el('select', { className: 'inp lib-target-pick' });
+    // Rebuilt on focus rather than kept in step: the pool changes from the
+    // list above as well as from here, and one listener that is always right
+    // beats several call sites that have to remember.
+    const fillTargets = (select) => {
+      const want = select === undefined ? pick.value : select;
+      clear(pick);
+      pick.append(el('option', { value: '', textContent: 'a new named look' }));
+      for (const name of Object.keys(this.model.looks || {}).sort()) {
+        pick.append(el('option', { value: name, textContent: name }));
+      }
+      pick.value = want && this.model.looks[want] ? want : '';
+    };
+    fillTargets();
+    pick.addEventListener('focus', () => fillTargets());
+
+    /** The pool entry being composed into, or null for "make a new one". */
+    const target = () => (pick.value && this.model.looks[pick.value] ? pick.value : null);
+
+    const use = (row) => {
+      const look = lookFromRow(row);
+      const name = target();
+      if (name) {
+        // Emptied and refilled rather than replaced: the shapes have different
+        // keys, and leaving one shape's leftovers behind is how a plain effect
+        // ends up reading as a stop list that happens to carry a style.
+        const held = this.model.looks[name];
+        for (const key of Object.keys(held)) delete held[key];
+        Object.assign(held, look);
+        say(`"${name}" is now ${row.name}.`);
+        this._renderLooks();
+        this._markDirty();
+      } else {
+        const made = this._addLook(row.name, look);
+        fillTargets(made);
+        say(`Added "${made}" to the named looks. Anything can wear it now.`);
+      }
+    };
+
+    const add = (row) => {
+      const name = target();
+      if (name) {
+        const outcome = pushRowOntoLook(this.model.looks[name], row);
+        say(outcome.ok ? `"${name}": ${outcome.message}` : outcome.message);
+        if (outcome.ok) { this._renderLooks(); this._markDirty(); }
+        return;
+      }
+      // Starting fresh with "+" starts a stop list, not a plain effect: the
+      // next "+" would otherwise have to convert one into the other and lose
+      // whatever animation the first row carried.
+      const seed = { stops: [], repeat: true };
+      const outcome = pushRowOntoLook(seed, row);
+      if (!outcome.ok) { say(outcome.message); return; }
+      const made = this._addLook(row.name, seed);
+      fillTargets(made);
+      say(`Started "${made}" from ${row.name}. Press + again to push another colour onto it.`);
+    };
+
+    const browser = createLibraryBrowser({
+      // The pool is the one place a stop list is a legal look (config.py's
+      // `_parse_looks`), so this surface offers the whole library. The system
+      // palette rows do not - see colorEngine's `allowSequence`.
+      allowSequence: true,
+      onPick: use,
+      onAdd: add,
+      addTitle: 'Push this colour onto the end of the look being composed',
+      above: el('div', {}, [
+        el('div', { className: 'lib-target' }, [
+          el('span', { className: 'preset-group-name', textContent: 'Compose into' }),
+          pick,
+        ]),
+        status,
+      ]),
+    });
+
+    return el('div', {}, [
+      el('h3', { className: 'palette-group', textContent: 'Light library' }),
+      el('p', {
+        className: 'menu-hint', 'data-help': true,
+        textContent: 'Ready-made looks, searchable by name or tag. Clicking one '
+          + 'copies its colours into the look you are composing into; nothing is '
+          + 'stored by reference, so the library can be as large as it likes. '
+          + 'The + button pushes a colour onto the end of that look instead of '
+          + 'replacing it, which is how a sequence gets built by clicking.',
+      }),
+      browser.el,
+    ]);
+  }
+
   /** The five system states as a list, one editor open at a time (TODO 54) -
    *  the pool's own pattern (`_renderLookEntry`), reused rather than
    *  reinvented. They used to render fully expanded, which was the exact
@@ -1295,7 +1412,20 @@ export class ConfigMenu {
     // uses, and for the same reason: naming a pooled action is a different way
     // of *holding* one, not a kind of one.
     const NAMED = '__named__';
+    // The gesture sub-editor's second sentinel, here for the same reason (TODO
+    // 118b) - see modeEditor.js's `_gesture`.
+    const CONTRIB = '__app__:';
     const offered = ACTIONS.filter((a) => REFLEX_ACTIONS.includes(a.type));
+    // A reaction is the surface contributed actions matter most on: it is the
+    // only one `set_position` reaches, so a control surface's positions arrive
+    // here as pickable names where they used to be free text checked by
+    // nothing. `REFLEX_ACTIONS` is the filter, so nothing is widened.
+    const contributed = contributedActions(this.model.modes, REFLEX_ACTIONS);
+    const byApp = new Map();
+    contributed.forEach((shortcut, index) => {
+      if (!byApp.has(shortcut.app)) byApp.set(shortcut.app, []);
+      byApp.get(shortcut.app).push({ shortcut, index });
+    });
 
     // Built first so the handlers below can reach it: the name is what the nav
     // finds this row by, so it has to follow the input rather than the render.
@@ -1358,7 +1488,15 @@ export class ConfigMenu {
         // An empty name rather than a guessed one, exactly as a gesture does:
         // picking the pool's first entry would point this at something nobody
         // chose.
-        reflex.then = kind.value === NAMED ? '' : ACTION_BY_TYPE[kind.value].defaults();
+        if (kind.value === NAMED) reflex.then = '';
+        else if (kind.value.startsWith(CONTRIB)) {
+          // Copied, not referenced - the body lands here and the app that
+          // offered it is forgotten. See modeEditor.js's `_gesture`.
+          const picked = contributed[Number(kind.value.slice(CONTRIB.length))];
+          if (!picked) return;
+          reflex.then = structuredClone(picked.body);
+          kind.value = picked.body.action;
+        } else reflex.then = ACTION_BY_TYPE[kind.value].defaults();
         buildFields();
         restate();
         this._markDirty();
@@ -1366,6 +1504,12 @@ export class ConfigMenu {
     }, [
       ...offered.map((a) => el('option', { value: a.type, textContent: a.label })),
       el('option', { value: NAMED, textContent: 'Use a named action' }),
+      ...[...byApp].map(([app, entries]) => el('optgroup', { label: app },
+        entries.map(({ shortcut, index }) => el('option', {
+          value: `${CONTRIB}${index}`,
+          textContent: shortcut.label,
+          title: shortcut.about || '',
+        })))),
     ]);
     kind.value = typeof reflex.then === 'string'
       ? NAMED : (reflex.then?.action || 'enter_mode');
@@ -1439,105 +1583,215 @@ export class ConfigMenu {
     ]);
   }
 
-  /** `from`: what fires this besides its own URL (TODO 73).
+  /** `from`: what fires this besides its own URL (TODO 73, 99).
    *
    *  A **source**, not a test - it says which messages reach the reflex, and
    *  `Only when` above decides whether they fire it. That is the whole reason
    *  MIDI needed no comparison language of its own: *note 95 velocity 127* is
    *  this control plus `velocity == 127`, and the dark half of the same lamp
-   *  is the same source with the opposite test.
+   *  is the same source with the opposite test. A polled URL reaches the same
+   *  test with a payload a reader made, which is why it needed no operator of
+   *  its own either.
    *
    *  The URL never goes away - a source *adds* a way in - so a MIDI reflex is
-   *  still testable with `curl` while the DAW is closed. */
+   *  still testable with `curl` while the DAW is closed.
+   *
+   *  **The list of sources comes from `REFLEX_SOURCES`, never from here.**
+   *  Two hardcoded MIDI options are how a polled reaction came to be destroyed
+   *  by *looking* at this control: the change handler could only write a MIDI
+   *  spec, so opening the dropdown on a `url` source deleted the address, the
+   *  interval and the reader. A third source (OSC in, the media keys) is a row
+   *  in that table plus a renderer below, and nothing else on this page. */
   _reflexFrom(reflex, onChanged) {
     const fields = el('div', { className: 'gesture-fields' });
+    const sourceHint = el('span', { className: 'fld-hint', 'data-help': true });
+    const touched = () => { onChanged(); this._markDirty(); };
 
-    const spec = () => (reflex.from && reflex.from.midi) || null;
+    const chosen = () => (REFLEX_SOURCES.find(
+      (s) => reflex.from && reflex.from[s.key] != null,
+    ) || {}).key || '';
+
+    // What each source was last set to, so midi → url → midi hands back what
+    // was typed rather than a fresh default. **This is the fix**, not merely
+    // handling the url case: a switch replaces `from` wholesale, and without
+    // somewhere to put the outgoing spec every flip of this dropdown is a
+    // silent deletion. Seeded from the config, so the spec the file arrived
+    // with is the first thing preserved.
+    const kept = {};
+    const remember = () => {
+      const key = chosen();
+      if (key) kept[key] = reflex.from[key];
+    };
+    remember();
+
+    const seed = (key) => {
+      const entry = REFLEX_SOURCES.find((s) => s.key === key);
+      const spec = kept[key] || { ...((entry && entry.defaults) || {}) };
+      // Which of the two a MIDI spec is lives *in the spec* (`note` vs `cc`),
+      // and the parser drops one with neither - so a fresh one gets a note.
+      // It is a field of that source rather than a second row in the table
+      // above, because a note and a control change are one thing the button
+      // hears from, said two ways.
+      if (key === 'midi' && !('note' in spec) && !('cc' in spec)) spec.note = 0;
+      return spec;
+    };
+
+    // Keyed by source rather than chained through `if`, so the dropdown above
+    // and the block below are driven by the same key and a source with no
+    // renderer yet shows no fields instead of somebody else's.
+    const RENDER = {
+      midi: (spec) => {
+        const numberKey = 'cc' in spec ? 'cc' : 'note';
+        const message = el('select', {
+          className: 'inp',
+          onchange: () => {
+            const number = spec[numberKey] ?? 0;
+            delete spec[numberKey];
+            spec[message.value] = number;
+            build();
+            touched();
+          },
+        }, [
+          el('option', { value: 'note', textContent: 'a note' }),
+          el('option', { value: 'cc', textContent: 'a control change' }),
+        ]);
+        message.value = numberKey;
+        // The port goes through the schema widget so it gets the service's own
+        // list of inputs as suggestions - and stays a free-text field where
+        // there is no service to ask (the offline editor).
+        const port = createField(
+          { key: 'port', label: 'MIDI port', kind: 'text', suggest: 'midi_in',
+            hint: 'Any part of the port name. Blank takes the first input.' },
+          spec, touched, { api: this.api },
+        );
+        const number = el('input', {
+          type: 'number', className: 'inp', min: 0, max: 127, step: 1,
+          value: spec[numberKey] ?? 0,
+          oninput: () => { spec[numberKey] = Number(number.value); touched(); },
+        });
+        // Blank means any channel, which is the useful default: a control
+        // surface protocol pins the note number and leaves the channel to
+        // whatever the DAW was set up with.
+        const channel = el('input', {
+          type: 'number', className: 'inp', min: 1, max: 16, step: 1,
+          value: spec.channel ?? '', placeholder: 'any',
+          oninput: () => {
+            if (channel.value === '') delete spec.channel;
+            else spec.channel = Number(channel.value);
+            touched();
+          },
+        });
+        fields.append(
+          el('label', { className: 'fld' }, [
+            el('span', { className: 'fld-label', textContent: 'Message' }),
+            message,
+          ]),
+          port.el,
+          el('label', { className: 'fld' }, [
+            el('span', { className: 'fld-label',
+              textContent: numberKey === 'cc' ? 'Controller number' : 'Note number' }),
+            number,
+          ]),
+          el('label', { className: 'fld' }, [
+            el('span', { className: 'fld-label', textContent: 'Channel' }),
+            channel,
+            el('span', { className: 'fld-hint', 'data-help': true,
+              textContent: 'Leave blank for any channel.' }),
+          ]),
+        );
+      },
+
+      url: (spec, entry) => {
+        const address = createField(
+          { key: 'url', label: 'Address', kind: 'text', required: true,
+            placeholder: 'https://calendar.google.com/…/basic.ics',
+            hint: 'An http(s) address the button fetches for itself. Without '
+              + 'one there is nothing to poll, so the source is dropped and '
+              + 'only the address above still fires this.' },
+          spec, touched, { api: this.api },
+        );
+        // The spinner floor is a courtesy rather than the rule: `poll.py` owns
+        // the real one and clamps *and* warns, so a number that drifts here
+        // costs a nudge and not a lie.
+        const every = createField(
+          { key: 'every_minutes', label: 'Check every (minutes)', kind: 'number',
+            min: 1, step: 1,
+            hint: 'Somebody else is hosting what this fetches, so slower is '
+              + 'kinder - a calendar an hour ahead needs no faster than five '
+              + 'minutes. A server that is down backs off further on its own.' },
+          spec, touched, {},
+        );
+        // A hint per reader, which is why this is built here rather than
+        // through the `select` widget: an <option> holds text, and what each
+        // one makes of a body needs a sentence.
+        const readers = (entry && entry.readers) || [];
+        const readerHint = el('span', { className: 'fld-hint', 'data-help': true });
+        const showReaderHint = (key) => {
+          const reader = readers.find((r) => r.key === key);
+          readerHint.textContent = reader ? reader.hint : '';
+        };
+        const read = el('select', {
+          className: 'inp',
+          onchange: () => { spec.read = read.value; showReaderHint(read.value); touched(); },
+        }, readers.map((r) => el('option', {
+          value: r.key, textContent: r.label, title: r.hint,
+        })));
+        read.value = spec.read || ((entry && entry.defaults) || {}).read || '';
+        showReaderHint(read.value);
+        fields.append(
+          address.el,
+          every.el,
+          el('label', { className: 'fld' }, [
+            el('span', { className: 'fld-label', textContent: 'Read it as' }),
+            read,
+            readerHint,
+          ]),
+        );
+      },
+    };
+
     const build = () => {
       clear(fields);
-      const midi = spec();
-      if (!midi) return;
-      const numberKey = 'cc' in midi ? 'cc' : 'note';
-
-      // The port goes through the schema widget so it gets the service's own
-      // list of inputs as suggestions - and stays a free-text field where
-      // there is no service to ask (the offline editor).
-      const port = createField(
-        { key: 'port', label: 'MIDI port', kind: 'text', suggest: 'midi_in',
-          hint: 'Any part of the port name. Blank takes the first input.' },
-        midi, () => { onChanged(); this._markDirty(); }, { api: this.api },
-      );
-      const number = el('input', {
-        type: 'number', className: 'inp', min: 0, max: 127, step: 1,
-        value: midi[numberKey] ?? 0,
-        oninput: () => {
-          midi[numberKey] = Number(number.value);
-          onChanged();
-          this._markDirty();
-        },
-      });
-      // Blank means any channel, which is the useful default: a control
-      // surface protocol pins the note number and leaves the channel to
-      // whatever the DAW was set up with.
-      const channel = el('input', {
-        type: 'number', className: 'inp', min: 1, max: 16, step: 1,
-        value: midi.channel ?? '', placeholder: 'any',
-        oninput: () => {
-          if (channel.value === '') delete midi.channel;
-          else midi.channel = Number(channel.value);
-          onChanged();
-          this._markDirty();
-        },
-      });
-      fields.append(
-        port.el,
-        el('label', { className: 'fld' }, [
-          el('span', { className: 'fld-label',
-            textContent: numberKey === 'cc' ? 'Controller number' : 'Note number' }),
-          number,
-        ]),
-        el('label', { className: 'fld' }, [
-          el('span', { className: 'fld-label', textContent: 'Channel' }),
-          channel,
-          el('span', { className: 'fld-hint', 'data-help': true,
-            textContent: 'Leave blank for any channel.' }),
-        ]),
-      );
+      const key = chosen();
+      const entry = REFLEX_SOURCES.find((s) => s.key === key);
+      sourceHint.textContent = entry ? entry.hint
+        : 'Nothing but the address above, which never goes away whichever of '
+          + 'these is picked - a source adds a way in and removes none, so a '
+          + 'reaction stays testable with curl.';
+      if (!entry) return;
+      // A spec that is not an object is one the parser rejects outright, and
+      // these modules are strict, so writing a field into it would throw
+      // rather than fail quietly. Shown as the chosen source with no fields:
+      // it stays selected, it stays in `kept`, and it survives being looked
+      // at - which is the whole rule this control got wrong.
+      const source = reflex.from[key];
+      if (source && typeof source === 'object') {
+        (RENDER[key] || (() => {}))(source, entry);
+      }
     };
 
     const pick = el('select', {
       className: 'inp',
       onchange: () => {
-        const midi = spec() || {};
-        if (!pick.value) {
-          delete reflex.from;
-        } else {
-          const number = midi.note ?? midi.cc ?? 0;
-          const next = { port: midi.port || '' };
-          next[pick.value] = number;
-          if (midi.channel != null) next.channel = midi.channel;
-          reflex.from = { midi: next };
-        }
+        remember();   // before `from` is replaced, or the outgoing spec is gone
+        if (!pick.value) delete reflex.from;
+        else reflex.from = { [pick.value]: seed(pick.value) };
         build();
-        onChanged();
-        this._markDirty();
+        touched();
       },
     }, [
       el('option', { value: '', textContent: 'its address only' }),
-      el('option', { value: 'note', textContent: 'a MIDI note' }),
-      el('option', { value: 'cc', textContent: 'a MIDI control change' }),
+      ...REFLEX_SOURCES.map((s) => el('option', {
+        value: s.key, textContent: s.label, title: s.hint,
+      })),
     ]);
-    pick.value = spec() ? ('cc' in spec() ? 'cc' : 'note') : '';
+    pick.value = chosen();
 
     build();
     return el('div', { className: 'fld' }, [
       el('span', { className: 'fld-label', textContent: 'Fired by' }),
       pick,
-      el('span', { className: 'fld-hint', 'data-help': true, textContent:
-        'A DAW that lights up a control surface is telling you what it is '
-        + 'doing - point its feedback at a port the button listens on and a '
-        + 'note becomes a reaction. The value rides along as “velocity” (a '
-        + 'note) or “value” (a control change), for Only when to test.' }),
+      sourceHint,
       fields,
     ]);
   }
@@ -1713,15 +1967,40 @@ export class ConfigMenu {
       }
     };
 
+    // The pool is where an app's shortcut earns its keep twice over: named
+    // once here, it is then reachable by name from every binding in the config
+    // (TODO 118b). `POOL_ACTIONS` is the filter, so `enter_mode` shortcuts do
+    // not appear - a pool entry must be truly fire-and-forget.
+    const CONTRIB = '__app__:';
+    const contributed = contributedActions(this.model.modes, POOL_ACTIONS);
+    const byApp = new Map();
+    contributed.forEach((shortcut, index) => {
+      if (!byApp.has(shortcut.app)) byApp.set(shortcut.app, []);
+      byApp.get(shortcut.app).push({ shortcut, index });
+    });
     const kind = el('select', {
       className: 'inp',
       onchange: () => {
-        this.model.actions[name] = ACTION_BY_TYPE[kind.value].defaults();
+        if (kind.value.startsWith(CONTRIB)) {
+          const picked = contributed[Number(kind.value.slice(CONTRIB.length))];
+          if (!picked) return;
+          this.model.actions[name] = structuredClone(picked.body);
+          kind.value = picked.body.action;
+        } else this.model.actions[name] = ACTION_BY_TYPE[kind.value].defaults();
         buildFields();
         summary.textContent = describeAction(this.model.actions[name]);
         this._markDirty();
       },
-    }, ACTIONS.filter((a) => POOL_ACTIONS.includes(a.type)).map((a) => el('option', { value: a.type, textContent: a.label })));
+    }, [
+      ...ACTIONS.filter((a) => POOL_ACTIONS.includes(a.type))
+        .map((a) => el('option', { value: a.type, textContent: a.label })),
+      ...[...byApp].map(([app, entries]) => el('optgroup', { label: app },
+        entries.map(({ shortcut, index }) => el('option', {
+          value: `${CONTRIB}${index}`,
+          textContent: shortcut.label,
+          title: shortcut.about || '',
+        })))),
+    ]);
     kind.value = this.model.actions[name].action || 'log';
 
     const remove = el('button', {

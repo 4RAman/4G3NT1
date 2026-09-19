@@ -40,6 +40,7 @@ export const GESTURES = [
 // of these run inside the loop. test_schema_mirror.py fails on drift.
 export const SEQUENCE_ACTIONS = [
   'log', 'timer_toggle', 'webhook', 'osc', 'artnet', 'midi', 'keys', 'set_value',
+  'load_theme',
 ];
 
 // What a sequence may *end* with, and only end with (TODO 117). A readout owns
@@ -82,6 +83,59 @@ export const REFLEX_ACTIONS = [...HOOK_ACTIONS, 'enter_mode', 'set_position'];
 // it may be dispatched from any context — a gesture, a hook, a reflex — and
 // any of the loop-changing actions would break one or more of those paths.
 export const POOL_ACTIONS = HOOK_ACTIONS;
+
+// Where a reflex can hear from, besides its own address (TODO 73, 99). A
+// descriptor table rather than a branch per source in the panel: adding one is
+// an entry here plus its parser in config.py, which is the same open/closed
+// shape ACTIONS and TEMPLATES follow.
+//
+// **A source never removes the endpoint.** Every reflex is always firable by
+// POSTing to its own URL, so a MIDI or a polled reflex is still testable with
+// curl - which is why the "no source" option reads as its address *only*
+// rather than as nothing at all.
+//
+// **A source builds a payload and stops there.** None of these adds an
+// operator, a consequence or a second condition; what arrives is judged by the
+// same one-field `when` test (REFLEX_OPS below), which is the property that
+// keeps all of this evaluable on the device one day.
+//
+// `keys` mirror REFLEX_SOURCES in config.py and `readers` mirror READERS in
+// poll.py; test_url_reflex.py fails on drift.
+export const REFLEX_SOURCES = [
+  {
+    key: 'midi', label: 'a MIDI message', tier: 'tinker',
+    hint: 'A note or a control change arriving on a MIDI input - how a DAW '
+      + 'tells the button it started recording. The message becomes the '
+      + 'payload, so “note 95 at velocity 127” is this source plus a test on '
+      + 'velocity, and the same note at 0 is the opposite test.',
+  },
+  {
+    key: 'url', label: 'a URL, checked on a clock', tier: 'tinker',
+    hint: 'The button goes and looks: it fetches this address every so often '
+      + 'and hands what comes back to the test below. Paste the secret '
+      + 'calendar link Google, Outlook or iCloud gives you and read it as a '
+      + 'calendar - no sign-in, no app to authorise. A server that is down '
+      + 'fires nothing, backs off, and says so once rather than every minute.',
+    // Only what needs no credential, and that is a decision rather than a
+    // stage (TODO 100): a token would have to live in config.json, which the
+    // API serves in full and git now tracks. Authenticated polling waits for
+    // the secret store (TODO 96a).
+    noCredentials: true,
+    defaults: { every_minutes: 15, read: 'json' },
+    readers: [
+      { key: 'json', label: 'JSON', hint: 'The object that comes back is the '
+        + 'payload, so a field of it is what the test reads. A bare list '
+        + 'becomes {"count": n}.' },
+      { key: 'ics', label: 'a calendar (.ics)', hint: 'Becomes “minutes” - how '
+        + 'long until the next event starts - plus “events”, how many are '
+        + 'still ahead. With no next event “minutes” is absent, and a missing '
+        + 'field never fires, so an empty calendar is simply quiet. Repeating '
+        + 'events are counted as “recurring” and skipped: reading a repeat '
+        + 'rule properly is a calendar library, so this says so rather than '
+        + 'pretending they are not there.' },
+    ],
+  },
+];
 
 // The operators a reflex's test may use - one field, one operator, one number,
 // and this is the whole list (TODO 72). Mirrors REFLEX_OPS in config.py;
@@ -406,6 +460,108 @@ export const INTEGRATIONS = [
   },
 ];
 
+// The shipped colour themes (TODO 95) - a coordinated set of colours for the
+// whole button, chosen with one pointer (`active_theme`) instead of eleven
+// states one at a time.
+//
+// **Mirrored in config.py as BUILTIN_THEMES**, because both sides need them:
+// the offline editor has no server to ask, and the service has to resolve
+// `active_theme: "ember"` on a config that has never been opened in an editor.
+// test_themes.py compares the two literally and fails on drift.
+//
+// **Palette-only, deliberately.** A theme may also carry `looks` and
+// `state_looks` (see `Theme` in config.py), but every theme here re-colours the
+// palette alone - and a palette entry is the one form that ships to the device
+// and renders with **no host attached** (CLAUDE.md: "a stop list is the rich
+// form; a palette entry is the fallback form"). A themed button stays themed
+// when the PC is off, which is the direction the whole product is travelling.
+//
+// Each one exists for a different *reason*, which is the point - four palettes
+// with no argument behind them would be a colour picker with extra steps:
+//   - **Signal** carries a distinct *motion* per state as well as a distinct
+//     hue, so red/green - the pair a colourblind reader cannot separate - is
+//     told apart by held-versus-blinking. Hue never carries the load alone.
+//   - **Ember** puts every state on the black-body curve. It is also the
+//     format's stress test: with one hue family, level and motion are all that
+//     is left to distinguish states, which is why a theme entry is a whole
+//     `LedEffect` (style, both colours, period) rather than a colour. THINKING
+//     defaults to `rainbow` - by definition every hue - so a theme that could
+//     only set colours could not put that state on the curve at all.
+//   - **Nocturne** is the 3 AM nightstand: nothing above a whisper, and the
+//     only strobe in it is near-black. A theme is allowed to be quieter than
+//     the flash floor requires - the floor is a floor, not a target.
+//   - **Studio** speaks transport: record red, play green, stop amber, a hard
+//     white metronome tick, and an idle that disappears against a monitor.
+//     Everything else is desaturated **so that red means record**.
+//
+// A fifth theme legible on the 3V3 ring's colour cast waits on TODO 0c's
+// bench sitting - authoring it now would be inventing numbers.
+//
+// Strict JSON, exactly like LOOK_PRESETS and for the same reason: test_themes.py
+// slices this array out and feeds every entry through the real Python parser, so
+// a theme cannot ship a colour the config would reject or a rate the flash floor
+// would rewrite. Keep comments outside the brackets.
+export const THEMES = [
+  { "id": "signal", "label": "Signal", "about": "Maximum separation - a different hue and a different motion for every state. The one to pick if colour alone is hard to read.",
+    "palette": {
+      "IDLE": { "style": "breathe", "color": "#0000ff", "color2": "#000000", "period_s": 3 },
+      "LISTENING": { "style": "solid", "color": "#ffff00", "color2": "#000000", "period_s": 1 },
+      "THINKING": { "style": "rainbow", "color": "#ffffff", "color2": "#000000", "period_s": 0.8 },
+      "SUCCESS": { "style": "solid", "color": "#00ff00", "color2": "#000000", "period_s": 1 },
+      "ERROR": { "style": "flash", "color": "#ff0000", "color2": "#000000", "period_s": 0.45 },
+      "ALERT": { "style": "alternate", "color": "#ff0000", "color2": "#ffffff", "period_s": 0.45 },
+      "TIMING": { "style": "breathe", "color": "#00ffff", "color2": "#000000", "period_s": 1.6 },
+      "COUNTING": { "style": "flash", "color": "#ff00ff", "color2": "#000000", "period_s": 0.7 },
+      "WORKING": { "style": "solid", "color": "#ff5500", "color2": "#000000", "period_s": 1 },
+      "RESTING": { "style": "breathe", "color": "#00ff88", "color2": "#000000", "period_s": 4 },
+      "METRONOME": { "style": "flash", "color": "#ffffff", "color2": "#000000", "period_s": 0.5 }
+    } },
+  { "id": "ember", "label": "Ember", "about": "Everything on the black-body curve - deep amber at rest, warm gold when it works, red-orange when it fails. A lamp rather than a gadget.",
+    "palette": {
+      "IDLE": { "style": "breathe", "color": "#4a1200", "color2": "#000000", "period_s": 5 },
+      "LISTENING": { "style": "solid", "color": "#ff8c26", "color2": "#000000", "period_s": 1 },
+      "THINKING": { "style": "fade", "color": "#ff3800", "color2": "#ffc46b", "period_s": 1.2 },
+      "SUCCESS": { "style": "solid", "color": "#ffd08a", "color2": "#000000", "period_s": 1 },
+      "ERROR": { "style": "flash", "color": "#ff2000", "color2": "#000000", "period_s": 0.45 },
+      "ALERT": { "style": "alternate", "color": "#ff3800", "color2": "#ffe4c4", "period_s": 0.45 },
+      "TIMING": { "style": "breathe", "color": "#ff6a00", "color2": "#000000", "period_s": 2 },
+      "COUNTING": { "style": "flash", "color": "#ffa030", "color2": "#000000", "period_s": 0.7 },
+      "WORKING": { "style": "breathe", "color": "#ff5000", "color2": "#000000", "period_s": 6 },
+      "RESTING": { "style": "breathe", "color": "#ffc46b", "color2": "#000000", "period_s": 6 },
+      "METRONOME": { "style": "flash", "color": "#ffe4c4", "color2": "#000000", "period_s": 0.5 }
+    } },
+  { "id": "nocturne", "label": "Nocturne", "about": "Low, cool and slow. A near-black indigo breath at rest and an error dim enough to sleep through - a button on a nightstand at 3 AM should not be a torch.",
+    "palette": {
+      "IDLE": { "style": "breathe", "color": "#06001e", "color2": "#000000", "period_s": 6 },
+      "LISTENING": { "style": "solid", "color": "#0e1836", "color2": "#000000", "period_s": 1 },
+      "THINKING": { "style": "fade", "color": "#04001c", "color2": "#0a1840", "period_s": 3 },
+      "SUCCESS": { "style": "solid", "color": "#00301a", "color2": "#000000", "period_s": 1 },
+      "ERROR": { "style": "breathe", "color": "#3a0000", "color2": "#000000", "period_s": 1.5 },
+      "ALERT": { "style": "breathe", "color": "#5a0008", "color2": "#000000", "period_s": 1.2 },
+      "TIMING": { "style": "breathe", "color": "#001e2a", "color2": "#000000", "period_s": 3 },
+      "COUNTING": { "style": "breathe", "color": "#1a0028", "color2": "#000000", "period_s": 3 },
+      "WORKING": { "style": "breathe", "color": "#0c1428", "color2": "#000000", "period_s": 8 },
+      "RESTING": { "style": "breathe", "color": "#021c14", "color2": "#000000", "period_s": 8 },
+      "METRONOME": { "style": "flash", "color": "#14202e", "color2": "#000000", "period_s": 0.6 }
+    } },
+  { "id": "studio", "label": "Studio", "about": "Transport vocabulary - record red, play green, stop amber, a hard white tick. Desaturated everywhere else, so that red means record.",
+    "palette": {
+      "IDLE": { "style": "solid", "color": "#101820", "color2": "#000000", "period_s": 1 },
+      "LISTENING": { "style": "solid", "color": "#7c8a99", "color2": "#000000", "period_s": 1 },
+      "THINKING": { "style": "rainbow", "color": "#303030", "color2": "#909090", "period_s": 1.5 },
+      "SUCCESS": { "style": "solid", "color": "#2fae5c", "color2": "#000000", "period_s": 1 },
+      "ERROR": { "style": "flash", "color": "#e0641e", "color2": "#000000", "period_s": 0.45 },
+      "ALERT": { "style": "flash", "color": "#ff0000", "color2": "#000000", "period_s": 0.45 },
+      "TIMING": { "style": "breathe", "color": "#c88a2a", "color2": "#000000", "period_s": 2 },
+      "COUNTING": { "style": "breathe", "color": "#4f7fa8", "color2": "#000000", "period_s": 2.5 },
+      "WORKING": { "style": "breathe", "color": "#37718f", "color2": "#000000", "period_s": 6 },
+      "RESTING": { "style": "solid", "color": "#43535f", "color2": "#000000", "period_s": 1 },
+      "METRONOME": { "style": "flash", "color": "#ffffff", "color2": "#000000", "period_s": 0.5 }
+    } }
+];
+
+export const THEME_BY_ID = Object.fromEntries(THEMES.map((t) => [t.id, t]));
+
 // Action primitives - the body of the `actions` template. Two are gone:
 // the standalone `alarm` action (alarms are a template now) and `prompt`
 // (the on-device AI went with the Pi build - reach an AI through a webhook).
@@ -424,27 +580,95 @@ export const ACTIONS = [
   },
   {
     type: 'readout',
-    label: 'Show a count on the light',
+    label: 'Show a number on the light',
     fields: [
+      // Where the number comes from (TODO 118a). Mirrors `READOUT_SOURCES` in
+      // config.py - same two values, same order; test_schema_mirror.py fails
+      // on drift.
+      //
+      // **Nothing below is `required` any more, and that is this editor's one
+      // missing mechanism rather than a relaxed rule.** Which field must be
+      // filled now depends on this row - an event name, or an app and a slot -
+      // and `required` is a static flag with no conditional form, exactly as
+      // no field here hides behind another one. The parser still refuses a
+      // readout with neither, so the binding reports itself as invalid on the
+      // next load rather than being accepted as something it is not.
+      { key: 'source', label: 'Which number', kind: 'select', required: true,
+        rebuilds: true,
+        options: [
+          { value: 'event', label: 'How many times today' },
+          { value: 'app', label: 'An app’s own number' },
+        ],
+        hint: 'Counting today’s presses of an event is what this has always '
+          + 'done. An app’s own number is the value that app keeps - a tally '
+          + 'that counts past midnight holds one, and this is how you see it '
+          + 'without opening the app.' },
       // Same reading as `log`'s event field - a readout is a sibling of log,
       // not a mode of it: this one only reads count_today(event), it never
       // writes a row, so it can sit on a gesture that a `log` binding
       // elsewhere already feeds without double-counting anything.
-      { key: 'event', label: 'Event name', kind: 'text', required: true,
+      { key: 'event', label: 'Event name', kind: 'text',
         placeholder: 'coffee',
-        hint: 'Blinks today’s count for this event: tens as slow '
-          + 'pulses, units as quick ones - 27 is two slow, then seven '
-          + 'quick. 0 is one dim blink, so a real zero reads differently '
-          + 'from nothing happening.' },
+        hint: 'Used when the row above says “how many times today”. Blinks '
+          + 'today’s count for this event. 0 is one dim blink, so a real zero '
+          + 'reads differently from nothing happening.' },
+      // The same pair `set_value` names, picked the same way - one spelling of
+      // "an app's value" for the action that writes it and the one that reads
+      // it, so a slot renamed in one place is not half-renamed in the other.
+      { key: 'app', label: 'App', kind: 'select', rebuilds: true,
+        options: (ctx) => (ctx.getModes ? ctx.getModes() : [])
+          .filter((m) => m && TEMPLATE_BY_TYPE[m.template]?.docSlots?.length)
+          .map((m) => ({ value: m.name, label: m.name })),
+        hint: 'Only apps that keep a value of their own appear here. A tally '
+          + 'keeps one once you switch on "Keep counting past midnight".' },
+      { key: 'slot', label: 'Which value', kind: 'select',
+        options: (ctx, obj) => {
+          const mode = (ctx.getModes ? ctx.getModes() : [])
+            .find((m) => m && m.name === (obj && obj.app));
+          const slots = (mode && TEMPLATE_BY_TYPE[mode.template]?.docSlots) || [];
+          return slots.map((s) => ({ value: s.name, label: s.name, hint: s.about }));
+        },
+        hint: 'Which of that app’s values to show.' },
+      // TODO 91's compiler, the same four schemes a notice's hour chime
+      // offers - and '' is the tens/units digits this action has always
+      // blinked. Mirrors `readout.SCHEMES`.
+      { key: 'scheme', label: 'How to read it out', kind: 'select',
+        options: [
+          { value: '', label: 'Tens then units - slow, then quick' },
+          { value: 'hour_colors', label: 'A colour per value, that many flashes' },
+          { value: 'place_value', label: 'Colour per digit, 1-9 flashes each' },
+          { value: 'binary', label: 'Binary - two colours, one per bit' },
+          { value: 'morse', label: 'Morse - the digits, spoken' },
+        ],
+        hint: 'The default stops at 99 - a number past that is clamped, and '
+          + 'has been since this action existed. The other four have no '
+          + 'ceiling, which is what a tally in the hundreds needs. Length is '
+          + 'the trade: counting 99 out in flashes takes a while, where Morse '
+          + 'and binary stay short however big the number gets.' },
+      { key: 'colors', label: 'That scheme’s colours', kind: 'json',
+        shape: 'list', tier: 'tinker',
+        hint: 'JSON list of "#rrggbb", in the order the scheme uses them - '
+          + 'one colour for Morse, two for binary (0 then 1), one per decimal '
+          + 'place for "colour per digit" counting up from the ones, and a '
+          + 'wheel of any length for "a colour per value". Empty = that '
+          + 'scheme’s own colours. The two rows below are the tens/units '
+          + 'default’s colours and are not used by any of the four.' },
       { key: 'tens_color', label: 'Tens colour', kind: 'color', tier: 'tinker',
         hint: 'The slow pulses - the coarse digit.' },
       { key: 'units_color', label: 'Units colour', kind: 'color', tier: 'tinker',
         hint: 'The quick pulses - the fine digit.' },
     ],
     defaults: () => ({
-      action: 'readout', event: '', tens_color: '#ff8800', units_color: '#3399ff',
+      action: 'readout', source: 'event', event: '', app: '', slot: 'count',
+      scheme: '', colors: [],
+      tens_color: '#ff8800', units_color: '#3399ff',
     }),
-    describe: (a) => `Show “${a.event || '…'}” as a readout`,
+    describe: (a) => {
+      const what = a.source === 'app'
+        ? `${a.app || '…'}’s ${a.slot || '…'}`
+        : `“${a.event || '…'}”`;
+      return `Show ${what} on the light`;
+    },
   },
   {
     type: 'timer_toggle',
@@ -763,6 +987,41 @@ export const ACTIONS = [
     describe: (a) => `Show position “${a.name || '…'}”`,
   },
   {
+    type: 'load_theme',
+    label: 'Load a colour theme',
+    // Offered everywhere an ordinary primitive is, and not `appOnly`, for the
+    // reason `set_value` is not: it changes no loop and owns no light of its
+    // own - it moves one pointer in the live config and the palette push the
+    // service already makes carries the change to the button. The case that
+    // earns the reach is a reflex: *at sunset, load Nocturne* (TODO 95).
+    fields: [
+      { key: 'theme', label: 'Theme', kind: 'select', required: false,
+        // The config's own themes first, then the shipped ones - a theme saved
+        // under a built-in id shadows it, exactly as a named look shadows a
+        // preset of the same name.
+        options: (ctx) => {
+          const own = (ctx && typeof ctx.getThemes === 'function') ? ctx.getThemes() : {};
+          const ids = new Set(Object.keys(own || {}));
+          return [
+            { value: '', label: 'Your own colours', hint: 'Puts the button back on the colours the config file itself carries.' },
+            ...Object.entries(own || {}).map(([id, t]) => ({
+              value: id, label: (t && t.name) || id, hint: (t && t.about) || '',
+            })),
+            ...THEMES.filter((t) => !ids.has(t.id))
+              .map((t) => ({ value: t.id, label: t.label, hint: t.about })),
+          ];
+        },
+        hint: 'Re-colours the whole button at once. Not saved - a theme a '
+          + 'gesture or a reaction loads lasts until the config is reloaded, '
+          + 'the same way sleeping does. Pick one on the Lights tab and Save '
+          + 'to make it the one the button starts on.' },
+    ],
+    defaults: () => ({ action: 'load_theme', theme: '' }),
+    describe: (a) => (a.theme
+      ? `Load theme “${THEME_BY_ID[a.theme]?.label || a.theme}”`
+      : 'Back to your own colours'),
+  },
+  {
     type: 'standby',
     label: 'Sleep / wake the button',
     // No fields, and that is the whole design: which way it goes is session
@@ -856,11 +1115,30 @@ export const ACTIVATIONS = [
   {
     type: 'schedule',
     label: 'At a set time each day',
-    custom: true, // at HH:MM + days editor
+    // at HH:MM + days editor, plus TODO 106's two: `every` (a repeat within
+    // the day) and `between` (which stretch of it). Both optional, and
+    // deliberately absent from `defaults()` - a schedule that has never heard
+    // of them must keep meaning exactly "once a day at `at`", in the file as
+    // well as in the parser.
+    custom: true,
+    // Mirrors `config.SCHEDULE_REPEATS`. Value '' is "once a day", which is
+    // how the absent key is spelled in a select that has no empty state.
+    repeats: [
+      { value: '', label: 'Once, at that time' },
+      { value: 'hour', label: 'Every hour, at that minute past' },
+    ],
     defaults: () => ({ type: 'schedule', at: '07:00' }),
     describe: (a) => {
       const days = fmtDays(a.days);
-      return `at ${a.at || '--:--'}${days ? ` ${days}` : ''}`;
+      const window = Array.isArray(a.between) && a.between[0] && a.between[1]
+        ? ` between ${a.between[0]} and ${a.between[1]}` : '';
+      // The hour in `at` is unused when it repeats hourly (config.py warns
+      // about it), so the summary must not print it - a row reading "at 08:30
+      // every hour" is the exact misreading that warning exists to catch.
+      const when = a.every === 'hour'
+        ? `every hour at :${String(a.at || '--:--').slice(-2)}`
+        : `at ${a.at || '--:--'}`;
+      return `${when}${window}${days ? ` ${days}` : ''}`;
     },
   },
   {
@@ -1010,6 +1288,96 @@ const BETTER_FIELD = {
  */
 export const READOUT_MEASURES = ['duration', 'value', 'tally', 'outcome'];
 
+/**
+ * A tally's gestures that count, as `[gestureKey, step]` pairs (TODO 118c).
+ *
+ * **Written the way `_parse_counter_body` reads it**, which is the only reason
+ * it is a function rather than a filter written inline: a tally saved before
+ * steps existed carries none of these keys at all, and the parser reads that
+ * as the short-press/double-tap pair it has always meant. The served editor is
+ * seeded from the *parsed* config so it never sees one, but the offline editor
+ * reads a file straight off disk - and a page that called a working config
+ * empty would be the "confidently wrong classification" INVARIANTS.md's nav
+ * rule is about.
+ */
+export function counterSteps(mode) {
+  const keys = GESTURES.filter((g) => g.key !== 'long_press').map((g) => g.key);
+  const written = keys.filter((key) => mode && mode[key] !== undefined);
+  const source = written.length ? written : ['short_press', 'double_tap'];
+  return source
+    .map((key) => [key, Number(written.length ? mode[key] : 1)])
+    .filter(([, step]) => Number.isFinite(step) && step !== 0);
+}
+
+/**
+ * The shortcuts an app *contributes* to the rest of the button (TODO 118b).
+ *
+ * **The phone-app model, and it costs no new action type.** Installing an app
+ * on a phone puts its shortcuts in your reach as well as its own screen; a
+ * template's `actions` key is that list, and every entry is a **pre-filled
+ * instance of an action the button already has** - a `set_value` that already
+ * knows the app and the slot, an `enter_mode` that already names the app.
+ * Nothing here is a new `type` in ACTIONS, nothing here reaches config.json,
+ * and picking one copies the body into the binding exactly as a look preset
+ * copies a look. That is the whole mechanism: a table, not a branch.
+ *
+ * It is `docSlots`' neighbour on purpose. That key declares the durable values
+ * an app keeps and this one declares the shortcuts it offers, and both are the
+ * manifest a package will carry once apps ship as packages - which is why the
+ * shape is data an app author could write rather than code the editor runs.
+ *
+ * A template's `actions` is **a function of the mode**, because what an app
+ * offers depends on how it is configured: a control surface contributes one
+ * shortcut per position it actually has, and a tally that keeps a running
+ * total contributes a different "count up" from one that starts again each
+ * day.
+ *
+ *   actions: (mode) => [
+ *     { id: 'count_up',              // stable within the template; never stored
+ *       label: 'count up',           // shown under the app's own name
+ *       about: 'One press, +1.',     // optional, the option's hint
+ *       body: { action: 'set_value', app: mode.name, slot: 'count', … } },
+ *   ]
+ *
+ * @param {object[]} modes - the sibling modes, from the live model.
+ * @param {?string[]} allowed - the action types this *binding* accepts
+ *   (POOL_ACTIONS, HOOK_ACTIONS, REFLEX_ACTIONS, a template's own list), or
+ *   null for "anything a gesture may hold". **Derived, never widened**: a
+ *   contributed action is offered exactly where its underlying action already
+ *   is, which is how a control surface's `set_position` shortcuts appear on a
+ *   reaction and on nothing else without a word being written about it here.
+ */
+export function contributedActions(modes, allowed = null) {
+  const found = [];
+  for (const mode of Array.isArray(modes) ? modes : []) {
+    if (!mode || !mode.name) continue;
+    const declare = TEMPLATE_BY_TYPE[mode.template]?.actions;
+    if (typeof declare !== 'function') continue;
+    let offered;
+    // A descriptor is data an app author wrote, and one that throws must cost
+    // that app its shortcuts rather than the picker its contents.
+    try { offered = declare(mode); } catch { continue; }
+    for (const shortcut of Array.isArray(offered) ? offered : []) {
+      const body = shortcut && shortcut.body;
+      const descriptor = body && ACTION_BY_TYPE[body.action];
+      if (!descriptor) continue;
+      // Two filters, and they are the same rule twice: an action this binding
+      // will not accept, and one no gesture may hold (`appOnly`), are both
+      // things the parser would drop. Offering either would make a shortcut
+      // that vanishes on Save.
+      if (allowed ? !allowed.includes(body.action) : descriptor.appOnly) continue;
+      found.push({
+        app: mode.name,
+        id: `${mode.template}:${shortcut.id}`,
+        label: shortcut.label || shortcut.id,
+        about: shortcut.about || '',
+        body,
+      });
+    }
+  }
+  return found;
+}
+
 export const TEMPLATES = [
   {
     type: 'actions',
@@ -1083,6 +1451,26 @@ export const TEMPLATES = [
           + 'you can miss.' },
       { key: 'chime', label: 'Make a sound', kind: 'checkbox',
         hint: 'Off = light only, no sound at all.' },
+      // TODO 105, and it is one ordered choice rather than a pair of
+      // checkboxes on purpose: each option is strictly weaker than the one
+      // above it, so of the sixteen combinations two boxes would offer,
+      // twelve mean nothing. Mirrors `config.INTERRUPT_TIERS` - same four
+      // values, same order, most permissive first.
+      //
+      // Deliberately not folded into Urgent: that one is *how loud*, this one
+      // is *whether it may speak at all*, and a gentle chime that must still
+      // pierce sleep is Urgent off with this set to Always.
+      { key: 'interrupts', label: 'How far it may interrupt', kind: 'select',
+        options: [
+          { value: 'always', label: 'Always - even wakes a sleeping button' },
+          { value: 'while_awake', label: 'While awake - but never wakes it' },
+          { value: 'when_free', label: 'When free - waits for any app to finish' },
+          { value: 'never', label: 'Never - no light, no sound' },
+        ],
+        hint: 'One that may not show yet waits, and "Give up after" below '
+          + 'decides when waiting becomes a miss. Never shows nothing at all: '
+          + 'it goes straight to the miss, which is how you get a scheduled '
+          + 'webhook with no light - bind it under "If nobody answers".' },
       // The dead man's switch (TODO 44), generalised: basic tier, not
       // tinker, because someone who wants this is looking for it, and
       // burying the thing a preset is named after would be a joke at their
@@ -1093,6 +1481,42 @@ export const TEMPLATES = [
           + 'cleared, which is an ordinary alarm.' },
       { key: 'snooze_minutes', label: 'Snooze minutes', kind: 'number', min: 0, step: 1,
         hint: 'Long press snoozes this long instead of clearing. 0 = no snooze.' },
+      // TODO 106's hour chime. Mirrors `readout.SCHEMES` - same four values,
+      // same order - and '' is "off", the ordinary ring.
+      //
+      // **The hint carries the cost, because the cost is the decision.** Every
+      // number below is measured (tests/test_hour_chime.py pins them), and the
+      // spread is the whole reason there are four schemes rather than the one
+      // the original sketch asked for: counting to twelve on a single pixel is
+      // slow, and two of these do not count to twelve at all. Someone choosing
+      // "a colour per hour" should learn what midday costs here, not on the
+      // first day they leave it running.
+      { key: 'readout_scheme', label: 'Say the hour', kind: 'select',
+        options: [
+          { value: '', label: 'No - just ring or flash' },
+          { value: 'hour_colors', label: 'A colour per hour, 1-12 flashes' },
+          { value: 'place_value', label: 'Colour per digit, 1-9 flashes each' },
+          { value: 'binary', label: 'Binary - two colours, one per bit' },
+          { value: 'morse', label: 'Morse - the digits, spoken' },
+        ],
+        hint: 'Turns this from an alarm into a chime: it washes up to white, '
+          + 'counts the hour, and fades back to whatever the light was doing. '
+          + 'How long that takes depends entirely on this row. Counting the '
+          + 'hour at noon takes about 6.0s as colours, 7.0s in Morse, 1.7s by '
+          + 'digit and 1.8s in binary - and the two fades below are on top of '
+          + 'all four, so the honest totals at midday are roughly 26s, 27s, '
+          + '22s and 22s. Twelve flashes is a long time for a light on a desk; '
+          + 'noon in binary is four symbols. (Worst case is not always noon: '
+          + '“colour per digit” peaks at nine o’clock, 4.5s.)' },
+      // Always shown rather than revealed by the row above: nothing in this
+      // editor hides a field behind another one today, and inventing that
+      // mechanism for one number would be a widget change, not a schema one.
+      { key: 'readout_fade_s', label: 'Fade in and out (seconds)', kind: 'number',
+        min: 0, step: 1,
+        hint: 'Only used when the row above says the hour. Each way, so this '
+          + 'is counted twice. 10 is the slow swell a '
+          + 'church bell wants; 2 makes the whole chime brief enough to catch '
+          + 'out of the corner of your eye. 0 cuts straight to white.' },
     ],
     bindings: [
       { key: 'on_cleared', label: 'When cleared', actions: HOOK_ACTIONS,
@@ -1100,10 +1524,10 @@ export const TEMPLATES = [
       { key: 'on_snoozed', label: 'When snoozed', actions: HOOK_ACTIONS,
         hint: 'Runs whenever long press snoozes it.' },
       { key: 'on_missed', label: 'If nobody answers', actions: HOOK_ACTIONS,
-        hint: 'Runs only when it goes unanswered for the full timeout. It '
-          + 'needs this PC awake and connected - if the service stops or '
-          + 'Bluetooth drops it cannot fire, so treat it as a nudge rather '
-          + 'than a safety device.' },
+        hint: 'Runs when it goes unanswered for the full timeout - or, if it '
+          + 'was never allowed to show at all, straight away. It needs this PC '
+          + 'awake and connected - if the service stops or Bluetooth drops it '
+          + 'cannot fire, so treat it as a nudge rather than a safety device.' },
     ],
     // `outcome`, not `value`, and that is the whole reason the measure
     // exists: a clear logs 1 and a miss logs 0 under the same name, so the
@@ -1114,23 +1538,64 @@ export const TEMPLATES = [
       noun: 'ring', better: null,
       states: { 1: 'answered', 0: 'no answer' },
     },
+    // **Snooze and arm are not here, and could not be.** Both are commands to
+    // a *running* notice, and the only action that reaches a running app is
+    // `set_position`, which addresses a signal light's or a control surface's
+    // positions. Adding "snooze" would mean adding a primitive, which is the
+    // one thing 118b is not for - so this contributes the shortcut that is
+    // already expressible: ring it now, which is how you test one.
+    actions: (mode) => [
+      {
+        id: 'ring',
+        label: 'ring it now',
+        about: 'Sets it off immediately, without waiting for its time - which '
+          + 'is how you check what it looks and sounds like.',
+        body: { action: 'enter_mode', target: mode.name },
+      },
+    ],
+    // `when_free` and not the first entry, mirroring `config.DEFAULT_INTERRUPTS`
+    // and for the reason written there: a new notice defaulting to Always
+    // would make sleep meaningless within a week.
+    // `readout_scheme: ''` is "off" - a new notice is an alarm, not a chime.
+    // The fade carries its default here so the number field is never born
+    // empty; it is inert until a scheme is chosen.
     defaults: () => ({
       message: '', label: '', log_as: 'notice', urgent: true, chime: true,
-      timeout_minutes: 0, snooze_minutes: 0,
+      timeout_minutes: 0, snooze_minutes: 0, interrupts: 'when_free',
+      readout_scheme: '', readout_fade_s: 10,
     }),
     startedBy: 'schedule',
-    exits: (mode) => (Number(mode.snooze_minutes) > 0
-      ? `any press; long press snoozes ${mode.snooze_minutes}m`
-      : 'any press'),
+    // A chime is not waiting to be dismissed, so "any press" would describe
+    // the wrong thing entirely: it ends by itself, and a press only shortens
+    // it (TODO 106).
+    exits: (mode) => {
+      if (mode.readout_scheme) return 'ends on its own; a press cuts it short';
+      return Number(mode.snooze_minutes) > 0
+        ? `any press; long press snoozes ${mode.snooze_minutes}m`
+        : 'any press';
+    },
     // Alarm-or-Reminder survives the trim, because `urgent` is the one thing
     // that makes two notices *behave* differently rather than merely differ.
     // The time is read off the activation - a notice is always scheduled, and
     // when it goes off is the first thing anyone wants from this row.
+    //
+    // The tier joins it only when it is not the default: the two ends change
+    // what the row *is* - one pierces sleep, the other never lights up - and a
+    // silent notice that read like every other notice is the one row here you
+    // would forget you had written.
     describe: (mode) => {
-      const kind = mode.urgent ? 'Alarm' : 'Reminder';
+      // A chime is a different *kind* of row, not a variant of one: it never
+      // waits to be cleared, so "snooze" and "Alarm" would both be lies about
+      // it. It leads with the word instead, and keeps only the two things that
+      // still apply - when, and how far it may interrupt.
+      const kind = mode.readout_scheme
+        ? 'Chime' : (mode.urgent ? 'Alarm' : 'Reminder');
       const when = describeActivation(mode.activation);
-      const snooze = Number(mode.snooze_minutes) > 0 ? `, snooze ${mode.snooze_minutes}m` : '';
-      return `${kind}${mode.message ? ` “${mode.message}”` : ''} · ${when}${snooze}`;
+      const snooze = !mode.readout_scheme && Number(mode.snooze_minutes) > 0
+        ? `, snooze ${mode.snooze_minutes}m` : '';
+      const reach = { always: ', even when asleep', while_awake: ', only while awake', never: ', silent' };
+      const tier = reach[mode.interrupts] || '';
+      return `${kind}${mode.message ? ` “${mode.message}”` : ''} · ${when}${snooze}${tier}`;
     },
   },
   {
@@ -1165,6 +1630,25 @@ export const TEMPLATES = [
       { key: 'elapsed_s', about: 'seconds run, at exit' },
       { key: 'laps', about: 'lap count' },
     ],
+    // One shortcut, and it is the useful one: a stopwatch's timer is a *named*
+    // timer in the log, so `timer_toggle` on the same name starts and stops the
+    // very run this app would - from a gesture in your menus, without opening
+    // it. Everywhere an ordinary primitive is offered, since that is all it is.
+    //
+    // **"Show elapsed" is deliberately absent**: `readout` counts today's rows
+    // of an event, so pointed at a stopwatch it would say how many runs there
+    // have been, not how long the current one is. A duration on the light is a
+    // primitive the button does not have, and inventing one to fill this list
+    // would be the tail wagging the dog.
+    actions: (mode) => [
+      {
+        id: 'toggle',
+        label: 'start / stop the timer',
+        about: 'Toggles the same named timer this stopwatch runs, without '
+          + 'opening it. The elapsed time is logged on the stop, as usual.',
+        body: { action: 'timer_toggle', log_as: mode.log_as || 'stopwatch' },
+      },
+    ],
     // Named, like the countdown's and the metronome's: this field is
     // `required` and StopwatchBehavior now defaults to the same word, so a
     // stopwatch added here and one a scene file leaves out agree on what the
@@ -1186,6 +1670,61 @@ export const TEMPLATES = [
     docSlots: [
       { name: 'count', default: 0,
         about: 'The running total, when this tally keeps counting past midnight.' },
+    ],
+    // What a tally contributes to the rest of the button (TODO 118b) - the two
+    // the owner named: count, and reveal the count. `docSlots`' neighbour, and
+    // deliberately: one declares what this app remembers, the other what it
+    // lends out.
+    actions: (mode) => [
+      {
+        id: 'count_up',
+        label: 'count up',
+        about: 'Adds to this tally without opening it - a gesture in your '
+          + 'menus, a reaction, a step in a sequence. Change the amount below '
+          + 'for “+5” or “−1”.',
+        // **Which body is honest depends on this tally's own setting**, which
+        // is the reason `actions` is a function of the mode rather than a
+        // fixed list. A running total lives in the document, so `set_value`
+        // moves it; a day counter *is* its rows, so a row is what adds to it.
+        // Either way this shortcut moves the same number the app itself shows.
+        body: mode.durable
+          ? { action: 'set_value', app: mode.name, slot: 'count', op: 'add', value: 1 }
+          : { action: 'log', event: mode.event || 'counter' },
+      },
+      {
+        id: 'show_count',
+        label: 'show the count',
+        about: 'Blinks the count on the light and changes nothing - the same '
+          + 'number, in the same scheme, that the tally shows itself.',
+        // **The same `mode.durable` test the shortcut above makes**, and it is
+        // the join TODO 118a existed to close. A `readout` can point at an
+        // app's own slot now, so a tally that keeps counting past midnight
+        // reveals the number it is actually keeping rather than recounting
+        // today's rows - two answers that agreed only while nothing counted by
+        // more than one, and diverged past 99 in any case.
+        //
+        // Mirrors `config.counter_readout`, which is what `run_counter`'s own
+        // periodic flash is built from: the shortcut and the app's surface are
+        // one object on the Python side, so this table is the third copy of a
+        // decision rather than a second decision. test_readout_source.py
+        // compares the two.
+        body: mode.durable
+          ? {
+            action: 'readout', source: 'app', app: mode.name, slot: 'count',
+            event: mode.event || 'counter',
+            scheme: mode.readout_scheme || '',
+            colors: Array.isArray(mode.readout_colors) ? mode.readout_colors : [],
+            tens_color: mode.tens_color || '#ff8800',
+            units_color: mode.units_color || '#3399ff',
+          }
+          : {
+            action: 'readout', source: 'event', event: mode.event || 'counter',
+            scheme: mode.readout_scheme || '',
+            colors: Array.isArray(mode.readout_colors) ? mode.readout_colors : [],
+            tens_color: mode.tens_color || '#ff8800',
+            units_color: mode.units_color || '#3399ff',
+          },
+      },
     ],
     label: 'Tally',
     about: 'A count you press up.',
@@ -1211,6 +1750,79 @@ export const TEMPLATES = [
       // as today's behaviour (busiest, unlabelled), and this only starts
       // mattering the day someone is counting something they want fewer of.
       BETTER_FIELD,
+      // The count, said out loud on a timer (TODO 118c). 0 is off, which is
+      // every tally written before this existed.
+      { key: 'show_every_s', label: 'Show the count every (seconds)',
+        kind: 'number', min: 0, step: 1,
+        hint: 'The tally blinks its own number on the light this often, in '
+          + 'whatever the row below says. 0 = only when you press. '
+          + 'A press cuts the digits short, because you already know.' },
+      // **The scheme lives here, on the tally, and not on each binding** -
+      // TODO 91's "Done when" in one field. The app's own periodic flash and
+      // the "show the count" shortcut it contributes are both built from it
+      // (`config.counter_readout`), so configuring it once is configuring it
+      // everywhere this number is shown.
+      { key: 'readout_scheme', label: 'Read the count as', kind: 'select',
+        options: [
+          { value: '', label: 'Tens then units - slow, then quick' },
+          { value: 'hour_colors', label: 'A colour per value, that many flashes' },
+          { value: 'place_value', label: 'Colour per digit, 1-9 flashes each' },
+          { value: 'binary', label: 'Binary - two colours, one per bit' },
+          { value: 'morse', label: 'Morse - the digits, spoken' },
+        ],
+        hint: 'The default stops at 99 - a tally past that shows 99 and has '
+          + 'always done so. The other four have no ceiling. "Colour per '
+          + 'digit" is the same idea without the cap and is the natural move '
+          + 'for a tally that runs into the hundreds; Morse and binary stay '
+          + 'short however big the number gets.' },
+      { key: 'readout_colors', label: 'That scheme’s colours', kind: 'json',
+        shape: 'list', tier: 'tinker',
+        hint: 'JSON list of "#rrggbb", in the order the scheme uses them - '
+          + 'one for Morse, two for binary (0 then 1), one per decimal place '
+          + 'for "colour per digit" counting up from the ones, a wheel of any '
+          + 'length for "a colour per value". Empty = that scheme’s own '
+          + 'colours. The two rows below belong to the tens/units default.' },
+      { key: 'tens_color', label: 'Tens colour', kind: 'color', tier: 'tinker',
+        hint: 'The slow pulses - the coarse digit, on the tens/units default. '
+          + 'The "show the count" shortcut this tally contributes carries the '
+          + 'same one, so the two never disagree.' },
+      { key: 'units_color', label: 'Units colour', kind: 'color', tier: 'tinker',
+        hint: 'The quick pulses - the fine digit, on the tens/units default.' },
+      // Five steps and one way out (TODO 118c). **Long press is not here and
+      // cannot be**: it leaves the tally, as it leaves every app, and
+      // `_parse_counter_body` drops a step written against it exactly as
+      // `_parse_control_body` drops a binding on it. That is why this list is
+      // five long where the button has six gestures - the same shape the
+      // Actions and Control templates' `gestures` lists already have.
+      //
+      // Written out rather than derived from GESTURES, which is a concession
+      // to the mirror test next door: `test_schema_mirror.py` reads these
+      // descriptors with a bracket walk and cannot evaluate a `.map()`, and
+      // its own rule is that a mirror which becomes hard to extract loses the
+      // clever side, not the test. `test_app_actions.py` pins the list against
+      // TRIGGER_TYPES instead, so the derivation's guarantee survives as an
+      // assertion.
+      //
+      // All five are basic-tier: assigning the presses *is* this app's
+      // surface, and burying three of them under Tinker would hide the feature
+      // behind the setting that turns it on.
+      { key: 'short_press', label: 'Short press counts', kind: 'number', step: 1,
+        hint: '0 = this press does nothing. An amount other than 1 moves the '
+          + 'number and is written on the row - but a tally that starts again '
+          + 'each day counts presses, so switch on "Keep counting past '
+          + 'midnight" if +5 should still read as 5 tomorrow.' },
+      { key: 'double_tap', label: 'Double tap counts', kind: 'number', step: 1,
+        hint: '0 = this press does nothing. Negative counts down, which is how '
+          + 'you undo a miscount.' },
+      { key: 'triple_tap', label: 'Triple tap counts', kind: 'number', step: 1,
+        hint: '0 = this press does nothing.' },
+      { key: 'tap_4', label: 'Four taps counts', kind: 'number', step: 1,
+        hint: '0 = this press does nothing. Filling it in slows every shorter '
+          + 'tap slightly - the button must wait to rule out a 4th.' },
+      { key: 'tap_5', label: 'Five taps counts', kind: 'number', step: 1,
+        hint: '0 = this press does nothing. Deliberately awkward, so a good '
+          + 'home for a reset or a big jump - and it slows the shorter taps '
+          + 'the same way.' },
     ],
     // A tally, not a value: each press is one row and the number worth seeing
     // is how many of them a day held - which is exactly what `count_today`
@@ -1227,11 +1839,26 @@ export const TEMPLATES = [
     // Named for the same reason the stopwatch's is: `event` is `required` and
     // run_counter uses it unguarded, so an empty default writes rows called ""
     // and sums every unnamed counter into one bucket.
-    defaults: () => ({ event: 'counter', durable: false }),
+    // The two steps `CounterBehavior` defaults to, spelled out - and the other
+    // three written as 0 rather than left out, because the number widget has no
+    // empty state and a slot that vanished on Save would read as the field
+    // having been ignored. Zeroes are dropped by the parser, so an untouched
+    // tally still tells the device to count no further than two.
+    defaults: () => ({
+      event: 'counter', durable: false,
+      short_press: 1, double_tap: 1, triple_tap: 0, tap_4: 0, tap_5: 0,
+      show_every_s: 0, tens_color: '#ff8800', units_color: '#3399ff',
+    }),
     startedBy: 'gesture',
-    exits: () => 'long press (short/double = +1)',
-    describe: (mode) => `+1 to “${mode.event || '…'}”`
-      + (mode.durable ? ' · a running total' : ' · today only'),
+    exits: () => 'long press (the presses with a step count)',
+    describe: (mode) => {
+      const steps = counterSteps(mode)
+        .map(([, step]) => `${step > 0 ? '+' : ''}${step}`);
+      const how = steps.length ? steps.join('/') : 'no press counts';
+      return `${how} to “${mode.event || '…'}”`
+        + (mode.durable ? ' · a running total' : ' · today only')
+        + (Number(mode.show_every_s) > 0 ? ` · shows every ${fmtLength(mode.show_every_s)}` : '');
+    },
   },
   {
     // ledStates is none, deliberately: the launcher wears whichever app is
@@ -1267,6 +1894,19 @@ export const TEMPLATES = [
       kind: 'log', nameField: 'log_as', measure: 'tally',
       noun: 'launch', better: null,
     },
+    // The plainest contribution there is, and worth having for exactly that
+    // reason: "open it" under the menu's own name beats finding "Launch an
+    // app" and then finding this menu in its target list. Same body either
+    // way - which is the point of a contributed action being a pre-filled
+    // instance rather than a new kind of thing.
+    actions: (mode) => [
+      {
+        id: 'open',
+        label: 'open this menu',
+        about: 'Opens the menu, so the next presses step through its apps.',
+        body: { action: 'enter_mode', target: mode.name },
+      },
+    ],
     defaults: () => ({ targets: '', return_after: true, log_as: '' }),
     startedBy: 'gesture',
     exits: () => 'long press (short = next app, double tap = launch)',
@@ -1678,6 +2318,25 @@ TEMPLATES.push({
     kind: 'log', nameField: 'log_as', measure: 'tally',
     noun: 'change', better: null,
   },
+  // One shortcut per position this light actually has - which is why a
+  // template's `actions` is a function of the mode rather than a fixed list.
+  //
+  // **This is where the allow-list rule pays for itself.** `set_position` is
+  // `appOnly`, and it is in `REFLEX_ACTIONS` and in nothing else, so these
+  // appear on a reaction's "then" and on no gesture, no hook, no pool entry
+  // and no sequence step - without a word about it being written here. The
+  // free-text position field stays exactly as it was for anything hand-typed;
+  // this only means the names you already wrote are pickable.
+  actions: (mode) => (Array.isArray(mode.states) ? mode.states : [])
+    .filter((state) => state && state.name)
+    .map((state) => ({
+      id: `position:${state.name}`,
+      label: `show “${state.name}”`,
+      about: 'For a reaction limited to this app: something out there reports '
+        + 'where we are, and the light shows it without sending this '
+        + 'position’s own message back.',
+      body: { action: 'set_position', name: state.name },
+    })),
   defaults: () => ({
     states: [
       { name: 'Free', color: '#00ff00', style: 'solid' },
@@ -1751,6 +2410,21 @@ TEMPLATES.push({
     kind: 'log', nameField: 'log_as', measure: 'tally',
     noun: 'press', better: null,
   },
+  // The Signal light's contribution, asked of the other template with
+  // positions - and the case this feature is most obviously for: pairing a
+  // reaction with a page position used to mean typing the name back in by
+  // hand, with nothing checking it matched. Same `set_position` action, same
+  // reflex-only reach; only the typing goes away.
+  actions: (mode) => (Array.isArray(mode.positions) ? mode.positions : [])
+    .filter((position) => position && position.name)
+    .map((position) => ({
+      id: `position:${position.name}`,
+      label: `show “${position.name}”`,
+      about: 'For a reaction limited to this page: the page wears this '
+        + 'position’s look until something says otherwise. No gesture moves '
+        + 'it and nothing is sent.',
+      body: { action: 'set_position', name: position.name },
+    })),
   defaults: () => ({
     short_press: { action: 'log', event: 'control_press' },
     log_as: '', return_after: true, positions: [],
@@ -1908,8 +2582,13 @@ export const BUILTIN_MODES = [
     id: 'gratitude',
     label: 'Gratitude counter',
     blurb: 'Tap once per thing you’re grateful for.',
+    // Spread, like the Notice presets above: a preset claims to be a finished
+    // mode, so it has to carry every field its template declares or the
+    // editor's own Check rejects what "Add a ready-made mode" just wrote
+    // (TODO 35's failure, met again the moment the Tally grew its step fields).
     mode: () => ({
       name: 'Gratitude', template: 'counter', activation: { type: 'manual' },
+      ...TEMPLATE_BY_TYPE.counter.defaults(),
       event: 'gratitude',
     }),
   },
@@ -2235,11 +2914,22 @@ function exitsOf(mode, byName, actions, allModes) {
  *  that lists it must not describe the same object two ways. */
 export function describeReflex(reflex) {
   const midi = reflex?.from?.midi;
+  const url = reflex?.from?.url;
+  // A polled source says its reader and its interval and *not* its address,
+  // deliberately: the endpoints this is built for are secret-URL calendars
+  // (TODO 100), where the link is the credential. A summary line is repeated
+  // into the nav and every card, so printing it would scatter the secret
+  // across the UI to say nothing the reader and interval do not already say.
+  const reader = url
+    ? REFLEX_SOURCES.find((s) => s.key === 'url')?.readers
+      ?.find((r) => r.key === (url.read || 'json'))?.label
+    : null;
   // Source and test read as one clause - "MIDI note 95, velocity == 127" -
   // because that is one circumstance said in two halves, and an arrow between
   // them would suggest two steps.
   const circumstance = [
     midi ? `MIDI ${'cc' in midi ? `CC ${midi.cc}` : `note ${midi.note}`}` : null,
+    url ? `${reader || 'a URL'} every ${url.every_minutes ?? 15} min` : null,
     reflex?.when?.field
       ? `${reflex.when.field} ${reflex.when.op || '<'} ${reflex.when.value ?? 0}`
       : null,

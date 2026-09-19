@@ -1,0 +1,72 @@
+{
+  "title": "Collector's Shelf",
+  "blurb": "Sits on the shelf in your fandom's colours, flares when a script spots a restock or a drop, and keeps the tally of every grail you've landed.",
+  "for": "Collectors and fandom-deep fans who want a shelf object that wears their colours at rest and looks up the moment something worth knowing happens.",
+  "assumes": ["an external script that can POST to the button's REST reflex endpoint"],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": { "action": "enter_mode", "target": "Display" },
+      "double_tap": { "action": "enter_mode", "target": "Pickups" },
+      "triple_tap": { "action": "enter_mode", "target": "Binge" }
+    },
+    {
+      "name": "Display",
+      "template": "signal",
+      "activation": { "type": "manual" },
+      "states": [
+        { "name": "On Display", "color": "#6a00f4", "style": "breathe" },
+        { "name": "Hunting", "color": "#ff9500", "style": "breathe" },
+        { "name": "New Arrival", "color": "#ffd60a", "style": "flash" },
+        { "name": "Preorder Locked", "color": "#00b4d8", "style": "solid" }
+      ],
+      "start_at": 0,
+      "log_as": "shelf_status"
+    },
+    {
+      "name": "Pickups",
+      "template": "counter",
+      "activation": { "type": "manual" },
+      "event": "pickup",
+      "durable": true
+    },
+    {
+      "name": "Binge",
+      "template": "stopwatch",
+      "activation": { "type": "manual" },
+      "log_as": "binge_session",
+      "ladder": {
+        "enabled": true,
+        "tick_s": 1,
+        "base": "#000000",
+        "rungs": [
+          { "every_s": 3600, "color": "#ffffff" },
+          { "every_s": 1800, "color": "#ffd60a" },
+          { "every_s": 300, "color": "#3a0ca3" }
+        ]
+      }
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "breathe", "color": "#2a0845", "color2": "#000000", "period_s": 9 },
+    "LISTENING": { "style": "solid", "color": "#ffd60a", "color2": "#000000", "period_s": 3 },
+    "COUNTING": { "style": "fade", "color": "#c77dff", "color2": "#240046", "period_s": 5 },
+    "TIMING": { "style": "breathe", "color": "#3a0ca3", "color2": "#000000", "period_s": 4 }
+  },
+
+  "looks": {},
+  "actions": {},
+  "reflexes": [
+    {
+      "name": "restock_ping",
+      "then": { "action": "set_position", "name": "New Arrival" },
+      "when": { "field": "value", "op": ">", "value": 0 },
+      "while": "Display"
+    }
+  ],
+  "state_looks": {}
+}

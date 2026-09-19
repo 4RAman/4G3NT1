@@ -13,7 +13,7 @@ import { clear, el } from './dom.js';
 // The import is one-way - schema.js is DOM-free data and never reaches back.
 import {
   ACTIONS, ACTION_BY_TYPE, MAX_SEQUENCE_S, MAX_SEQUENCE_STEPS, SEQUENCE_ACTIONS,
-  SEQUENCE_TAIL_ACTIONS,
+  SEQUENCE_TAIL_ACTIONS, contributedActions,
   TEMPLATE_BY_TYPE, describeEffect, describeTemplate, levelHex, levelPercent,
   modeLook,
 } from './schema.js';
@@ -455,14 +455,32 @@ const WIDGETS = {
   // the named-action pool exists to prevent.
   steps(spec, obj, onInput, ctx) {
     const NAMED = '__named__';
+    // The gesture sub-editor's second sentinel, here for the same reason
+    // (TODO 118b) - see modeEditor.js's `_gesture`. The digits after it index
+    // the row's own `contributed` list, which sidesteps escaping an app name.
+    const CONTRIB = '__app__:';
     const offered = ACTIONS.filter((a) => SEQUENCE_ACTIONS.includes(a.type));
     // A tail action - today just `readout` - is offered on the last row only,
     // so the control cannot express what the parser would refuse (TODO 117).
     const tailish = (step) => !!step && typeof step === 'object'
       && SEQUENCE_TAIL_ACTIONS.includes(step.action);
-    const offeredAt = (index, steps) => (index === steps.length - 1
+    const isLast = (index, steps) => index === steps.length - 1;
+    const offeredAt = (index, steps) => (isLast(index, steps)
       ? [...offered, ...ACTIONS.filter((a) => SEQUENCE_TAIL_ACTIONS.includes(a.type))]
       : offered);
+    // The shortcuts your apps contribute (TODO 118b), which a step may hold
+    // exactly as a gesture, a hook, a reaction or a pool entry may. **Filtered
+    // by this row's own allow-list and by nothing else** - a step is not
+    // widened by being offered a shortcut, so the last row is the only one
+    // that sees a contributed tail action, for the same reason it is the only
+    // one offered `readout` above.
+    const modes = (ctx && typeof ctx.getModes === 'function') ? (ctx.getModes() || []) : [];
+    const contributedMid = contributedActions(modes, SEQUENCE_ACTIONS);
+    const contributedLast = contributedActions(
+      modes, [...SEQUENCE_ACTIONS, ...SEQUENCE_TAIL_ACTIONS],
+    );
+    const contributedAt = (index, steps) => (isLast(index, steps)
+      ? contributedLast : contributedMid);
     const list = () => (Array.isArray(obj[spec.key]) ? obj[spec.key] : (obj[spec.key] = []));
     const rows = el('div', { className: 'steps' });
     const err = errLine();
@@ -510,15 +528,38 @@ const WIDGETS = {
       const fields = el('div', { className: 'gesture-fields' });
 
       const choices = offeredAt(index, steps);
+      const contributed = contributedAt(index, steps);
+      const byApp = new Map();
+      contributed.forEach((shortcut, at) => {
+        if (!byApp.has(shortcut.app)) byApp.set(shortcut.app, []);
+        byApp.get(shortcut.app).push({ shortcut, at });
+      });
       const kind = el('select', {
         className: 'inp',
         onchange: () => {
-          steps[index] = kind.value === NAMED ? '' : ACTION_BY_TYPE[kind.value].defaults();
+          if (kind.value === NAMED) steps[index] = '';
+          else if (kind.value.startsWith(CONTRIB)) {
+            // **Copied, not referenced**, exactly as a gesture does it: the
+            // body lands in the step and the app that offered it is forgotten,
+            // so nothing new reaches config.json. `changed()` re-renders the
+            // row, which settles the select back onto the underlying action.
+            const picked = contributed[Number(kind.value.slice(CONTRIB.length))];
+            if (!picked) return;
+            steps[index] = structuredClone(picked.body);
+          } else steps[index] = ACTION_BY_TYPE[kind.value].defaults();
           changed();
         },
       }, [
         ...choices.map((a) => el('option', { value: a.type, textContent: a.label })),
         el('option', { value: NAMED, textContent: 'Use a named action' }),
+        // After the built-in list rather than before it: these are the shorter
+        // road to the same actions, not a different set.
+        ...[...byApp].map(([app, entries]) => el('optgroup', { label: app },
+          entries.map(({ shortcut, at }) => el('option', {
+            value: `${CONTRIB}${at}`,
+            textContent: shortcut.label,
+            title: shortcut.about || '',
+          })))),
       ]);
       kind.value = named ? NAMED : (step.action || 'midi');
 

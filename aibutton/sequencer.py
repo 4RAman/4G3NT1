@@ -38,7 +38,7 @@ save a four-line lerp would cost more than it saves.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .device import rgb_bytes
 
@@ -99,10 +99,42 @@ class Stop:
     form is the one the editor can show you honestly.
     """
 
-    color: str           # "#rrggbb", the colour this stop arrives at
+    color: str           # "#rrggbb" or RESTING, the colour this stop arrives at
     hold_s: float = 0.5  # how long it stays, once arrived
     fade_s: float = 0.0  # how long arriving takes; 0 is a hard cut
     curve: str = "linear"   # how the fade is shaped - see CURVES
+
+
+# "Whatever the light was resting on", as a colour a stop may name (TODO 106).
+#
+# **A stop list is a schedule of colours and does not know what came before
+# it.** That is fine for a repeat, which starts from its own last stop, and it
+# is the whole problem for a one-shot: a one-shot fades *from black* by
+# construction, so it snaps to black at the start and drops back to the palette
+# at the end. Both seams are visible, and "fade back to whatever it was" - the
+# thing 106's hour chime is mostly made of - is not expressible without a name
+# for "whatever it was".
+#
+# So it is a token rather than a fifth field on `Stop`: it is a *colour*, it
+# belongs wherever a colour goes (first stop, last stop, or in the middle of a
+# breath), and a field would have meant every renderer growing a branch for it.
+# The sigil is what keeps it out of the colour space - `#rrggbb` with the hash
+# optional is what a colour is here, and no hex string starts with "@".
+#
+# **Resolve it before the sequence is walked** (`resolve_resting` below). One
+# that got through renders as black rather than raising - `device.rgb_bytes`
+# answers black for anything unparseable, on purpose, so an unresolved token
+# degrades to exactly the "end on black and let the host re-assert" behaviour
+# this replaces. Wrong, visibly, and never a crash: the same bargain that rule
+# strikes everywhere else here.
+#
+# **The day the parser accepts this as a colour, two things need answering.**
+# `main.set_led` becomes the natural place to resolve it - one gate, like the
+# floor beside it - and `appc.py` needs a decision, because a compiled package
+# renders with no host in the room and so has nothing to substitute *from*.
+# Black is the honest answer there too, but it should be a decision rather than
+# a fallthrough. Nothing a config can write reaches either path today.
+RESTING = "@resting"
 
 
 # What moves a sequence along (TODO 36d):
@@ -140,6 +172,34 @@ class Sequence:
     stops: tuple[Stop, ...]
     repeat: bool = True
     drive: str = "clock"  # what moves it along - see DRIVES
+
+
+def resolve_resting(seq: Sequence, color: str | None) -> Sequence:
+    """`seq` with every `RESTING` stop (see the constant above) pointing at
+    `color` - the light the sequence should land back on, which only the caller
+    knows.
+
+    Returns `seq` itself, allocating nothing, when no stop names the token -
+    which is every sequence any config can express today, so this is free to
+    call on the way into anything that walks one.
+
+    **No resting look resolves to black**, because that is the honest answer:
+    the caller passes `None` exactly when nothing is asserting a colour, and
+    the light at rest is then off. It is also the pre-token behaviour, so a
+    one-shot that lands on the token is never *worse* than one that ends on
+    black - only softer when there is something to land on.
+
+    Pure, like everything else in this module: the caller reads its own resting
+    look (`main.base_look`) and hands the answer in, rather than this module
+    learning what a palette is.
+    """
+    if not any(stop.color == RESTING for stop in seq.stops):
+        return seq
+    landing = color or "#000000"
+    return replace(seq, stops=tuple(
+        replace(stop, color=landing) if stop.color == RESTING else stop
+        for stop in seq.stops
+    ))
 
 
 def mix(first: str, second: str, level: float) -> str:

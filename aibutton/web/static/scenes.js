@@ -10,9 +10,19 @@
 // throwing it away, and tells the menu to reload when the config underneath
 // changes. Switching a scene replaces the entire config, so "reload" rather
 // than "patch" is the only honest response to it.
+//
+// **The gallery (TODO 114b) hangs off this bar rather than off a tab**, and
+// for the same structural reason the bar itself does: a scene spans modes,
+// lights and settings, so browsing the shipped ones belongs beside the picker
+// that switches between them, not inside one of the things a scene contains.
+// [sceneGallery.js](sceneGallery.js) draws it and knows nothing about applying
+// one; **applying is here**, because a scene is not a preset - picking one
+// writes a file into `scenes/` and moves `scenes.active`, which is exactly the
+// operation Import… already performs and is guarded the same way.
 
 import { el, clear } from './dom.js';
 import { ConfigApi } from './api.js';
+import { createSceneGallery, sceneFileFrom, unmetOf } from './sceneGallery.js';
 
 const NONE = 'none'; // the base config on its own - a real destination
 
@@ -26,6 +36,13 @@ export class SceneBar {
     this.hooks = hooks;
     this.api = api;
     this.state = null;
+    // The gallery, once somebody has opened it. Held on the instance rather
+    // than rebuilt by `_render`, which clears the mount on every scene
+    // operation: re-appending the same node moves it, so what you had
+    // searched and filtered survives a Save.
+    this.galleryWrap = null;
+    this.gallery = null;
+    this.galleryOpen = false;
   }
 
   async load() {
@@ -110,6 +127,10 @@ export class SceneBar {
       this._button('Delete', () => this._delete()),
       this._button('Export', () => this._export(), !s.active),
       this._importButton(),
+      this._button(
+        this.galleryOpen ? 'Hide the library' : 'Browse the library…',
+        () => this._toggleGallery(),
+      ),
       this.msgEl,
     );
 
@@ -131,6 +152,72 @@ export class SceneBar {
       textContent: `Scenes are plain files in ${s.dir} - edit them in any text editor with `
         + 'nothing running, then Reload. Saving here writes the active scene, not config.json.',
     }));
+
+    if (this.galleryWrap) {
+      // Re-appended, not rebuilt - see the constructor. The verdicts, though,
+      // are re-read every time: `web_enabled` or a MIDI port may have changed
+      // since the gallery was opened, and this response carries the fresh ones.
+      this.mount.append(this.galleryWrap);
+      const lib = s.library || {};
+      if (this.gallery) this.gallery.setChecks(lib.checks, lib.facet);
+    }
+  }
+
+  /** Open or close the shipped-scene gallery, building it the first time. */
+  _toggleGallery() {
+    const lib = (this.state && this.state.library) || {};
+    if (!this.galleryWrap) {
+      // `gal-wrap` belongs to sceneGallery.js's own injected stylesheet, which
+      // is the only place this page's scene-gallery rules live - a block in
+      // index.html's stylesheet would not reach the offline editor bundle.
+      this.galleryWrap = el('div', { className: 'gal-wrap' });
+      this.gallery = createSceneGallery({
+        checks: lib.checks,
+        readyFacet: lib.facet,
+        onPick: (row) => this._useLibraryScene(row),
+      });
+      this.galleryWrap.append(this.gallery.el);
+    }
+    this.galleryOpen = !this.galleryOpen;
+    this.galleryWrap.hidden = !this.galleryOpen;
+    this._render();
+  }
+
+  /**
+   * Install a scene from the gallery: copy it into `scenes/` and switch to it.
+   *
+   * **Deliberately the Import… path, not a new one.** A gallery row carries
+   * the whole scene body, so this is the same create-and-activate the file
+   * picker performs - one server route, one guard about unsaved changes, and
+   * the response carries `needs_restart` for anything the new scene changes
+   * that is only read at startup. The library file itself is never activated
+   * in place: `ConfigManager.write_path` sends every later edit to the active
+   * scene, and that must be a copy of yours rather than the shipped original.
+   */
+  async _useLibraryScene(row) {
+    if (!(await this._guard(`Installing "${row.title}"`))) return;
+    const missing = unmetOf(row, this._checkIndexForRow());
+    const note = missing.length
+      ? ` It expects ${missing.length} thing(s) this machine does not have`
+        + ` - see the card. The button still works; those presses will not.`
+      : '';
+    this._run(
+      // `sceneFileFrom`, not `row.config`: the copy that lands in `scenes/`
+      // keeps the header, so the picker and the gallery say the same thing
+      // about it a month later.
+      () => this.api.createScene({
+        name: row.title, config: sceneFileFrom(row), activate: true,
+      }),
+      `Installed "${row.title}" and switched to it.${note}`,
+    );
+  }
+
+  /** The live verdicts as a Map, for the one question asked outside the
+   *  gallery. Rebuilt from the last scene response rather than cached, so it
+   *  can never be older than what the cards are showing. */
+  _checkIndexForRow() {
+    const checks = (this.state && this.state.library && this.state.library.checks) || [];
+    return new Map(checks.map((c) => [c.text, c]));
   }
 
   _button(text, fn, disabled = false) {

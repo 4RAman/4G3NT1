@@ -2,7 +2,12 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-data/
+# data/ is per-machine runtime state (events.db and its lock) except the
+# light library's curated source tables, which are checked-in data on
+# purpose (docs/light-library-format.md) - light-library/ is the one
+# subdirectory carved back out.
+data/*
+!data/light-library/
 typings/
 # The tray control panel's local state: preferences, its run lock, and the
 # icon drawn from aibutton/control/icon.py on first run. All per-machine.

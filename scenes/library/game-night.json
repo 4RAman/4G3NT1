@@ -1,0 +1,64 @@
+{
+  "title": "Game Night Rig",
+  "blurb": "A push-to-talk toggle you can feel without looking, three macro presses beside your mouse hand, and a light that says whether your mic is live.",
+  "for": "PC gamers who want a physical key outside the keyboard, and a light that means something without alt-tabbing to check.",
+  "assumes": ["a voice-chat or conferencing app with a global mute hotkey"],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": {
+        "action": "keys", "combo": "ctrl+alt+m", "click": ""
+      },
+      "double_tap": { "action": "enter_mode", "target": "Macros" },
+      "triple_tap": { "action": "enter_mode", "target": "Match log" }
+    },
+    {
+      "name": "Macros",
+      "template": "control",
+      "activation": { "type": "manual" },
+      "short_press": {
+        "action": "keys", "combo": "f6", "click": ""
+      },
+      "double_tap": {
+        "action": "keys", "combo": "f7", "click": ""
+      },
+      "triple_tap": {
+        "action": "keys", "combo": "f8", "click": ""
+      },
+      "tap_4": {
+        "action": "keys", "combo": "ctrl+alt+m", "click": ""
+      },
+      "log_as": "macro_press",
+      "return_after": true,
+      "positions": [
+        { "name": "Live", "look": "Mic live" },
+        { "name": "Muted", "look": "Mic muted" }
+      ]
+    },
+    {
+      "name": "Match log",
+      "template": "counter",
+      "activation": { "type": "manual" },
+      "event": "match",
+      "durable": false
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "breathe", "color": "#0c0018", "color2": "#000000", "period_s": 6 },
+    "LISTENING": { "style": "solid", "color": "#00ffea", "color2": "#000000", "period_s": 3 },
+    "COUNTING": { "style": "fade", "color": "#ff2bd6", "color2": "#1a0022", "period_s": 5 }
+  },
+
+  "looks": {
+    "Mic live": { "style": "solid", "color": "#00ff2a", "color2": "#000000", "period_s": 3 },
+    "Mic muted": { "style": "flash", "color": "#ff0033", "color2": "#000000", "period_s": 0.8 }
+  },
+
+  "actions": {},
+  "reflexes": [],
+  "state_looks": {}
+}

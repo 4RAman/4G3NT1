@@ -30,7 +30,7 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -38,10 +38,27 @@ log = logging.getLogger(__name__)
 DEFAULT_DIR = "scenes"
 SUFFIX = ".json"
 
-# Scene-file keys that are not config. `name` labels the scene in the picker,
-# so renaming one doesn't mean moving a file and an exported scene keeps its
-# label; it is dropped on merge because parse_config would flag it as unknown.
-_META_KEYS = ("name",)
+# The shipped scenes, a subdirectory of the scenes directory rather than a
+# sibling: `list_scenes` globs one level, so the library is *not* in the picker
+# until somebody copies one out of it, which is the whole distinction between a
+# catalogue and the handful of configs this button actually switches between.
+LIBRARY_DIR = "library"
+
+# Scene-file keys that are not config, and the one place they are removed.
+#
+# `name` labels the scene in the picker, so renaming one doesn't mean moving a
+# file and an exported scene keeps its label. The other four are the library
+# header (TODO 114): a title, a one-line blurb, who it is for, and what it
+# assumes about the machine it lands on.
+#
+# **They are stripped in `merge`, which is the seam that matters.** A scene is
+# layered over config.json *as a raw dict* inside `load_config_full` and handed
+# to the one parser, so a header key that survived the merge would arrive at
+# `parse_config` as an unknown key and warn on every load - the editor would
+# show four complaints about a scene that is perfectly fine. Dropping them here
+# means there is exactly one place that knows they are not config, and the
+# whole "one parser, and scenes merge before it" invariant is untouched.
+META_KEYS = ("name", "title", "blurb", "for", "assumes")
 
 # A scene never repoints the active scene: that is the one key which would let
 # loading a scene change which scene loads. Dropping it kills the loop, and
@@ -114,13 +131,240 @@ def merge(base: dict, scene: dict) -> dict:
     """
     merged = dict(base)
     for key, value in scene.items():
-        if key in _META_KEYS:
+        if key in META_KEYS:
             continue
         if key in _FORBIDDEN_KEYS:
             log.warning("scene: %r is not allowed inside a scene file - ignored", key)
             continue
         merged[key] = value
     return merged
+
+
+# --- the header (pure) --------------------------------------------------
+
+@dataclass(frozen=True)
+class SceneMeta:
+    """A scene's self-description - the four reserved keys `META_KEYS` names
+    beside `name`, promoted to real fields (TODO 114).
+
+    `audience` is the `for` key: `for` is a Python keyword, so the wire name
+    and the field name differ here and nowhere else. Every field falls back on
+    its own, exactly like config.py's `_take` - a scene with a broken `assumes`
+    loses the list, not the scene.
+    """
+
+    title: str = ""
+    blurb: str = ""
+    audience: str = ""
+    assumes: tuple[str, ...] = ()
+
+    @property
+    def described(self) -> bool:
+        """Does this scene say anything about itself? False for the two-line
+        scenes people keep in `scenes/` - a gallery entry needs a header, a
+        working config does not, and neither is wrong."""
+        return bool(self.title or self.blurb or self.audience or self.assumes)
+
+
+def _meta_str(raw: dict, key: str) -> str:
+    value = raw.get(key)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        log.warning("scene: %r must be a string - ignoring it", key)
+        return ""
+    return value.strip()
+
+
+def parse_meta(raw) -> SceneMeta:
+    """The header out of a scene's raw dict. Never raises; complains per key.
+
+    Pure, and it reads the *raw* dict rather than anything parsed, because the
+    header is deliberately removed before the parser ever sees the file (see
+    `META_KEYS`). Anything that cannot read a config file can still read this.
+    """
+    if not isinstance(raw, dict):
+        return SceneMeta()
+    assumes: list[str] = []
+    listed = raw.get("assumes")
+    if listed is None:
+        pass
+    elif not isinstance(listed, list):
+        log.warning("scene: 'assumes' must be a list of strings - ignoring it")
+    else:
+        for entry in listed:
+            if isinstance(entry, str) and entry.strip():
+                assumes.append(entry.strip())
+            else:
+                log.warning("scene: 'assumes' entries must be non-empty strings - dropping one")
+    return SceneMeta(
+        title=_meta_str(raw, "title"),
+        blurb=_meta_str(raw, "blurb"),
+        audience=_meta_str(raw, "for"),
+        assumes=tuple(assumes),
+    )
+
+
+def config_body(raw: dict) -> dict:
+    """A scene file with its header removed - what `merge` would layer on.
+
+    The same filter `merge` applies, exposed for the things that need the
+    config half without a base to merge it over: the gallery index builder
+    validating a library scene, and anything counting what a scene actually
+    contains. One definition, because two would drift the moment a sixth
+    reserved key appears.
+    """
+    return {
+        key: value for key, value in raw.items()
+        if key not in META_KEYS and key not in _FORBIDDEN_KEYS
+    }
+
+
+# --- what a scene assumes, and what this machine can actually check ------
+#
+# TODO 114's honest degradation. `assumes` is plain English aimed at a person,
+# so most of it is unverifiable by construction - "a DAW" is not a question a
+# host can answer. The rule that follows from that:
+#
+#   **Show the whole list, always. Warn only about what was really checked.**
+#
+# A fake check would be worse than none: a warning that fires because OBS is
+# not running *right now* trains people to ignore the next one, and a green
+# tick beside "a DAW" would be a claim nobody made. So the table below says
+# which probe answers each phrase, `""` means nothing does, and a phrase that
+# is not in the table at all degrades to the same "shown, not checked" rather
+# than raising anything. A sixth phrase is a row here.
+
+@dataclass(frozen=True)
+class Assumption:
+    """One phrase from the `assumes` vocabulary. `probe` names who can answer
+    it - `""` for the ones nothing can - and `argument` is what that probe is
+    asked about. `why` is shown beside an unchecked phrase, so "we did not
+    check this" never reads as "this is fine"."""
+
+    probe: str = ""
+    argument: str = ""
+    why: str = ""
+
+
+# Keyed by the exact string a scene file writes. docs/scene-library.md is the
+# curator's copy of this vocabulary; this is the machine's.
+ASSUMPTIONS: dict[str, Assumption] = {
+    "a voice-chat or conferencing app with a global mute hotkey": Assumption(
+        why="which app you talk in, and whether its mute hotkey is global, is "
+            "not something the host can see - check it once by pressing the button",
+    ),
+    "OBS Studio with matching global hotkeys (Settings > Hotkeys)": Assumption(
+        # Deliberately not a process check: OBS not running yet is the normal
+        # state five minutes before a stream, and a warning that fires then is
+        # a warning nobody reads by the third time.
+        why="OBS is normally started after the button is - and whether its "
+            "hotkeys match these presses is only visible inside OBS",
+    ),
+    "a DAW": Assumption(
+        why="nothing on the host says which DAW you use, or whether it is open",
+    ),
+    "a loopMIDI port named 'Button'": Assumption(
+        probe="midi_port", argument="Button",
+    ),
+    'a calendar that publishes a secret .ics link (Google/Outlook/iCloud '
+    '"secret address in iCal format")': Assumption(
+        # Arrived after the first five, from another author, and it needed
+        # exactly this: one row. It was already listed and already installed
+        # correctly with no row at all - "shown, not checked" is the default -
+        # so all this adds is the sentence saying why nobody checked it.
+        why="whether your calendar publishes a secret .ics URL is a setting "
+            "inside that calendar, which the host cannot see from here",
+    ),
+    "an external script that can POST to the button's REST reflex endpoint": Assumption(
+        # Half of this *is* checkable, and only half: the host knows whether
+        # there is an endpoint to POST to, and cannot know whether anybody
+        # wrote the script. So the probe may report a failure and never
+        # reports a success - see `_REST_HALF_ANSWER` at the call site.
+        probe="rest_endpoint",
+        why="whether you have written the script is yours to know; this only "
+            "checks that the button is listening for it",
+    ),
+}
+
+# Phrases that mean an existing row and are spelled differently. Two words of
+# drift ("a voice-chat app" against "a voice-chat or conferencing app") split
+# one requirement into two filter chips and two verdicts, which
+# docs/scene-library.md predicted before there was any code reading these
+# strings. Canonicalising here fixes the picker without editing the scenes -
+# what a row *displays* is still exactly what its file says.
+ASSUMPTION_ALIASES: dict[str, str] = {
+    "a voice-chat app with a global mute hotkey":
+        "a voice-chat or conferencing app with a global mute hotkey",
+}
+
+# The three answers, and there are only three on purpose: a check that passed,
+# a check that failed, and no check at all. "Unchecked" is a first-class
+# answer rather than a quiet "ok".
+OK = "ok"
+UNMET = "unmet"
+UNCHECKED = "unchecked"
+
+
+@dataclass(frozen=True)
+class AssumptionStatus:
+    """What became of one `assumes` line. `text` is what the scene wrote, so
+    the picker shows the scene's own words back; `canonical` is what was
+    actually looked up."""
+
+    text: str
+    state: str = UNCHECKED
+    detail: str = ""
+    canonical: str = ""
+
+
+def canonical_assumption(text: str) -> str:
+    """The phrase this one means. Identity for anything not in the alias
+    table, which is every phrase that has not drifted yet."""
+    return ASSUMPTION_ALIASES.get(text, text)
+
+
+def check_assumes(assumes, probes: dict) -> list[AssumptionStatus]:
+    """Run whichever of `assumes` this machine can actually answer.
+
+    `probes` is `{name: callable(argument) -> (state, detail)}`, **injected**
+    rather than imported: reaching a MIDI port needs `midi_io`, and this module
+    imports nothing from the package (`config` imports *it*). So the table of
+    what is checkable is pure data that lives here beside the vocabulary, and
+    the I/O that answers it is handed in by whoever has it - the web API today.
+    A caller with no probes at all gets a complete, correct, entirely unchecked
+    list, which is exactly what the offline CLI should show.
+
+    A probe that raises is a probe that could not answer: `unchecked`, never a
+    failure. The point of this list is warning about things that are really
+    wrong, and a broken checker is not the scene's fault.
+    """
+    out: list[AssumptionStatus] = []
+    for text in assumes or ():
+        canonical = canonical_assumption(text)
+        known = ASSUMPTIONS.get(canonical)
+        probe = probes.get(known.probe) if known and known.probe else None
+        if probe is None:
+            out.append(AssumptionStatus(
+                text=text, state=UNCHECKED,
+                detail=known.why if known else "",
+                canonical=canonical,
+            ))
+            continue
+        try:
+            state, detail = probe(known.argument)
+        except Exception as exc:  # noqa: BLE001 - any failure means "cannot say"
+            log.debug("scenes: probe %r failed: %s", known.probe, exc)
+            state, detail = UNCHECKED, f"could not check ({exc})"
+        out.append(AssumptionStatus(
+            # A probe that answers `unchecked` with nothing to say falls back
+            # to the table's own note - the half-answerable phrases (a REST
+            # endpoint the host can see, a script it cannot) rely on this so
+            # that "we did not check this" always arrives with its reason.
+            text=text, state=state, detail=detail or (known.why if state == UNCHECKED else ""),
+            canonical=canonical,
+        ))
+    return out
 
 
 # --- ids and paths (pure) -----------------------------------------------
@@ -176,6 +420,13 @@ def dir_for(config_path: str, settings: SceneSettings) -> Path:
     return Path(config_path).expanduser().resolve().parent / directory
 
 
+def library_dir(config_path: str, settings: SceneSettings) -> Path:
+    """Where the shipped scenes live - a subdirectory of the scenes directory,
+    so moving `scenes.dir` takes the library with it and there is never a
+    second "where do scenes live" answer to keep in step."""
+    return dir_for(config_path, settings) / LIBRARY_DIR
+
+
 def path_for(config_path: str, settings: SceneSettings, scene_id: str) -> Path | None:
     """The file a scene id names, or None when the id is not safe."""
     if not safe_id(scene_id):
@@ -216,13 +467,18 @@ def write_json(path: Path, payload: dict) -> None:
 class SceneInfo:
     """One entry in the picker. `mode_count` is None and `error` is set when
     the file could not be read - counted straight off the raw list rather than
-    parsed, because a picker does not need a parser."""
+    parsed, because a picker does not need a parser.
+
+    `meta` is the same story one field along: a library scene's header, read
+    off the raw dict, so listing thirteen scenes with their blurbs costs
+    thirteen `json.load`s and no parser at all."""
 
     id: str
     name: str
     path: Path
     mode_count: int | None = None
     error: str = ""
+    meta: SceneMeta = field(default_factory=SceneMeta)
 
 
 def _info(path: Path) -> SceneInfo:
@@ -233,13 +489,18 @@ def _info(path: Path) -> SceneInfo:
             id=scene_id, name=scene_id, path=path,
             error="not a readable JSON object",
         )
+    meta = parse_meta(raw)
     name = raw.get("name")
     modes = raw.get("modes")
     return SceneInfo(
         id=scene_id,
-        name=name if isinstance(name, str) and name.strip() else scene_id,
+        # `name` first because that is what a scene *saved here* carries and
+        # what Rename writes; `title` is the library header's word for the same
+        # thing, and a scene copied out of the library has both.
+        name=(name if isinstance(name, str) and name.strip() else meta.title) or scene_id,
         path=path,
         mode_count=len(modes) if isinstance(modes, list) else None,
+        meta=meta,
     )
 
 

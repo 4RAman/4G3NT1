@@ -1,0 +1,2698 @@
+{
+  "format_version": 1,
+  "group": "library",
+  "label": "Scene library",
+  "part": 1,
+  "rows": [
+    {
+      "id": "collectors-shelf",
+      "title": "Collector's Shelf",
+      "blurb": "Sits on the shelf in your fandom's colours, flares when a script spots a restock or a drop, and keeps the tally of every grail you've landed.",
+      "for": "Collectors and fandom-deep fans who want a shelf object that wears their colours at rest and looks up the moment something worth knowing happens.",
+      "assumes": [
+        "an external script that can POST to the button's REST reflex endpoint"
+      ],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "an-external-script-that-can-post-to-the-button-s-rest-reflex-end"
+        ]
+      },
+      "modes": 4,
+      "tags": [
+        "buttons",
+        "collectors",
+        "collectors-shelf",
+        "colours",
+        "deep",
+        "drop",
+        "endpoint",
+        "every",
+        "external",
+        "fandom",
+        "fandoms",
+        "fans",
+        "flares",
+        "grail",
+        "happens",
+        "keeps",
+        "knowing",
+        "landed",
+        "looks",
+        "moment",
+        "object",
+        "post",
+        "reflex",
+        "rest",
+        "restock",
+        "script",
+        "shelf",
+        "sits",
+        "something",
+        "spots",
+        "tally",
+        "their",
+        "want",
+        "wears",
+        "worth",
+        "youve"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": {
+              "action": "enter_mode",
+              "target": "Display"
+            },
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "Pickups"
+            },
+            "triple_tap": {
+              "action": "enter_mode",
+              "target": "Binge"
+            }
+          },
+          {
+            "name": "Display",
+            "template": "signal",
+            "activation": {
+              "type": "manual"
+            },
+            "states": [
+              {
+                "name": "On Display",
+                "color": "#6a00f4",
+                "style": "breathe"
+              },
+              {
+                "name": "Hunting",
+                "color": "#ff9500",
+                "style": "breathe"
+              },
+              {
+                "name": "New Arrival",
+                "color": "#ffd60a",
+                "style": "flash"
+              },
+              {
+                "name": "Preorder Locked",
+                "color": "#00b4d8",
+                "style": "solid"
+              }
+            ],
+            "start_at": 0,
+            "log_as": "shelf_status"
+          },
+          {
+            "name": "Pickups",
+            "template": "counter",
+            "activation": {
+              "type": "manual"
+            },
+            "event": "pickup",
+            "durable": true
+          },
+          {
+            "name": "Binge",
+            "template": "stopwatch",
+            "activation": {
+              "type": "manual"
+            },
+            "log_as": "binge_session",
+            "ladder": {
+              "enabled": true,
+              "tick_s": 1,
+              "base": "#000000",
+              "rungs": [
+                {
+                  "every_s": 3600,
+                  "color": "#ffffff"
+                },
+                {
+                  "every_s": 1800,
+                  "color": "#ffd60a"
+                },
+                {
+                  "every_s": 300,
+                  "color": "#3a0ca3"
+                }
+              ]
+            }
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "breathe",
+            "color": "#2a0845",
+            "color2": "#000000",
+            "period_s": 9
+          },
+          "LISTENING": {
+            "style": "solid",
+            "color": "#ffd60a",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "COUNTING": {
+            "style": "fade",
+            "color": "#c77dff",
+            "color2": "#240046",
+            "period_s": 5
+          },
+          "TIMING": {
+            "style": "breathe",
+            "color": "#3a0ca3",
+            "color2": "#000000",
+            "period_s": 4
+          }
+        },
+        "looks": {},
+        "actions": {},
+        "reflexes": [
+          {
+            "name": "restock_ping",
+            "then": {
+              "action": "set_position",
+              "name": "New Arrival"
+            },
+            "when": {
+              "field": "value",
+              "op": ">",
+              "value": 0
+            },
+            "while": "Display"
+          }
+        ],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    },
+    {
+      "id": "festival-wristband",
+      "title": "Festival Wristband",
+      "blurb": "A press cycles the crowd moments you actually want at a show, a light show plays your own sequence for the encore, and a tally keeps count of every event you've brought it to.",
+      "for": "Concert, festival and con-goers who want a light-up keepsake that is actually theirs - configured once, and ready again at the next show.",
+      "assumes": [],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "nothing-beyond-the-button"
+        ]
+      },
+      "modes": 4,
+      "tags": [
+        "actually",
+        "again",
+        "brought",
+        "con",
+        "concert",
+        "configured",
+        "count",
+        "crowd",
+        "cycles",
+        "encore",
+        "event",
+        "every",
+        "festival",
+        "festival-wristband",
+        "goers",
+        "keeps",
+        "keepsake",
+        "light",
+        "moments",
+        "next",
+        "once",
+        "own",
+        "plays",
+        "press",
+        "ready",
+        "sequence",
+        "show",
+        "tally",
+        "theirs",
+        "want",
+        "wristband",
+        "youve"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": {
+              "action": "enter_mode",
+              "target": "Moments"
+            },
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "Light show"
+            },
+            "triple_tap": {
+              "action": "enter_mode",
+              "target": "Shows"
+            }
+          },
+          {
+            "name": "Moments",
+            "template": "signal",
+            "activation": {
+              "type": "manual"
+            },
+            "states": [
+              {
+                "name": "Glow",
+                "color": "#00b4a0",
+                "style": "solid"
+              },
+              {
+                "name": "Hype",
+                "color": "#ff006e",
+                "style": "flash"
+              },
+              {
+                "name": "Slow song",
+                "color": "#4361ee",
+                "style": "breathe"
+              },
+              {
+                "name": "Encore",
+                "color": "#ffd60a",
+                "style": "flash"
+              }
+            ],
+            "start_at": 0,
+            "log_as": "moment"
+          },
+          {
+            "name": "Light show",
+            "template": "lightshow",
+            "activation": {
+              "type": "manual"
+            },
+            "cues": [
+              "Aurora",
+              "Pulse",
+              "Strobe beat"
+            ],
+            "dwell_s": 5,
+            "auto": true,
+            "log_as": "show_cue"
+          },
+          {
+            "name": "Shows",
+            "template": "counter",
+            "activation": {
+              "type": "manual"
+            },
+            "event": "show",
+            "durable": true
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "breathe",
+            "color": "#1b1030",
+            "color2": "#000000",
+            "period_s": 8
+          },
+          "LISTENING": {
+            "style": "solid",
+            "color": "#ff006e",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "COUNTING": {
+            "style": "fade",
+            "color": "#ffd60a",
+            "color2": "#2b1d0e",
+            "period_s": 5
+          }
+        },
+        "looks": {
+          "Aurora": {
+            "stops": [
+              {
+                "color": "#00b4a0",
+                "hold_s": 0.6,
+                "fade_s": 0.8,
+                "curve": "ease_in_out"
+              },
+              {
+                "color": "#4361ee",
+                "hold_s": 0.6,
+                "fade_s": 0.8,
+                "curve": "ease_in_out"
+              },
+              {
+                "color": "#ff006e",
+                "hold_s": 0.6,
+                "fade_s": 0.8,
+                "curve": "ease_in_out"
+              }
+            ],
+            "repeat": true,
+            "drive": "clock"
+          },
+          "Pulse": {
+            "style": "breathe",
+            "color": "#ff006e",
+            "color2": "#000000",
+            "period_s": 1.5
+          },
+          "Strobe beat": {
+            "style": "flash",
+            "color": "#ffffff",
+            "color2": "#000000",
+            "period_s": 0.3
+          }
+        },
+        "actions": {},
+        "reflexes": [],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    },
+    {
+      "id": "game-night",
+      "title": "Game Night Rig",
+      "blurb": "A push-to-talk toggle you can feel without looking, three macro presses beside your mouse hand, and a light that says whether your mic is live.",
+      "for": "PC gamers who want a physical key outside the keyboard, and a light that means something without alt-tabbing to check.",
+      "assumes": [
+        "a voice-chat or conferencing app with a global mute hotkey"
+      ],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "a-voice-chat-or-conferencing-app-with-a-global-mute-hotkey"
+        ]
+      },
+      "modes": 3,
+      "tags": [
+        "alt",
+        "app",
+        "beside",
+        "chat",
+        "check",
+        "conferencing",
+        "feel",
+        "game",
+        "game-night",
+        "gamers",
+        "global",
+        "hand",
+        "hotkey",
+        "key",
+        "keyboard",
+        "light",
+        "live",
+        "looking",
+        "macro",
+        "means",
+        "mic",
+        "mouse",
+        "mute",
+        "night",
+        "outside",
+        "physical",
+        "presses",
+        "push",
+        "rig",
+        "says",
+        "something",
+        "tabbing",
+        "talk",
+        "three",
+        "toggle",
+        "voice",
+        "want",
+        "whether"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": {
+              "action": "keys",
+              "combo": "ctrl+alt+m",
+              "click": ""
+            },
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "Macros"
+            },
+            "triple_tap": {
+              "action": "enter_mode",
+              "target": "Match log"
+            }
+          },
+          {
+            "name": "Macros",
+            "template": "control",
+            "activation": {
+              "type": "manual"
+            },
+            "short_press": {
+              "action": "keys",
+              "combo": "f6",
+              "click": ""
+            },
+            "double_tap": {
+              "action": "keys",
+              "combo": "f7",
+              "click": ""
+            },
+            "triple_tap": {
+              "action": "keys",
+              "combo": "f8",
+              "click": ""
+            },
+            "tap_4": {
+              "action": "keys",
+              "combo": "ctrl+alt+m",
+              "click": ""
+            },
+            "log_as": "macro_press",
+            "return_after": true,
+            "positions": [
+              {
+                "name": "Live",
+                "look": "Mic live"
+              },
+              {
+                "name": "Muted",
+                "look": "Mic muted"
+              }
+            ]
+          },
+          {
+            "name": "Match log",
+            "template": "counter",
+            "activation": {
+              "type": "manual"
+            },
+            "event": "match",
+            "durable": false
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "breathe",
+            "color": "#0c0018",
+            "color2": "#000000",
+            "period_s": 6
+          },
+          "LISTENING": {
+            "style": "solid",
+            "color": "#00ffea",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "COUNTING": {
+            "style": "fade",
+            "color": "#ff2bd6",
+            "color2": "#1a0022",
+            "period_s": 5
+          }
+        },
+        "looks": {
+          "Mic live": {
+            "style": "solid",
+            "color": "#00ff2a",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "Mic muted": {
+            "style": "flash",
+            "color": "#ff0033",
+            "color2": "#000000",
+            "period_s": 0.8
+          }
+        },
+        "actions": {},
+        "reflexes": [],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    },
+    {
+      "id": "home-studio",
+      "title": "Home Studio",
+      "blurb": "Arms record, drops a marker and taps tempo without leaving the take - the light doubles as your DAW's transport state.",
+      "for": "Solo producers and songwriters working in a DAW most evenings.",
+      "assumes": [
+        "a DAW",
+        "a loopMIDI port named 'Button'"
+      ],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "a-daw",
+          "a-loopmidi-port-named-button"
+        ]
+      },
+      "modes": 5,
+      "tags": [
+        "arms",
+        "button",
+        "daw",
+        "daws",
+        "doubles",
+        "drops",
+        "evenings",
+        "home",
+        "home-studio",
+        "leaving",
+        "light",
+        "loopmidi",
+        "marker",
+        "most",
+        "named",
+        "port",
+        "producers",
+        "record",
+        "solo",
+        "songwriters",
+        "state",
+        "studio",
+        "take",
+        "taps",
+        "tempo",
+        "transport",
+        "working"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": {
+              "action": "log",
+              "event": "studio_session"
+            },
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "DAW"
+            },
+            "triple_tap": {
+              "action": "enter_mode",
+              "target": "Metronome"
+            },
+            "tap_4": {
+              "action": "enter_mode",
+              "target": "Takes"
+            },
+            "tap_5": {
+              "action": "enter_mode",
+              "target": "Stopwatch"
+            }
+          },
+          {
+            "name": "DAW",
+            "template": "control",
+            "activation": {
+              "type": "manual"
+            },
+            "short_press": {
+              "action": "midi",
+              "port": "Button",
+              "kind": "note_on",
+              "channel": 1,
+              "number": 94,
+              "value": 127
+            },
+            "double_tap": {
+              "action": "midi",
+              "port": "Button",
+              "kind": "note_on",
+              "channel": 1,
+              "number": 93,
+              "value": 127
+            },
+            "triple_tap": {
+              "action": "midi",
+              "port": "Button",
+              "kind": "note_on",
+              "channel": 1,
+              "number": 95,
+              "value": 127
+            },
+            "tap_4": {
+              "action": "midi",
+              "port": "Button",
+              "kind": "note_on",
+              "channel": 1,
+              "number": 84,
+              "value": 127
+            },
+            "tap_5": {
+              "action": "midi",
+              "port": "Button",
+              "kind": "note_on",
+              "channel": 1,
+              "number": 86,
+              "value": 127
+            },
+            "log_as": "daw_cmd",
+            "return_after": true,
+            "positions": [
+              {
+                "name": "Stopped",
+                "look": "Stopped"
+              },
+              {
+                "name": "Playing",
+                "look": "Playing"
+              },
+              {
+                "name": "Recording",
+                "look": "Recording"
+              }
+            ]
+          },
+          {
+            "name": "Metronome",
+            "template": "metronome",
+            "activation": {
+              "type": "manual"
+            },
+            "start_bpm": 100,
+            "max_bpm": 300,
+            "tap_history": 6,
+            "reset_gap_s": 2,
+            "sound_on_tap": true,
+            "log_as": "studio_tempo",
+            "clock_port": "",
+            "ladder": {
+              "enabled": true,
+              "tick_s": 1,
+              "base": "#000000",
+              "rungs": [
+                {
+                  "every_s": 4,
+                  "color": "#ffffff"
+                },
+                {
+                  "every_s": 2,
+                  "color": "#ffb400"
+                },
+                {
+                  "every_s": 1,
+                  "color": "#3d1e78"
+                }
+              ]
+            }
+          },
+          {
+            "name": "Takes",
+            "template": "counter",
+            "activation": {
+              "type": "manual"
+            },
+            "event": "take",
+            "durable": true
+          },
+          {
+            "name": "Stopwatch",
+            "template": "stopwatch",
+            "activation": {
+              "type": "manual"
+            },
+            "log_as": "studio_time",
+            "ladder": {
+              "enabled": true,
+              "tick_s": 0.5,
+              "base": "#000000",
+              "rungs": [
+                {
+                  "every_s": 600,
+                  "color": "#ffffff"
+                },
+                {
+                  "every_s": 60,
+                  "color": "#00c2ff"
+                },
+                {
+                  "every_s": 10,
+                  "color": "#1b0f33"
+                }
+              ]
+            }
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "solid",
+            "color": "#140a1e",
+            "color2": "#000000",
+            "period_s": 6
+          },
+          "LISTENING": {
+            "style": "breathe",
+            "color": "#7d5cff",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "TIMING": {
+            "style": "flash",
+            "color": "#00c2ff",
+            "color2": "#000000",
+            "period_s": 0.6
+          },
+          "METRONOME": {
+            "style": "flash",
+            "color": "#ffb400",
+            "color2": "#000000",
+            "period_s": 0.5
+          },
+          "COUNTING": {
+            "style": "fade",
+            "color": "#ffcc00",
+            "color2": "#402400",
+            "period_s": 6
+          }
+        },
+        "looks": {
+          "Stopped": {
+            "style": "solid",
+            "color": "#0b1a40",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "Playing": {
+            "style": "solid",
+            "color": "#00d26a",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "Recording": {
+            "style": "breathe",
+            "color": "#ff1030",
+            "color2": "#000000",
+            "period_s": 2.2
+          }
+        },
+        "reflexes": [
+          {
+            "name": "recording_armed",
+            "then": {
+              "action": "set_position",
+              "name": "Recording"
+            },
+            "when": {
+              "field": "velocity",
+              "op": "==",
+              "value": 127
+            },
+            "from": {
+              "midi": {
+                "port": "Button",
+                "note": 95,
+                "channel": 1
+              }
+            },
+            "while": "DAW"
+          },
+          {
+            "name": "recording_disarmed",
+            "then": {
+              "action": "set_position",
+              "name": "Stopped"
+            },
+            "when": {
+              "field": "velocity",
+              "op": "==",
+              "value": 0
+            },
+            "from": {
+              "midi": {
+                "port": "Button",
+                "note": 95,
+                "channel": 1
+              }
+            },
+            "while": "DAW"
+          }
+        ],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    },
+    {
+      "id": "matchday",
+      "title": "Matchday",
+      "blurb": "Idles in your team's colours, steps through the stages of the game with a press, and tallies every scoring play.",
+      "for": "Season-ticket holders and watch-party hosts who want their team's colours on the desk and an easy way to mark the big moments without checking a score app.",
+      "assumes": [
+        "an external script that can POST to the button's REST reflex endpoint"
+      ],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "an-external-script-that-can-post-to-the-button-s-rest-reflex-end"
+        ]
+      },
+      "modes": 4,
+      "tags": [
+        "app",
+        "big",
+        "buttons",
+        "checking",
+        "colours",
+        "desk",
+        "easy",
+        "endpoint",
+        "every",
+        "external",
+        "game",
+        "holders",
+        "hosts",
+        "idles",
+        "mark",
+        "matchday",
+        "moments",
+        "party",
+        "play",
+        "post",
+        "press",
+        "reflex",
+        "rest",
+        "score",
+        "scoring",
+        "script",
+        "season",
+        "stages",
+        "steps",
+        "tallies",
+        "teams",
+        "their",
+        "through",
+        "ticket",
+        "want",
+        "watch",
+        "way"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": {
+              "action": "enter_mode",
+              "target": "Scoreboard"
+            },
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "Scoring plays"
+            },
+            "triple_tap": {
+              "action": "enter_mode",
+              "target": "Game clock"
+            }
+          },
+          {
+            "name": "Scoreboard",
+            "template": "signal",
+            "activation": {
+              "type": "manual"
+            },
+            "states": [
+              {
+                "name": "Pregame",
+                "color": "#7a0000",
+                "style": "breathe"
+              },
+              {
+                "name": "Live",
+                "color": "#c81e1e",
+                "style": "solid"
+              },
+              {
+                "name": "Timeout",
+                "color": "#ffb703",
+                "style": "breathe"
+              },
+              {
+                "name": "Final",
+                "color": "#ffd60a",
+                "style": "solid"
+              },
+              {
+                "name": "Score",
+                "color": "#ffffff",
+                "style": "flash"
+              }
+            ],
+            "start_at": 0,
+            "log_as": "game_state"
+          },
+          {
+            "name": "Scoring plays",
+            "template": "counter",
+            "activation": {
+              "type": "manual"
+            },
+            "event": "score",
+            "durable": false
+          },
+          {
+            "name": "Game clock",
+            "template": "stopwatch",
+            "activation": {
+              "type": "manual"
+            },
+            "log_as": "game_clock",
+            "ladder": {
+              "enabled": true,
+              "tick_s": 1,
+              "base": "#000000",
+              "rungs": [
+                {
+                  "every_s": 2700,
+                  "color": "#ffffff"
+                },
+                {
+                  "every_s": 900,
+                  "color": "#ffb703"
+                },
+                {
+                  "every_s": 300,
+                  "color": "#7a0000"
+                }
+              ]
+            }
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "breathe",
+            "color": "#4d0000",
+            "color2": "#000000",
+            "period_s": 10
+          },
+          "LISTENING": {
+            "style": "solid",
+            "color": "#ffb703",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "COUNTING": {
+            "style": "fade",
+            "color": "#ff595e",
+            "color2": "#3a0000",
+            "period_s": 5
+          },
+          "TIMING": {
+            "style": "breathe",
+            "color": "#ffca3a",
+            "color2": "#000000",
+            "period_s": 4
+          }
+        },
+        "looks": {},
+        "actions": {},
+        "reflexes": [
+          {
+            "name": "score_ping",
+            "then": {
+              "action": "set_position",
+              "name": "Score"
+            },
+            "when": {
+              "field": "value",
+              "op": ">",
+              "value": 0
+            },
+            "while": "Scoreboard"
+          }
+        ],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    },
+    {
+      "id": "on-a-call",
+      "title": "On a Call",
+      "blurb": "One press mutes your call and flips the light to busy; ten minutes before your calendar's next meeting, it goes red on its own.",
+      "for": "Remote and hybrid workers whose desk sits by a door people walk through, who want the do-not-disturb light to know about a meeting before they do.",
+      "assumes": [
+        "a voice-chat or conferencing app with a global mute hotkey",
+        "a calendar that publishes a secret .ics link (Google/Outlook/iCloud \"secret address in iCal format\")"
+      ],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "a-voice-chat-or-conferencing-app-with-a-global-mute-hotkey",
+          "a-calendar-that-publishes-a-secret-ics-link-google-outlook-iclou"
+        ]
+      },
+      "modes": 3,
+      "tags": [
+        "about",
+        "address",
+        "app",
+        "before",
+        "busy",
+        "calendar",
+        "calendars",
+        "call",
+        "chat",
+        "conferencing",
+        "desk",
+        "disturb",
+        "door",
+        "flips",
+        "format",
+        "global",
+        "goes",
+        "googleoutlookicloud",
+        "hotkey",
+        "hybrid",
+        "ical",
+        "ics",
+        "know",
+        "light",
+        "link",
+        "meeting",
+        "minutes",
+        "mute",
+        "mutes",
+        "next",
+        "on-a-call",
+        "own",
+        "people",
+        "press",
+        "publishes",
+        "red",
+        "remote",
+        "secret",
+        "sits",
+        "ten",
+        "through",
+        "voice",
+        "walk",
+        "want",
+        "workers"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": {
+              "action": "keys",
+              "combo": "ctrl+alt+m",
+              "click": ""
+            },
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "Status"
+            },
+            "triple_tap": {
+              "action": "enter_mode",
+              "target": "Focus"
+            }
+          },
+          {
+            "name": "Status",
+            "template": "signal",
+            "activation": {
+              "type": "manual"
+            },
+            "states": [
+              {
+                "name": "Available",
+                "color": "#00ff2a",
+                "style": "solid"
+              },
+              {
+                "name": "On a call",
+                "color": "#ff0033",
+                "style": "solid"
+              },
+              {
+                "name": "Do not disturb",
+                "color": "#ff0033",
+                "style": "breathe"
+              }
+            ],
+            "start_at": 0,
+            "log_as": "call_status"
+          },
+          {
+            "name": "Focus",
+            "template": "pomodoro",
+            "activation": {
+              "type": "manual"
+            },
+            "work_s": 1500,
+            "break_s": 300,
+            "long_break_s": 900,
+            "blocks_before_long_break": 4,
+            "rounds": 0,
+            "lead_in_s": 0,
+            "advance": "auto",
+            "log_as": "remote_focus",
+            "waiting_style": "solid",
+            "short_press": "toggle",
+            "long_press": "exit",
+            "double_tap": "extend",
+            "extend_s": 600
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "breathe",
+            "color": "#0b1620",
+            "color2": "#000000",
+            "period_s": 8
+          },
+          "LISTENING": {
+            "style": "solid",
+            "color": "#f4a300",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "WORKING": {
+            "style": "breathe",
+            "color": "#1e6091",
+            "color2": "#000000",
+            "period_s": 8
+          },
+          "RESTING": {
+            "style": "breathe",
+            "color": "#52b69a",
+            "color2": "#000000",
+            "period_s": 8
+          }
+        },
+        "looks": {},
+        "actions": {},
+        "reflexes": [
+          {
+            "name": "meeting_soon",
+            "then": {
+              "action": "set_position",
+              "name": "On a call"
+            },
+            "when": {
+              "field": "minutes",
+              "op": "<=",
+              "value": 10
+            },
+            "from": {
+              "url": {
+                "url": "https://calendar.example.com/replace-with-your-secret-ics-link/basic.ics",
+                "every_minutes": 5,
+                "read": "ics"
+              }
+            },
+            "while": "Status"
+          }
+        ],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    },
+    {
+      "id": "smart-home-panel",
+      "title": "Smart Home Panel",
+      "blurb": "A control surface fires the automations you already built over webhook, and the light mirrors whatever your setup already knows - a door open, the laundry done, someone home.",
+      "for": "Home Assistant and MQTT tinkerers who want one physical control wired into automations they already have, not a phone app nobody else in the house opens.",
+      "assumes": [
+        "an external script that can POST to the button's REST reflex endpoint"
+      ],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "an-external-script-that-can-post-to-the-button-s-rest-reflex-end"
+        ]
+      },
+      "modes": 3,
+      "tags": [
+        "already",
+        "app",
+        "assistant",
+        "automations",
+        "built",
+        "buttons",
+        "control",
+        "done",
+        "door",
+        "else",
+        "endpoint",
+        "external",
+        "fires",
+        "home",
+        "house",
+        "into",
+        "knows",
+        "laundry",
+        "light",
+        "mirrors",
+        "mqtt",
+        "nobody",
+        "open",
+        "opens",
+        "over",
+        "panel",
+        "phone",
+        "physical",
+        "post",
+        "reflex",
+        "rest",
+        "script",
+        "setup",
+        "smart",
+        "smart-home-panel",
+        "someone",
+        "surface",
+        "tinkerers",
+        "want",
+        "webhook",
+        "whatever",
+        "wired"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": {
+              "action": "enter_mode",
+              "target": "Scenes"
+            },
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "House"
+            }
+          },
+          {
+            "name": "Scenes",
+            "template": "control",
+            "activation": {
+              "type": "manual"
+            },
+            "short_press": {
+              "action": "webhook",
+              "url": "http://homeassistant.local:8123/api/webhook/button_movie_mode",
+              "payload": {
+                "source": "button"
+              }
+            },
+            "double_tap": {
+              "action": "webhook",
+              "url": "http://homeassistant.local:8123/api/webhook/button_goodnight",
+              "payload": {
+                "source": "button"
+              }
+            },
+            "triple_tap": {
+              "action": "webhook",
+              "url": "http://homeassistant.local:8123/api/webhook/button_all_off",
+              "payload": {
+                "source": "button"
+              }
+            },
+            "tap_4": {
+              "action": "webhook",
+              "url": "http://homeassistant.local:8123/api/webhook/button_arrive_home",
+              "payload": {
+                "source": "button"
+              }
+            },
+            "log_as": "scene_press",
+            "return_after": true
+          },
+          {
+            "name": "House",
+            "template": "signal",
+            "activation": {
+              "type": "manual"
+            },
+            "states": [
+              {
+                "name": "All clear",
+                "color": "#00ff2a",
+                "style": "solid"
+              },
+              {
+                "name": "Door open",
+                "color": "#ffb703",
+                "style": "flash"
+              },
+              {
+                "name": "Laundry done",
+                "color": "#00b4d8",
+                "style": "breathe"
+              },
+              {
+                "name": "Someone home",
+                "color": "#7d2bff",
+                "style": "solid"
+              }
+            ],
+            "start_at": 0,
+            "log_as": "house_state"
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "breathe",
+            "color": "#2b1d0e",
+            "color2": "#000000",
+            "period_s": 9
+          },
+          "LISTENING": {
+            "style": "solid",
+            "color": "#00b4d8",
+            "color2": "#000000",
+            "period_s": 3
+          }
+        },
+        "looks": {},
+        "actions": {},
+        "reflexes": [
+          {
+            "name": "door_opened",
+            "then": {
+              "action": "set_position",
+              "name": "Door open"
+            },
+            "when": {
+              "field": "value",
+              "op": "==",
+              "value": 1
+            },
+            "while": "House"
+          },
+          {
+            "name": "laundry_done",
+            "then": {
+              "action": "set_position",
+              "name": "Laundry done"
+            },
+            "when": {
+              "field": "value",
+              "op": "==",
+              "value": 1
+            },
+            "while": "House"
+          },
+          {
+            "name": "someone_home",
+            "then": {
+              "action": "set_position",
+              "name": "Someone home"
+            },
+            "when": {
+              "field": "value",
+              "op": "==",
+              "value": 1
+            },
+            "while": "House"
+          }
+        ],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    },
+    {
+      "id": "stage-cues",
+      "title": "Stage Cues",
+      "blurb": "One press panics the backing track to silence, a second opens patch-and-transport control wired to your rig over MIDI, and a tally counts the sets you've played.",
+      "for": "Gigging musicians running backing tracks and patch changes who need one hand-reachable control that works without a glance.",
+      "assumes": [
+        "a DAW",
+        "a loopMIDI port named 'Button'"
+      ],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "a-daw",
+          "a-loopmidi-port-named-button"
+        ]
+      },
+      "modes": 3,
+      "tags": [
+        "backing",
+        "button",
+        "changes",
+        "control",
+        "counts",
+        "cues",
+        "daw",
+        "gigging",
+        "glance",
+        "hand",
+        "loopmidi",
+        "midi",
+        "musicians",
+        "named",
+        "need",
+        "opens",
+        "over",
+        "panics",
+        "patch",
+        "played",
+        "port",
+        "press",
+        "reachable",
+        "rig",
+        "running",
+        "second",
+        "sets",
+        "silence",
+        "stage",
+        "stage-cues",
+        "tally",
+        "track",
+        "tracks",
+        "transport",
+        "wired",
+        "works",
+        "youve"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": {
+              "action": "midi",
+              "port": "Button",
+              "kind": "note_on",
+              "channel": 1,
+              "number": 93,
+              "value": 127
+            },
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "Rig"
+            },
+            "triple_tap": {
+              "action": "enter_mode",
+              "target": "Sets"
+            }
+          },
+          {
+            "name": "Rig",
+            "template": "control",
+            "activation": {
+              "type": "manual"
+            },
+            "short_press": {
+              "action": "midi",
+              "port": "Button",
+              "kind": "note_on",
+              "channel": 1,
+              "number": 94,
+              "value": 127
+            },
+            "double_tap": {
+              "action": "midi",
+              "port": "Button",
+              "kind": "note_on",
+              "channel": 1,
+              "number": 93,
+              "value": 127
+            },
+            "triple_tap": {
+              "action": "midi",
+              "port": "Button",
+              "kind": "cc",
+              "channel": 1,
+              "number": 20,
+              "value": 127
+            },
+            "tap_4": {
+              "action": "midi",
+              "port": "Button",
+              "kind": "cc",
+              "channel": 1,
+              "number": 21,
+              "value": 127
+            },
+            "tap_5": {
+              "action": "midi",
+              "port": "Button",
+              "kind": "note_on",
+              "channel": 1,
+              "number": 95,
+              "value": 127
+            },
+            "log_as": "rig_press",
+            "return_after": true,
+            "positions": [
+              {
+                "name": "Stopped",
+                "look": "Stopped"
+              },
+              {
+                "name": "Playing",
+                "look": "Playing"
+              },
+              {
+                "name": "Recording",
+                "look": "Recording"
+              }
+            ]
+          },
+          {
+            "name": "Sets",
+            "template": "counter",
+            "activation": {
+              "type": "manual"
+            },
+            "event": "set",
+            "durable": true
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "breathe",
+            "color": "#120024",
+            "color2": "#000000",
+            "period_s": 6
+          },
+          "LISTENING": {
+            "style": "solid",
+            "color": "#ffb703",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "COUNTING": {
+            "style": "fade",
+            "color": "#ff006e",
+            "color2": "#1a0010",
+            "period_s": 5
+          }
+        },
+        "looks": {
+          "Stopped": {
+            "style": "solid",
+            "color": "#3a0ca3",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "Playing": {
+            "style": "solid",
+            "color": "#00f5a0",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "Recording": {
+            "style": "breathe",
+            "color": "#ff1030",
+            "color2": "#000000",
+            "period_s": 2.2
+          }
+        },
+        "actions": {},
+        "reflexes": [],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    },
+    {
+      "id": "streamers-deck",
+      "title": "Streamer's Deck",
+      "blurb": "The LED is your on-air light and it is on camera - one press flips the scene, one mutes the mic, one starts the clip.",
+      "for": "Twitch/YouTube/TikTok streamers running OBS at a busy desk.",
+      "assumes": [
+        "OBS Studio with matching global hotkeys (Settings > Hotkeys)",
+        "a voice-chat or conferencing app with a global mute hotkey"
+      ],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "obs-studio-with-matching-global-hotkeys-settings-hotkeys",
+          "a-voice-chat-or-conferencing-app-with-a-global-mute-hotkey"
+        ]
+      },
+      "modes": 3,
+      "tags": [
+        "air",
+        "app",
+        "busy",
+        "camera",
+        "chat",
+        "clip",
+        "conferencing",
+        "deck",
+        "desk",
+        "flips",
+        "global",
+        "hotkey",
+        "hotkeys",
+        "led",
+        "light",
+        "matching",
+        "mic",
+        "mute",
+        "mutes",
+        "obs",
+        "press",
+        "running",
+        "scene",
+        "settings",
+        "starts",
+        "streamers",
+        "streamers-deck",
+        "studio",
+        "twitchyoutubetiktok",
+        "voice"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": {
+              "action": "keys",
+              "combo": "ctrl+alt+m",
+              "click": ""
+            },
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "Deck"
+            },
+            "triple_tap": {
+              "action": "keys",
+              "combo": "ctrl+alt+r",
+              "click": ""
+            },
+            "tap_4": {
+              "action": "enter_mode",
+              "target": "Clip counter"
+            }
+          },
+          {
+            "name": "Deck",
+            "template": "control",
+            "activation": {
+              "type": "manual"
+            },
+            "short_press": {
+              "action": "keys",
+              "combo": "ctrl+alt+1",
+              "click": ""
+            },
+            "double_tap": {
+              "action": "keys",
+              "combo": "ctrl+alt+2",
+              "click": ""
+            },
+            "triple_tap": {
+              "action": "keys",
+              "combo": "ctrl+alt+3",
+              "click": ""
+            },
+            "tap_4": {
+              "action": "keys",
+              "combo": "ctrl+alt+r",
+              "click": ""
+            },
+            "tap_5": {
+              "action": "keys",
+              "combo": "ctrl+alt+m",
+              "click": ""
+            },
+            "log_as": "deck_press",
+            "return_after": true,
+            "positions": [
+              {
+                "name": "Offline",
+                "look": "Offline"
+              },
+              {
+                "name": "Live",
+                "look": "On Air"
+              },
+              {
+                "name": "Muted",
+                "look": "Muted"
+              }
+            ]
+          },
+          {
+            "name": "Clip counter",
+            "template": "counter",
+            "activation": {
+              "type": "manual"
+            },
+            "event": "clip_worthy",
+            "durable": false
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "breathe",
+            "color": "#101018",
+            "color2": "#000000",
+            "period_s": 8
+          },
+          "LISTENING": {
+            "style": "solid",
+            "color": "#8f2fff",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "COUNTING": {
+            "style": "fade",
+            "color": "#00e5ff",
+            "color2": "#001a2b",
+            "period_s": 5
+          },
+          "SUCCESS": {
+            "style": "solid",
+            "color": "#00ff88",
+            "color2": "#000000",
+            "period_s": 1
+          }
+        },
+        "looks": {
+          "Offline": {
+            "style": "solid",
+            "color": "#202020",
+            "color2": "#000000",
+            "period_s": 4
+          },
+          "On Air": {
+            "style": "solid",
+            "color": "#ff0000",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "Muted": {
+            "stops": [
+              {
+                "color": "#ff0000",
+                "hold_s": 0.4,
+                "fade_s": 0.15,
+                "curve": "linear"
+              },
+              {
+                "color": "#3a0000",
+                "hold_s": 0.4,
+                "fade_s": 0.15,
+                "curve": "linear"
+              }
+            ],
+            "repeat": true,
+            "drive": "clock"
+          }
+        },
+        "actions": {},
+        "reflexes": [],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    },
+    {
+      "id": "desk-default",
+      "title": "The Desk Default",
+      "blurb": "One button, four things: a focus timer, a mute key, a do-not-disturb light, and a shortcut - the honest all-purpose scene for anyone at a computer.",
+      "for": "Anyone with a computer and a desk who wants one object doing the four small things they reach for all day, rather than a niche use.",
+      "assumes": [
+        "a voice-chat or conferencing app with a global mute hotkey"
+      ],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "a-voice-chat-or-conferencing-app-with-a-global-mute-hotkey"
+        ]
+      },
+      "modes": 3,
+      "tags": [
+        "all",
+        "anyone",
+        "app",
+        "button",
+        "chat",
+        "computer",
+        "conferencing",
+        "day",
+        "default",
+        "desk",
+        "desk-default",
+        "disturb",
+        "doing",
+        "focus",
+        "four",
+        "global",
+        "honest",
+        "hotkey",
+        "key",
+        "light",
+        "mute",
+        "niche",
+        "object",
+        "purpose",
+        "rather",
+        "reach",
+        "scene",
+        "shortcut",
+        "small",
+        "than",
+        "things",
+        "timer",
+        "use",
+        "voice",
+        "wants"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": {
+              "action": "keys",
+              "combo": "ctrl+alt+m",
+              "click": ""
+            },
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "Status"
+            },
+            "triple_tap": {
+              "action": "enter_mode",
+              "target": "Focus timer"
+            },
+            "tap_4": {
+              "action": "keys",
+              "combo": "win+space",
+              "click": ""
+            }
+          },
+          {
+            "name": "Status",
+            "template": "signal",
+            "activation": {
+              "type": "manual"
+            },
+            "states": [
+              {
+                "name": "Free",
+                "color": "#00ff00",
+                "style": "solid"
+              },
+              {
+                "name": "Heads-down",
+                "color": "#ff8800",
+                "style": "solid"
+              },
+              {
+                "name": "Do not disturb",
+                "color": "#ff0033",
+                "style": "breathe"
+              }
+            ],
+            "start_at": 0,
+            "log_as": "status"
+          },
+          {
+            "name": "Focus timer",
+            "template": "pomodoro",
+            "activation": {
+              "type": "manual"
+            },
+            "work_s": 1500,
+            "break_s": 300,
+            "long_break_s": 900,
+            "blocks_before_long_break": 4,
+            "rounds": 0,
+            "lead_in_s": 0,
+            "advance": "auto",
+            "log_as": "desk_focus",
+            "waiting_style": "solid",
+            "short_press": "toggle",
+            "long_press": "exit",
+            "double_tap": "extend",
+            "extend_s": 600
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "solid",
+            "color": "#0a0f14",
+            "color2": "#000000",
+            "period_s": 6
+          },
+          "LISTENING": {
+            "style": "solid",
+            "color": "#5c9dff",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "WORKING": {
+            "style": "breathe",
+            "color": "#4400ff",
+            "color2": "#000000",
+            "period_s": 8
+          },
+          "RESTING": {
+            "style": "breathe",
+            "color": "#00c896",
+            "color2": "#000000",
+            "period_s": 8
+          }
+        },
+        "looks": {},
+        "actions": {},
+        "reflexes": [],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    },
+    {
+      "id": "gm-table",
+      "title": "The GM's Table",
+      "blurb": "A press sets the room's mood light, a second app steps through whose turn it is - a table-side prop that does two jobs without a laptop open.",
+      "for": "Weekly tabletop game masters who want a physical prop at the table, not another screen.",
+      "assumes": [],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "nothing-beyond-the-button"
+        ]
+      },
+      "modes": 4,
+      "tags": [
+        "another",
+        "app",
+        "game",
+        "gm-table",
+        "gms",
+        "jobs",
+        "laptop",
+        "light",
+        "masters",
+        "mood",
+        "open",
+        "physical",
+        "press",
+        "prop",
+        "rooms",
+        "screen",
+        "second",
+        "sets",
+        "side",
+        "steps",
+        "table",
+        "tabletop",
+        "through",
+        "turn",
+        "want",
+        "weekly"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": {
+              "action": "enter_mode",
+              "target": "Mood"
+            },
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "Initiative"
+            },
+            "triple_tap": {
+              "action": "enter_mode",
+              "target": "Session length"
+            }
+          },
+          {
+            "name": "Mood",
+            "template": "signal",
+            "activation": {
+              "type": "manual"
+            },
+            "states": [
+              {
+                "name": "Tavern",
+                "color": "#ff9500",
+                "style": "solid"
+              },
+              {
+                "name": "Dungeon",
+                "color": "#0a2e1a",
+                "style": "breathe"
+              },
+              {
+                "name": "Combat",
+                "color": "#ff0000",
+                "style": "flash"
+              },
+              {
+                "name": "Magic",
+                "color": "#7d2bff",
+                "style": "breathe"
+              },
+              {
+                "name": "Rest",
+                "color": "#1560ff",
+                "style": "solid"
+              }
+            ],
+            "start_at": 0,
+            "log_as": "mood"
+          },
+          {
+            "name": "Initiative",
+            "template": "signal",
+            "activation": {
+              "type": "manual"
+            },
+            "states": [
+              {
+                "name": "Player 1",
+                "color": "#00e5ff",
+                "style": "solid"
+              },
+              {
+                "name": "Player 2",
+                "color": "#ffea00",
+                "style": "solid"
+              },
+              {
+                "name": "Player 3",
+                "color": "#00ff2a",
+                "style": "solid"
+              },
+              {
+                "name": "Player 4",
+                "color": "#ff2bd6",
+                "style": "solid"
+              },
+              {
+                "name": "Monsters",
+                "color": "#ff0000",
+                "style": "flash"
+              }
+            ],
+            "start_at": 0,
+            "log_as": ""
+          },
+          {
+            "name": "Session length",
+            "template": "stopwatch",
+            "activation": {
+              "type": "manual"
+            },
+            "log_as": "session",
+            "ladder": {
+              "enabled": true,
+              "tick_s": 1,
+              "base": "#000000",
+              "rungs": [
+                {
+                  "every_s": 3600,
+                  "color": "#ffffff"
+                },
+                {
+                  "every_s": 900,
+                  "color": "#ff9500"
+                },
+                {
+                  "every_s": 300,
+                  "color": "#3a1a00"
+                }
+              ]
+            }
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "fade",
+            "color": "#1a0033",
+            "color2": "#000000",
+            "period_s": 10
+          },
+          "LISTENING": {
+            "style": "solid",
+            "color": "#7d2bff",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "TIMING": {
+            "style": "breathe",
+            "color": "#ff9500",
+            "color2": "#000000",
+            "period_s": 4
+          }
+        },
+        "looks": {},
+        "actions": {},
+        "reflexes": [],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    },
+    {
+      "id": "time-not-numbers",
+      "title": "Time, Not Numbers",
+      "blurb": "Start a timer with one press and watch time pass as colour instead of digits - no screen, no nagging, no app to open.",
+      "for": "People who are time-blind, pay a real cost to task-switch, and want an off-screen way to feel time passing.",
+      "assumes": [],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "nothing-beyond-the-button"
+        ]
+      },
+      "modes": 5,
+      "tags": [
+        "app",
+        "blind",
+        "colour",
+        "cost",
+        "digits",
+        "feel",
+        "instead",
+        "nagging",
+        "numbers",
+        "off",
+        "open",
+        "pass",
+        "passing",
+        "pay",
+        "people",
+        "press",
+        "real",
+        "screen",
+        "start",
+        "switch",
+        "task",
+        "time",
+        "time-not-numbers",
+        "timer",
+        "want",
+        "watch",
+        "way"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": {
+              "action": "enter_mode",
+              "target": "Focus"
+            },
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "Quick timer"
+            },
+            "triple_tap": {
+              "action": "enter_mode",
+              "target": "Switch log"
+            },
+            "tap_4": {
+              "action": "enter_mode",
+              "target": "Open timer"
+            }
+          },
+          {
+            "name": "Focus",
+            "template": "pomodoro",
+            "activation": {
+              "type": "manual"
+            },
+            "work_s": 1200,
+            "break_s": 300,
+            "long_break_s": 900,
+            "blocks_before_long_break": 3,
+            "rounds": 0,
+            "lead_in_s": 5,
+            "advance": "break_only",
+            "log_as": "focus_block",
+            "waiting_style": "solid",
+            "ramp": [
+              {
+                "color": "#00c853",
+                "at": 0
+              },
+              {
+                "color": "#ffd600",
+                "at": 0.6
+              },
+              {
+                "color": "#ff6d00",
+                "at": 0.9
+              },
+              {
+                "color": "#ff3d00",
+                "at": 1
+              }
+            ],
+            "short_press": "toggle",
+            "long_press": "exit",
+            "double_tap": "extend",
+            "extend_s": 300
+          },
+          {
+            "name": "Quick timer",
+            "template": "countdown",
+            "activation": {
+              "type": "manual"
+            },
+            "minutes": 5,
+            "label": "5 min",
+            "style": "breathe",
+            "period_s": 2,
+            "ramp": [
+              {
+                "color": "#00c853",
+                "at": 0
+              },
+              {
+                "color": "#ffd600",
+                "at": 0.5
+              },
+              {
+                "color": "#ff6d00",
+                "at": 0.8
+              },
+              {
+                "color": "#ffffff",
+                "at": 1
+              }
+            ],
+            "ring_on_finish": true,
+            "log_as": "quick_timer",
+            "ladder": {
+              "enabled": false,
+              "tick_s": 1,
+              "base": "#000000",
+              "rungs": []
+            }
+          },
+          {
+            "name": "Switch log",
+            "template": "counter",
+            "activation": {
+              "type": "manual"
+            },
+            "event": "task_switch",
+            "durable": false
+          },
+          {
+            "name": "Open timer",
+            "template": "stopwatch",
+            "activation": {
+              "type": "manual"
+            },
+            "log_as": "open_timer",
+            "ladder": {
+              "enabled": true,
+              "tick_s": 1,
+              "base": "#000000",
+              "rungs": [
+                {
+                  "every_s": 3600,
+                  "color": "#ffffff"
+                },
+                {
+                  "every_s": 600,
+                  "color": "#4fc3f7"
+                },
+                {
+                  "every_s": 60,
+                  "color": "#0d3b4f"
+                }
+              ]
+            }
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "breathe",
+            "color": "#062018",
+            "color2": "#000000",
+            "period_s": 8
+          },
+          "LISTENING": {
+            "style": "solid",
+            "color": "#26c6da",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "WORKING": {
+            "style": "breathe",
+            "color": "#00c853",
+            "color2": "#000000",
+            "period_s": 6
+          },
+          "RESTING": {
+            "style": "breathe",
+            "color": "#00c853",
+            "color2": "#000000",
+            "period_s": 6
+          },
+          "TIMING": {
+            "style": "breathe",
+            "color": "#ffab00",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "COUNTING": {
+            "style": "fade",
+            "color": "#4fc3f7",
+            "color2": "#062038",
+            "period_s": 6
+          }
+        },
+        "looks": {},
+        "actions": {},
+        "reflexes": [],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    },
+    {
+      "id": "tinkerers-bench",
+      "title": "Tinkerer's Bench",
+      "blurb": "A stocked reference config, not a demo - one of every look shape, a reflex listening for a webhook, and a control surface wired to a generic script hook, all ready to rename.",
+      "for": "Makers who read the schematic before the manual and want to see the whole vocabulary in one file before they start editing it.",
+      "assumes": [
+        "an external script that can POST to the button's REST reflex endpoint"
+      ],
+      "group": "library",
+      "facets": {
+        "group": "library",
+        "assumes": [
+          "an-external-script-that-can-post-to-the-button-s-rest-reflex-end"
+        ]
+      },
+      "modes": 4,
+      "tags": [
+        "all",
+        "before",
+        "bench",
+        "buttons",
+        "config",
+        "control",
+        "demo",
+        "editing",
+        "endpoint",
+        "every",
+        "external",
+        "file",
+        "generic",
+        "hook",
+        "listening",
+        "look",
+        "makers",
+        "manual",
+        "post",
+        "read",
+        "ready",
+        "reference",
+        "reflex",
+        "rename",
+        "rest",
+        "schematic",
+        "script",
+        "see",
+        "shape",
+        "start",
+        "stocked",
+        "surface",
+        "tinkerers",
+        "tinkerers-bench",
+        "vocabulary",
+        "want",
+        "webhook",
+        "whole",
+        "wired"
+      ],
+      "config": {
+        "modes": [
+          {
+            "name": "Home",
+            "template": "actions",
+            "activation": {
+              "type": "always"
+            },
+            "short_press": "Ping bench script",
+            "double_tap": {
+              "action": "enter_mode",
+              "target": "Bench"
+            },
+            "triple_tap": {
+              "action": "enter_mode",
+              "target": "Light show"
+            },
+            "tap_4": {
+              "action": "enter_mode",
+              "target": "Build counter"
+            }
+          },
+          {
+            "name": "Bench",
+            "template": "control",
+            "activation": {
+              "type": "manual"
+            },
+            "short_press": "Ping bench script",
+            "double_tap": {
+              "action": "sequence",
+              "steps": [
+                {
+                  "action": "log",
+                  "event": "bench_combo"
+                },
+                {
+                  "action": "keys",
+                  "combo": "",
+                  "click": "left"
+                }
+              ]
+            },
+            "triple_tap": {
+              "action": "osc",
+              "host": "127.0.0.1",
+              "port": 8000,
+              "address": "/bench/ping",
+              "args": [
+                1
+              ]
+            },
+            "tap_4": {
+              "action": "set_value",
+              "app": "Build counter",
+              "slot": "count",
+              "op": "add",
+              "value": 1
+            },
+            "log_as": "bench_press",
+            "return_after": true,
+            "positions": [
+              {
+                "name": "Idle",
+                "look": "Idle glow"
+              },
+              {
+                "name": "Armed",
+                "look": "Armed"
+              },
+              {
+                "name": "Fault",
+                "look": "Fault"
+              }
+            ]
+          },
+          {
+            "name": "Light show",
+            "template": "lightshow",
+            "activation": {
+              "type": "manual"
+            },
+            "cues": [
+              "Solid demo",
+              "Sequence demo",
+              "Morse demo"
+            ],
+            "dwell_s": 6,
+            "auto": true,
+            "log_as": "show_cue"
+          },
+          {
+            "name": "Build counter",
+            "template": "counter",
+            "activation": {
+              "type": "manual"
+            },
+            "event": "build",
+            "durable": true
+          }
+        ],
+        "led_palette": {
+          "IDLE": {
+            "style": "rainbow",
+            "color": "#141414",
+            "color2": "#4a4a4a",
+            "period_s": 10
+          },
+          "LISTENING": {
+            "style": "solid",
+            "color": "#00e676",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "COUNTING": {
+            "style": "fade",
+            "color": "#39ff14",
+            "color2": "#003300",
+            "period_s": 5
+          }
+        },
+        "looks": {
+          "Idle glow": {
+            "style": "solid",
+            "color": "#00e676",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "Armed": {
+            "style": "breathe",
+            "color": "#ffb400",
+            "color2": "#000000",
+            "period_s": 1.5
+          },
+          "Fault": {
+            "style": "flash",
+            "color": "#ff0033",
+            "color2": "#000000",
+            "period_s": 0.4
+          },
+          "Solid demo": {
+            "style": "solid",
+            "color": "#00b0ff",
+            "color2": "#000000",
+            "period_s": 3
+          },
+          "Sequence demo": {
+            "stops": [
+              {
+                "color": "#ff00ff",
+                "hold_s": 0.3,
+                "fade_s": 0.2,
+                "curve": "ease_in_out"
+              },
+              {
+                "color": "#00ffff",
+                "hold_s": 0.3,
+                "fade_s": 0.2,
+                "curve": "ease_in_out"
+              },
+              {
+                "color": "#ffff00",
+                "hold_s": 0.3,
+                "fade_s": 0.2,
+                "curve": "ease_in_out"
+              }
+            ],
+            "repeat": true,
+            "drive": "clock"
+          },
+          "Morse demo": {
+            "morse": "HELLO WORLD",
+            "dpm": 250,
+            "color": "#00ff2a",
+            "repeat": true
+          }
+        },
+        "actions": {
+          "Ping bench script": {
+            "action": "webhook",
+            "url": "http://127.0.0.1:8765/bench",
+            "payload": {
+              "source": "button"
+            }
+          }
+        },
+        "reflexes": [
+          {
+            "name": "sensor_reading",
+            "then": "Ping bench script",
+            "when": {
+              "field": "value",
+              "op": ">",
+              "value": 0
+            }
+          }
+        ],
+        "state_looks": {}
+      },
+      "curated": true,
+      "warnings": []
+    }
+  ]
+}

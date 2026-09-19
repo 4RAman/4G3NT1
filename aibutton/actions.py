@@ -46,6 +46,7 @@ from .config import (
     Action,
     ArtnetAction,
     KeysAction,
+    LoadThemeAction,
     LogAction,
     MidiAction,
     OscAction,
@@ -186,6 +187,7 @@ async def execute(
     documents=None,
     webhook_transport: httpx.AsyncBaseTransport | None = None,
     session: Mapping[str, object] | None = None,
+    set_theme=None,
 ) -> ActionResult:
     """Run one action.
 
@@ -231,6 +233,22 @@ async def execute(
             # does nothing from looking like a gesture that worked.
             return ActionResult(False, f"could not write {action.app}.{action.slot}")
         return ActionResult(True, shape)
+
+    if isinstance(action, LoadThemeAction):
+        # Injected the way `documents` is, and for the same reason: the thing
+        # this writes (the live config) belongs to the service, and binding it
+        # once at `main`'s `run_action` beats seven dispatch sites remembering
+        # to pass it. No store means nothing embedding this holds a config -
+        # said plainly rather than silently doing nothing (TODO 95).
+        if set_theme is None:
+            return ActionResult(False, "nothing here can change the theme")
+        problem = set_theme(action.theme)
+        if problem:
+            return ActionResult(False, problem)
+        return ActionResult(
+            True,
+            f"Theme: {action.theme}" if action.theme else "Back to your own colours",
+        )
 
     if isinstance(action, TimerToggleAction):
         state, elapsed = store.toggle_timer(action.log_as, mode=mode_name)
@@ -308,7 +326,7 @@ async def execute(
             result = await execute(
                 step.action, trigger=trigger, mode_name=mode_name, store=store,
                 documents=documents, webhook_transport=webhook_transport,
-                session=session,
+                session=session, set_theme=set_theme,
             )
             if not result.ok and failure is None:
                 failure = f"step {index}: {result.message}"

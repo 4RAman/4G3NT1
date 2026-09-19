@@ -419,6 +419,13 @@ whatever you're touching before you touch it.
   site.** Sequences reached all six sites without one of them being edited,
   because that function is where a binding becomes the thing that runs. *If a
   future shape needs unpacking, unpack it there.*
+- **An action is bindable to a gesture unless it is mechanically impossible**
+  (owner's rule, 2026-09-09). `appOnly` is the flag that says so, and
+  `set_position` is its only member — excluded not by design preference but
+  because a gesture is answered at the ambient layer, where no app is running
+  to have a position. A second `appOnly` action needs that same kind of
+  reason, something a gesture literally cannot supply, not merely something
+  unusual to bind.
 
 ### When you change the protocol
 

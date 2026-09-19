@@ -63,8 +63,18 @@ from dataclasses import dataclass, field, fields, replace
 from datetime import time
 from typing import get_args
 
-from . import artnet, keys, ladder, midi, morse, ramp, scenes, sequencer
+from . import (
+    artnet, keys, ladder, midi, morse, poll, ramp, readout, scenes, sequencer,
+)
 from .device import LED_STYLES, SAFE_MIN_PERIOD_S, STYLE_STROBES, LEDState, TriggerType
+# Aliased on import because "SCHEMES" alone would be the fourth bare plural in
+# this file's namespace and none of the others say what they are schemes *of*.
+# The module itself is imported above for `readout_look`, which needs the
+# compiler and not just the name of it. `readout` imports device/morse/sequencer
+# and nothing else, so this stays the one-way `config -> leaf` direction
+# CLAUDE.md's dependency-inversion rule asks for; it is `readout` that must
+# never learn what a config is.
+from .readout import SCHEMES as READOUT_SCHEMES
 from .scenes import SceneSettings
 
 log = logging.getLogger(__name__)
@@ -87,21 +97,72 @@ class LogAction:
     event: str
 
 
+# Where a `readout` gets its number (TODO 118a). Two, and the pair is the seam
+# the whole item hangs on: today's rows under an event name, or the durable
+# value an app declares in `DOC_SLOTS` and `set_value` writes. An app's value
+# is named exactly the way `set_value` already names it - an `app` and a `slot`
+# - because a second spelling of the same pair would be a mirrored table with
+# nothing testing it.
+# Mirrored in schema.js; test_schema_mirror.py fails on drift.
+READOUT_SOURCES: tuple[str, ...] = ("event", "app")
+
+
 @dataclass(frozen=True)
 class ReadoutAction:
-    """Show `event`'s count for today on the light, without entering an app:
-    tens digit as slow pulses, units digit as quick ones (see
-    `sequencer.readout`). Exact counts are what blink *rhythm* is good at and
-    hue is not, so the scheme survives the ring's colour cast, a warm room and
-    a colourblind reader (TODO 17).
+    """Show a number on the light, without entering an app.
+
+    **Two sources, and that is TODO 118a.** `source: "event"` is today's rows
+    for `event` (`store.count_today`) - what this action has always done, and
+    what every binding written before this still does. `source: "app"` reads
+    one slot of an app's document, the same `(app, slot)` pair `set_value`
+    writes, so a tally's "show the count" finally shows the number the tally
+    itself keeps rather than a recount of a same-named log. They *agreed by
+    convention* before, and only while nothing counted by more than one.
+
+    **Two renderers, and the old one is still the default.** With no `scheme`
+    the digits are `sequencer.readout`'s: the tens digit as slow pulses in
+    `tens_color`, the units as quick ones in `units_color`, capped at 0-99.
+    A `scheme` from `readout.SCHEMES` swaps in TODO 91's compiler instead,
+    which has no cap - which is what a tally that has counted past 99 needs.
+
+    **The legacy call is kept rather than re-expressed as `place_value`, and
+    that is measured rather than assumed**: the tens group there is *not*
+    slower than the units group (one pair of dwells serves every place), so
+    the two renderings differ for 99 of the first 100 values. Only 0 - the
+    single dim blink both give it - agrees. "Improving" an existing readout's
+    appearance in passing would be a regression in the only thing a readout
+    promises, which is that the same number always looks the same.
+
+    `colors` are the chosen scheme's own colours, in the order that scheme
+    uses them (`readout.scheme_opts`); empty means the scheme's defaults. The
+    legacy renderer ignores them and uses its own pair, which is why both
+    fields survive rather than one replacing the other.
+
+    Exact counts are what blink *rhythm* is good at and hue is not, so every
+    scheme here survives the ring's colour cast, a warm room and a colourblind
+    reader (TODO 17).
 
     Dispatched by main.py's `handle()` rather than by `execute()`, like
     `EnterModeAction`: it pushes a whole one-shot sequence at the LED.
+
+    **An `app` no mode is named is a dangling reference**, kept and warned
+    about exactly as `SetValueAction`'s is - and it fails *clearly* when the
+    gesture is pressed, rather than reading an empty document as a confident
+    zero. That is the one place the two app-bound actions differ, and the
+    asymmetry is the point: a write to a missing app still lands somewhere
+    real, while a read of one has no number to show.
     """
 
-    event: str
+    event: str = ""
     tens_color: str = "#ff8800"  # warm orange - the coarse (tens) digit
     units_color: str = "#3399ff"  # cool blue - the fine (units) digit
+    # Appended rather than inserted, so a positional `ReadoutAction("coffee")`
+    # still means what it always did.
+    source: str = "event"  # one of READOUT_SOURCES
+    app: str = ""  # source "app": the mode's name, as `SetValueAction.app`
+    slot: str = ""  # source "app": one of DOC_SLOTS[template]
+    scheme: str = ""  # "" = the tens/units digits; otherwise readout.SCHEMES
+    colors: tuple[str, ...] = ()  # the scheme's colours; empty = its own
 
 
 @dataclass(frozen=True)
@@ -322,6 +383,37 @@ class SetValueAction:
 
 
 @dataclass(frozen=True)
+class LoadThemeAction:
+    """Put the whole button on one colour theme (TODO 95).
+
+    **A pointer move, not a paste.** `theme` names an entry in the theme pool
+    (`AppConfig.themes`, or one of `BUILTIN_THEMES`), and running this swaps
+    the live config onto it - palette, look pool and the button's own
+    `state_looks` together, which is the only combination that actually
+    re-colours everything (see `Theme`). An empty name means "back to the
+    colours the config file itself carries".
+
+    **Ordinary fire-and-forget**, which is the whole reason it is one action
+    and not a setting: it changes no app's loop, owns no light of its own and
+    hands the button straight back, so `FIRE_AND_FORGET_ACTIONS` puts it on a
+    gesture, a hook, a reflex, a pool entry and a sequence step at once. The
+    case that earns that reach is a reflex: *at sunset, load Nocturne*.
+
+    **It does not touch the disk**, and that is deliberate rather than
+    unfinished - see `ConfigManager.set_active_theme` for the argument. A
+    theme chosen in the editor is saved like any other edit; a theme a gesture
+    or a reflex loads lasts until the config is next reloaded, exactly like
+    standby.
+
+    **A name no theme has is a dangling reference**, kept and warned about like
+    every other one here (`_warn_about_themes`), and it fails clearly at the
+    moment it is pressed.
+    """
+
+    theme: str = ""
+
+
+@dataclass(frozen=True)
 class NamedAction:
     """A reference into `AppConfig.actions` - the pool - by name.
 
@@ -341,6 +433,7 @@ Action = (
     LogAction | ReadoutAction | TimerToggleAction | WebhookAction | OscAction
     | ArtnetAction | MidiAction | KeysAction | EnterModeAction | NamedAction
     | StandbyAction | SetPositionAction | SetValueAction | SequenceAction
+    | LoadThemeAction
 )
 
 
@@ -363,13 +456,41 @@ class WindowActivation:
     days: frozenset[int] | None = None  # 0=Mon .. 6=Sun
 
 
+# How often a schedule repeats within a day (TODO 106). None - the default and
+# every schedule written before this existed - is once, at `at`.
+#
+# **A tuple with one entry, and it is a tuple for the usual reason**: `every`
+# is an allow-listed string like `interrupts` or a curve name, so a half-hour
+# or quarter-hour repeat is a new entry here plus a line in
+# `scheduler.current_occurrence`, not a new field. It is deliberately *not* a
+# number of minutes: "every 37 minutes" drifts against the wall clock and would
+# need a phase to be well-defined, which is a different feature from "on the
+# hour".
+SCHEDULE_REPEATS = ("hour",)
+
+
 @dataclass(frozen=True)
 class ScheduleActivation:
     """Fires (enters the mode) at clock time `at`, on `days` (or every day
-    when days is None)."""
+    when days is None).
+
+    `every` repeats it within the day (TODO 106): `'hour'` fires at `at`'s
+    *minute* past every hour, and the hour in `at` is then unused - which hours
+    are wanted is `between`'s job, not `at`'s. `None` is once a day at `at`,
+    which is what every schedule did before this field existed.
+
+    `between` bounds it to a stretch of the day, and may cross midnight exactly
+    like `WindowActivation.between`. **It is not a refinement of `every`, it is
+    the half that makes it usable**: an hour chime with no window rings at 3 AM
+    on its first night and is deleted on its second. It applies to a
+    non-repeating schedule too, where it is a way of standing one down without
+    unbinding it, and costs nothing to allow because the test is the same one.
+    """
 
     at: time
     days: frozenset[int] | None = None  # 0=Mon .. 6=Sun
+    every: str | None = None  # None = once a day; see SCHEDULE_REPEATS
+    between: tuple[time, time] | None = None  # may cross midnight
 
 
 @dataclass(frozen=True)
@@ -468,6 +589,45 @@ class ControlBehavior:
         return "control"
 
 
+# How far a notice is allowed to interrupt (TODO 105), most permissive first.
+#
+# **It is a ladder, and that is the property to protect.** Read the table down
+# any column and each tier's permissions are a strict subset of the one above
+# it:
+#
+#   tier          wakes a sleeping button   interrupts a running app   shows
+#   always                 yes                       yes                yes
+#   while_awake            no                        yes                yes
+#   when_free              no                        no                 yes
+#   never                  no                        no                 no
+#
+# So it is *one ordered enum*, not two orthogonal flags dressed up as four
+# names - a pair of checkboxes would have sixteen combinations of which twelve
+# mean nothing. A proposed fifth tier either slots into that order or it is a
+# second axis and belongs on a field of its own, which is the same argument
+# that keeps `urgent` (how loud) separate from this (whether it may speak).
+INTERRUPT_TIERS = ("always", "while_awake", "when_free", "never")
+# The default, and it is a deliberate choice rather than the first entry: if
+# new notices defaulted to `always`, sleep would mean nothing within a week,
+# and `while_awake` is wrong one rung down for the same reason - a reminder
+# that interrupts a Pomodoro is a reminder people turn off.
+DEFAULT_INTERRUPTS = "when_free"
+
+# How long a chiming notice takes to wash up to white and back down again, each
+# way (TODO 106's "fade to white over 10s ... then fade back").
+#
+# **It is a setting because it is most of the cost.** The hour itself is one to
+# six seconds depending on the scheme; twice this is twenty, so the fade is the
+# part worth arguing with, and arguing with it should not need a code change.
+DEFAULT_READOUT_FADE_S = 10.0
+
+# The colour a chime washes up to before counting the hour. Not a field: it is
+# the backdrop the count is read against, and every scheme's own colours are
+# chosen to sit on it. Somewhere for a `readout_color` to go if anyone wants a
+# gentler wash than full white at 22:00.
+READOUT_WASH_COLOR = "#ffffff"
+
+
 @dataclass(frozen=True)
 class NoticeBehavior:
     """The takeover notice template (TODO 84): the light goes off at a
@@ -505,6 +665,45 @@ class NoticeBehavior:
     logging to happen regardless of what the user configured, with the three
     hooks free for whatever else should happen (a webhook, an OSC message).
 
+    `interrupts` is how far it may go to be seen (TODO 105, `INTERRUPT_TIERS`
+    above) - and it is deliberately *not* derived from `urgent`, which looks
+    mergeable and is not: `urgent` is how loud, `interrupts` is whether it is
+    allowed to speak at all, so a gentle chime that must still pierce sleep is
+    `urgent=False, interrupts="always"`.
+
+    **Waiting is one rule shared by both middle tiers, and it reuses
+    `timeout_minutes` rather than inventing a second one.** A notice that
+    arrives but may not show yet waits - `when_free` for the running app to
+    exit, `while_awake` for a wake - and its own `timeout_minutes` decides
+    whether waiting turns into a miss, logged 0 with `on_missed` fired,
+    exactly as it already does for a notice nobody answered. Which makes
+    `always` easy to state precisely: it is the tier that does not wait.
+
+    **`never` is a gap being filled, not a degenerate case**: "at 9 AM, POST
+    this webhook, no light" is not otherwise expressible, because a schedule
+    can only start an app and every app owns the button. It is the one tier
+    that does not wait either, and for the opposite reason to `always` - it
+    can never become showable, so waiting for that would be a no-op with a
+    timer on it. It resolves to the missed outcome at once, whatever
+    `timeout_minutes` says, which is what keeps it from quietly doing nothing.
+
+    **`readout_scheme` turns a notice from a demand into an announcement**
+    (TODO 106). With one set, firing does not ring and wait to be cleared: the
+    light washes up to white over `readout_fade_s`, counts the hour in that
+    scheme (`readout.py`, the same compiler a counter's readout uses), fades
+    back to whatever it was resting on, and the notice is over - a press only
+    cuts it short. Everything else about the notice is unchanged, which is the
+    reason this is two fields and not a template: the schedule that starts it,
+    the `interrupts` ladder that decides whether it may show, and the log row
+    it writes are all the ones a notice already had.
+
+    **A chime speaks on the ambient layer, so it stays quiet while the button
+    is asleep** whatever its tier - `main.set_led` substitutes the standby dark
+    for anything IDLE would wear, and a chime *is* what IDLE is wearing for
+    twenty-odd seconds. That is the right answer for a thing whose entire
+    design problem is 3 AM, and the parser warns rather than lets
+    `interrupts: "always"` look like it would pierce sleep here.
+
     **It depends on this host being awake, and its whole point is firing while
     nobody is watching.** If the service stops, the machine sleeps, or BLE
     drops, it does not fire and cannot know that it did not. That is why every
@@ -520,6 +719,13 @@ class NoticeBehavior:
     snooze_minutes: float = 0.0  # 0 = no snooze; long_press just clears
     urgent: bool = True  # True: loop the alarm tone, hard ALERT flash.
     chime: bool = True  # whether it makes any sound at all when it fires
+    interrupts: str = DEFAULT_INTERRUPTS  # one of INTERRUPT_TIERS
+    # TODO 106's hour chime, and it is two fields rather than a template: a
+    # notice that *says the hour* is a notice, with the same schedule, the same
+    # `interrupts` ladder and the same log row. One of `readout.SCHEMES`, or
+    # None for the ordinary ring.
+    readout_scheme: str | None = None
+    readout_fade_s: float = DEFAULT_READOUT_FADE_S
     on_cleared: Action | None = None
     on_snoozed: Action | None = None
     on_missed: Action | None = None
@@ -595,10 +801,10 @@ class StopwatchBehavior:
 
 @dataclass(frozen=True)
 class CounterBehavior:
-    """The takeover counter template: enter resets the tally to 0;
-    short_press/double_tap logs `event` (so existing count_today/streaks just
-    work) and bumps the count; long_press exits. Handled by main.py's
-    run_counter loop, not actions.execute()."""
+    """The takeover counter template: entering picks the count up where it was;
+    each bound gesture logs `event` (so existing count_today/streaks just work)
+    and moves the count by that gesture's own step; long_press exits. Handled
+    by main.py's run_counter loop, not actions.execute()."""
 
     # Named for the same reason the stopwatch's is: `event` is `required` in
     # the editor and run_counter uses it unguarded, so "" writes rows called
@@ -615,6 +821,46 @@ class CounterBehavior:
     # people want from a counter, and the log is written the same way in both
     # cases, so history and streaks work whichever is chosen.
     durable: bool = False
+    # What each gesture adds (TODO 118c). **Five, never six**: long_press
+    # leaves, everywhere, and `_parse_counter_body` drops a binding on it with
+    # a warning exactly as `_parse_control_body` does - the escape gesture is
+    # not a thing a config gets to spend.
+    #
+    # Keyed by trigger name, which is not decoration: `bound_triggers` scans
+    # every dict field on a behaviour for trigger-shaped keys, so binding
+    # `tap_5: 10` here tells the device to count that far and an untouched
+    # counter still costs the double tap nothing.
+    #
+    # A gesture that is absent adds nothing at all - the same thing an unbound
+    # gesture means everywhere else. The default is the pair `run_counter`'s
+    # docstring has always named, so a config written before this existed
+    # behaves exactly as it did.
+    steps: dict[str, float] = field(
+        default_factory=lambda: {"short_press": 1, "double_tap": 1}
+    )
+    # Flash the running count on the light every this-many seconds, unasked.
+    # 0 = never, which is what every counter written before this did.
+    #
+    # It is a *readout*, in `sequencer.readout`'s digits - tens as slow pulses,
+    # units as quick ones - because a number is what this app is, and blink
+    # rhythm is the one thing a single pixel can say a number with. The two
+    # colours are the same pair `ReadoutAction` carries, so a tally that shows
+    # itself and a gesture that shows it look identical.
+    show_every_s: float = 0.0
+    tens_color: str = "#ff8800"
+    units_color: str = "#3399ff"
+    # How that number is drawn, and in what colours - **on the tally, not on
+    # each binding**, which is TODO 91's "Done when" in two fields. `""` is the
+    # tens/units digits above, so every tally written before this looks exactly
+    # as it did; one of `readout.SCHEMES` is TODO 91's compiler, which is the
+    # only way a tally past 99 can say its own number (the old renderer clamps
+    # there, silently).
+    #
+    # `counter_readout` is what makes "on the tally" true rather than merely
+    # intended: the app's own periodic flash and the "show the count" shortcut
+    # it contributes are built from these same two fields, by one function.
+    readout_scheme: str = ""
+    readout_colors: tuple[str, ...] = ()
 
     @property
     def template(self) -> str:
@@ -1150,6 +1396,75 @@ DOC_SLOTS: dict[str, tuple[DocSlot, ...]] = {
 }
 
 
+def readout_look(action: ReadoutAction, value: int) -> sequencer.Sequence:
+    """`value` as the one-shot stop list `action` asks for.
+
+    Pure, and here rather than in `main` because it is: it takes a number and
+    a configured action and answers a `Sequence`, with no clock, no store and
+    no device anywhere in it. That is the shape CLAUDE.md asks new behaviour to
+    lean toward, and the half of a readout that survives the move onto the
+    device unchanged - the *sources* are what will move with it.
+
+    **The legacy call is preserved, not re-expressed.** With no scheme this is
+    `sequencer.readout` exactly as it always was: the tens digit as slow
+    pulses, the units as quick ones, clamped at 99. `readout.place_value` is
+    the same *idea* generalised, and measurably not the same rendering - it
+    gives every place one pair of dwells where the old renderer gives the tens
+    group its own slower pair - so the two agree on 0 and differ on every other
+    value up to 99. A readout's one promise is that the same number always
+    looks the same, so swapping the default would have been a regression
+    dressed as a generalisation.
+
+    A named scheme routes to TODO 91's compiler instead, with the colours the
+    config chose mapped onto whichever arguments that scheme takes
+    (`readout.scheme_opts`). Both arms answer an ordinary one-shot `Sequence`,
+    so the flash floor still runs at its one call site inside `main.set_led`
+    and nothing downstream knows which arm ran.
+    """
+    if not action.scheme:
+        return sequencer.readout(value, action.tens_color, action.units_color)
+    return sequencer.Sequence(
+        stops=readout.render(
+            value, action.scheme,
+            **readout.scheme_opts(action.scheme, action.colors),
+        ),
+        repeat=False,
+    )
+
+
+def counter_readout(behavior: CounterBehavior, name: str) -> ReadoutAction:
+    """The readout a tally shows *itself* - and the body of the "show the
+    count" shortcut it contributes (schema.js, TODO 118b).
+
+    **One function, so the surface and the shortcut cannot answer the same
+    question with two different numbers.** That is exactly the state TODO 118a
+    found them in: `run_counter`'s periodic flash showed the live count while
+    the shortcut recounted the log, and on a durable tally counting by fives
+    those are simply different numbers.
+
+    **Which source is honest depends on the tally's own setting**, the same
+    test its `count_up` shortcut already makes. A running total lives in this
+    app's document, so the readout reads the slot `DOC_SLOTS` declares right
+    above; a day counter *is* its rows, so the readout counts them.
+
+    The scheme and its colours come off the tally either way, which is the
+    other half of the same idea - configure how the number reads once, on the
+    app that owns it, rather than on every gesture that asks for it.
+    """
+    shared = {
+        "event": behavior.event,
+        "tens_color": behavior.tens_color,
+        "units_color": behavior.units_color,
+        "scheme": behavior.readout_scheme,
+        "colors": behavior.readout_colors,
+    }
+    if behavior.durable:
+        # One slot, named in DOC_SLOTS["counter"] - the same literal
+        # `run_counter` reads and `count_up` writes.
+        return ReadoutAction(source="app", app=name, slot="count", **shared)
+    return ReadoutAction(**shared)
+
+
 # The rest: the button's own vocabulary, which no mode owns. LISTENING is the
 # one dual citizen (see MODE_LED_STATES["control"]) and is kept here as well,
 # because the ambient layer wears it with no mode involved - deriving it out
@@ -1199,6 +1514,14 @@ MODE_BETTER: tuple[str, ...] = ("low", "high")
 FIRE_AND_FORGET_ACTIONS: tuple[type, ...] = (
     LogAction, TimerToggleAction, WebhookAction, OscAction, ArtnetAction,
     MidiAction, KeysAction, SetValueAction,
+    # `load_theme` belongs here and not one tier up, and the test is the one
+    # the three loop-changing actions fail: it does not change what the run
+    # loop does next. It moves a pointer in the live config and returns; the
+    # light catches up through the palette push the loop already makes when
+    # `led_palette` differs from what was last sent. One placement, and it is
+    # on a gesture, a hook, a reflex, the pool and a sequence step at once -
+    # which is what a reflex loading Nocturne at sunset needs (TODO 95).
+    LoadThemeAction,
 )
 
 # What a step of a `SequenceAction` may be (TODO 33): the primitives, and
@@ -1336,6 +1659,45 @@ class MidiSource:
 
 
 @dataclass(frozen=True)
+class UrlSource:
+    """A reflex fired by a clock and a URL (TODO 99) - "check this every hour".
+
+    **`MidiSource`'s sibling, and the same split.** It says which *readings*
+    reach the reflex - this URL, this often, read this way - and the body then
+    becomes a payload that the ordinary `when` test judges. So this needed no
+    new comparison language either: *"my next meeting starts in 10 minutes"* is
+    this source reading `ics` plus `when: minutes <= 10`, and the consequence
+    vocabulary does not grow by one entry.
+
+    **Why a URL rather than an API** (TODO 100): Google Calendar, Outlook and
+    iCloud all publish a secret `.ics` URL, and RSS/Atom is the same shape - a
+    plain HTTPS GET with no OAuth, no app registration and no key. That is what
+    lets this ship before TODO 96(a)'s secret store exists. **Nothing here
+    carries a credential**, deliberately: no headers, no basic auth, no token
+    field. A source that needs one waits for 96(a) rather than putting a
+    brokerage key into a file the web API serves in full.
+
+    `every_minutes` is a floor away from zero (`poll.MIN_PERIOD_MINUTES`) and
+    `read` is one of `poll.READERS`; both are checked in the parser, and both
+    fall back rather than failing.
+    """
+
+    url: str
+    every_minutes: float = poll.DEFAULT_PERIOD_MINUTES
+    # How the fetched body becomes a payload: "json" (the body *is* the
+    # payload) or "ics" (a calendar becomes minutes-until-the-next-event).
+    read: str = "json"
+
+
+# The sources a reflex may name in `from`, and the whole list. A reflex is
+# always reachable at its own URL; a source *adds* a way in and never removes
+# the endpoint, which is why a MIDI or a polled reflex is still testable with
+# `curl`. Mirrored as REFLEX_SOURCES in schema.js; test_url_reflex.py fails on
+# drift.
+REFLEX_SOURCES: tuple[str, ...] = ("midi", "url")
+
+
+@dataclass(frozen=True)
 class Reflex:
     """A circumstance with an action attached - the button acting with nobody
     pressing anything (TODO 70).
@@ -1363,10 +1725,12 @@ class Reflex:
     # A test on the value that arrived with it (TODO 72). None means "fire on
     # arrival", which is what a reflex carrying no numbers can do.
     when: ReflexTest | None = None
-    # Where it can arrive from, besides its own URL (TODO 73). None means HTTP
-    # only; a source *adds* a way in and never removes the endpoint, so a MIDI
-    # reflex is still testable with `curl`.
-    source: MidiSource | None = None
+    # Where it can arrive from, besides its own URL (TODO 73, 99). None means
+    # HTTP only; a source *adds* a way in and never removes the endpoint, so a
+    # MIDI or a polled reflex is still testable with `curl`. One source, not a
+    # list: two would raise "which payload does `when` judge?", and the answer
+    # to wanting both is two reflexes naming the same pooled action.
+    source: MidiSource | UrlSource | None = None
 
 
 @dataclass(frozen=True)
@@ -2046,6 +2410,320 @@ def _parse_state_looks(raw, known: dict[str, object]) -> dict[str, str]:
     return chosen
 
 
+# --- colour themes (TODO 95) --------------------------------------------
+
+# Every LED state by name, which is what a theme's palette is checked against.
+# Derived from the enum rather than listed, so a state added tomorrow is
+# themeable without this line being touched. Wider than SYSTEM_LED_STATES on
+# purpose: a theme colours the mode-owned states too - those palette entries
+# are the invisible fallback a mode with no named look renders, and a theme
+# that skipped them would recolour half the button.
+LED_STATE_NAMES: frozenset[str] = frozenset(state.value for state in LEDState)
+
+
+@dataclass(frozen=True)
+class Colours:
+    """The three keys that between them decide every colour on the button.
+
+    Named as a set because TODO 95's investigation named them as a set: a
+    scene carrying only `led_palette`, `looks` and `state_looks` *is* a colour
+    theme, mechanically. What that investigation then refused was the second
+    file layer around them, so this is the same three keys with no file and no
+    precedence stack - one pool, one pointer, one parser.
+
+    Carried on `AppConfig` as `own_colours`: what the config file itself said
+    before the active theme was laid over it. `as_dict` writes these back, so a
+    Save can never bake a theme into the colours you chose, and clearing the
+    theme brings them back exactly.
+    """
+
+    led_palette: dict[str, LedEffect]
+    looks: dict[str, LedEffect | sequencer.Sequence]
+    state_looks: dict[str, str]
+
+
+@dataclass(frozen=True)
+class Theme:
+    """A coordinated set of colours for the whole button (TODO 95).
+
+    **What it owns**, and each of the three is load-bearing:
+
+    - `palette` - a whole `LedEffect` per LED state, not a colour. Style and
+      period are the half that makes a one-hue theme legible at all (see
+      `BUILTIN_THEMES`' Ember), and THINKING's default style is `rainbow`,
+      which no colour-only theme could ever move off every hue at once.
+      Merged key by key, so a theme that names eight states leaves the other
+      three as you had them.
+    - `looks` - merged into the pool **by name**, never replacing it. A mode
+      names a look (`Mode.looks`), so a theme that dropped the pool would
+      break every mode that wears one; a theme that *re-colours* a name your
+      modes already wear is exactly the coordinated behaviour wanted.
+    - `state_looks` - **owned outright, not merged**: while a theme is active
+      the button's own states wear the theme's named looks and no others.
+      That asymmetry is the only rule under which a theme is guaranteed to be
+      visible, because `look_for` checks `state_looks` *before* the palette -
+      so a config naming a look for IDLE would otherwise hide the theme's IDLE
+      completely. An empty `state_looks` therefore means "fall through to the
+      palette", which the theme has just re-coloured.
+
+    **What it does not own**: which look each *mode* wears (that is the mode's
+    identity, and a theme that reassigned it would rearrange the button rather
+    than recolour it), a mode's ramps and ladders, `min_flash_period_s` - a
+    safety setting is not an aesthetic - and everything that is not colour.
+    """
+
+    name: str  # what the editor shows
+    about: str = ""  # one line: why this theme exists
+    palette: dict[str, LedEffect] = field(default_factory=dict)
+    looks: dict[str, LedEffect | sequencer.Sequence] = field(default_factory=dict)
+    state_looks: dict[str, str] = field(default_factory=dict)
+
+
+# The shipped themes, as raw config bodies rather than parsed objects: they go
+# through `_parse_theme` exactly like a config's own, so there is one set of
+# rules about what a theme may say and the shipped ones cannot quietly break
+# them.
+#
+# **Mirrored as THEMES in schema.js**, where the reasoning behind each of the
+# four lives; test_themes.py compares the two literally and fails on drift.
+# Both sides need it: the offline editor has no server to ask, and the service
+# has to resolve `active_theme: "ember"` on a config nobody has opened in an
+# editor.
+_BUILTIN_THEME_BODIES: tuple[dict, ...] = (
+    {
+        "id": "signal", "label": "Signal",
+        "about": "Maximum separation - a different hue and a different motion "
+                 "for every state. The one to pick if colour alone is hard to "
+                 "read.",
+        "palette": {
+            "IDLE": {"style": "breathe", "color": "#0000ff", "color2": "#000000", "period_s": 3},
+            "LISTENING": {"style": "solid", "color": "#ffff00", "color2": "#000000", "period_s": 1},
+            "THINKING": {"style": "rainbow", "color": "#ffffff", "color2": "#000000", "period_s": 0.8},
+            "SUCCESS": {"style": "solid", "color": "#00ff00", "color2": "#000000", "period_s": 1},
+            "ERROR": {"style": "flash", "color": "#ff0000", "color2": "#000000", "period_s": 0.45},
+            "ALERT": {"style": "alternate", "color": "#ff0000", "color2": "#ffffff", "period_s": 0.45},
+            "TIMING": {"style": "breathe", "color": "#00ffff", "color2": "#000000", "period_s": 1.6},
+            "COUNTING": {"style": "flash", "color": "#ff00ff", "color2": "#000000", "period_s": 0.7},
+            "WORKING": {"style": "solid", "color": "#ff5500", "color2": "#000000", "period_s": 1},
+            "RESTING": {"style": "breathe", "color": "#00ff88", "color2": "#000000", "period_s": 4},
+            "METRONOME": {"style": "flash", "color": "#ffffff", "color2": "#000000", "period_s": 0.5},
+        },
+    },
+    {
+        "id": "ember", "label": "Ember",
+        "about": "Everything on the black-body curve - deep amber at rest, warm "
+                 "gold when it works, red-orange when it fails. A lamp rather "
+                 "than a gadget.",
+        "palette": {
+            "IDLE": {"style": "breathe", "color": "#4a1200", "color2": "#000000", "period_s": 5},
+            "LISTENING": {"style": "solid", "color": "#ff8c26", "color2": "#000000", "period_s": 1},
+            "THINKING": {"style": "fade", "color": "#ff3800", "color2": "#ffc46b", "period_s": 1.2},
+            "SUCCESS": {"style": "solid", "color": "#ffd08a", "color2": "#000000", "period_s": 1},
+            "ERROR": {"style": "flash", "color": "#ff2000", "color2": "#000000", "period_s": 0.45},
+            "ALERT": {"style": "alternate", "color": "#ff3800", "color2": "#ffe4c4", "period_s": 0.45},
+            "TIMING": {"style": "breathe", "color": "#ff6a00", "color2": "#000000", "period_s": 2},
+            "COUNTING": {"style": "flash", "color": "#ffa030", "color2": "#000000", "period_s": 0.7},
+            "WORKING": {"style": "breathe", "color": "#ff5000", "color2": "#000000", "period_s": 6},
+            "RESTING": {"style": "breathe", "color": "#ffc46b", "color2": "#000000", "period_s": 6},
+            "METRONOME": {"style": "flash", "color": "#ffe4c4", "color2": "#000000", "period_s": 0.5},
+        },
+    },
+    {
+        "id": "nocturne", "label": "Nocturne",
+        "about": "Low, cool and slow. A near-black indigo breath at rest and an "
+                 "error dim enough to sleep through - a button on a nightstand "
+                 "at 3 AM should not be a torch.",
+        "palette": {
+            "IDLE": {"style": "breathe", "color": "#06001e", "color2": "#000000", "period_s": 6},
+            "LISTENING": {"style": "solid", "color": "#0e1836", "color2": "#000000", "period_s": 1},
+            "THINKING": {"style": "fade", "color": "#04001c", "color2": "#0a1840", "period_s": 3},
+            "SUCCESS": {"style": "solid", "color": "#00301a", "color2": "#000000", "period_s": 1},
+            "ERROR": {"style": "breathe", "color": "#3a0000", "color2": "#000000", "period_s": 1.5},
+            "ALERT": {"style": "breathe", "color": "#5a0008", "color2": "#000000", "period_s": 1.2},
+            "TIMING": {"style": "breathe", "color": "#001e2a", "color2": "#000000", "period_s": 3},
+            "COUNTING": {"style": "breathe", "color": "#1a0028", "color2": "#000000", "period_s": 3},
+            "WORKING": {"style": "breathe", "color": "#0c1428", "color2": "#000000", "period_s": 8},
+            "RESTING": {"style": "breathe", "color": "#021c14", "color2": "#000000", "period_s": 8},
+            "METRONOME": {"style": "flash", "color": "#14202e", "color2": "#000000", "period_s": 0.6},
+        },
+    },
+    {
+        "id": "studio", "label": "Studio",
+        "about": "Transport vocabulary - record red, play green, stop amber, a "
+                 "hard white tick. Desaturated everywhere else, so that red "
+                 "means record.",
+        "palette": {
+            "IDLE": {"style": "solid", "color": "#101820", "color2": "#000000", "period_s": 1},
+            "LISTENING": {"style": "solid", "color": "#7c8a99", "color2": "#000000", "period_s": 1},
+            "THINKING": {"style": "rainbow", "color": "#303030", "color2": "#909090", "period_s": 1.5},
+            "SUCCESS": {"style": "solid", "color": "#2fae5c", "color2": "#000000", "period_s": 1},
+            "ERROR": {"style": "flash", "color": "#e0641e", "color2": "#000000", "period_s": 0.45},
+            "ALERT": {"style": "flash", "color": "#ff0000", "color2": "#000000", "period_s": 0.45},
+            "TIMING": {"style": "breathe", "color": "#c88a2a", "color2": "#000000", "period_s": 2},
+            "COUNTING": {"style": "breathe", "color": "#4f7fa8", "color2": "#000000", "period_s": 2.5},
+            "WORKING": {"style": "breathe", "color": "#37718f", "color2": "#000000", "period_s": 6},
+            "RESTING": {"style": "solid", "color": "#43535f", "color2": "#000000", "period_s": 1},
+            "METRONOME": {"style": "flash", "color": "#ffffff", "color2": "#000000", "period_s": 0.5},
+        },
+    },
+)
+
+
+def _parse_theme(raw, where: str, min_flash_period_s: float) -> Theme | None:
+    """One theme, `_parse_effect`'s shape one level up: a bad key costs you
+    that key, a bad *shape* costs you the theme and says so.
+
+    Every palette entry is a plain effect and never a stop list, the same rule
+    `_parse_palette` enforces and for the same reason - a palette entry ships
+    to the device and renders with no host attached, and a sequence is a
+    schedule only the host can walk. A theme's `looks` may be either, because
+    those are pool entries and the pool has always held both.
+    """
+    if not isinstance(raw, dict):
+        log.error("config: %s must be an object - ignored", where)
+        return None
+    name = raw.get("label") or raw.get("name") or ""
+    if not isinstance(name, str):
+        log.error("config: %s.label must be text - using the theme's id", where)
+        name = ""
+
+    palette: dict[str, LedEffect] = {}
+    entries = raw.get("palette", {})
+    if not isinstance(entries, dict):
+        log.error("config: %s.palette must be an object - ignored", where)
+        entries = {}
+    for state, entry in entries.items():
+        if state not in LED_STATE_NAMES:
+            log.warning(
+                "config: %s.palette has unknown LED state %r - ignored",
+                where, state,
+            )
+            continue
+        palette[state] = _parse_effect(
+            entry, f"{where}.palette.{state}", LedEffect()
+        )
+
+    looks = _parse_looks(
+        {"looks": raw.get("looks", {})}, min_flash_period_s
+    ) if isinstance(raw.get("looks"), dict) else {}
+    if raw.get("looks") is not None and not isinstance(raw.get("looks"), dict):
+        log.error("config: %s.looks must be an object - ignored", where)
+
+    # Validated against the theme's *own* pool plus nothing else, because a
+    # theme is meant to travel: one that named a look only your config has
+    # would come up half-applied on anyone else's button.
+    state_looks = _parse_state_looks(
+        {"state_looks": raw.get("state_looks", {})}, dict(looks)
+    )
+
+    about = raw.get("about", "")
+    if not isinstance(about, str):
+        log.error("config: %s.about must be text - ignored", where)
+        about = ""
+
+    return Theme(
+        name=name, about=about, palette=palette, looks=looks,
+        state_looks=state_looks,
+    )
+
+
+def _builtin_themes() -> dict[str, Theme]:
+    """The shipped themes, parsed once at import through the ordinary rules."""
+    out: dict[str, Theme] = {}
+    for body in _BUILTIN_THEME_BODIES:
+        theme = _parse_theme(body, f"themes.{body['id']}", SAFE_MIN_PERIOD_S)
+        if theme is not None:
+            out[body["id"]] = theme
+    return out
+
+
+# Parsed once, at import: they are static data, and re-parsing four themes on
+# every config load would be work done to produce the same answer.
+BUILTIN_THEMES: dict[str, Theme] = _builtin_themes()
+
+
+def _parse_themes(raw, min_flash_period_s: float) -> dict[str, Theme]:
+    """The theme pool: `{"desk": {"label": "Desk", "palette": {...}}}`.
+
+    `_parse_looks` one level up, and deliberately the same shape - empty by
+    default, per-entry fallback, an unusable name dropped with a complaint.
+    **Only the config's own themes are here**; the shipped ones live in
+    `BUILTIN_THEMES` and are found by `theme_for`, exactly as a look preset is
+    a starting point rather than something that lands in everybody's file. An
+    entry sharing a built-in's id shadows it, which is what "users can edit and
+    save their own" means when the one they want to edit is Ember.
+    """
+    themes: dict[str, Theme] = {}
+    if "themes" not in raw:
+        return themes
+    entries = raw["themes"]
+    if not isinstance(entries, dict):
+        log.error("config: 'themes' must be an object - ignored")
+        return themes
+    for name, entry in entries.items():
+        if not (isinstance(name, str) and name.strip()):
+            log.error("config: themes has an unusable name %r - ignored", name)
+            continue
+        theme = _parse_theme(entry, f"themes.{name}", min_flash_period_s)
+        if theme is not None:
+            themes[name] = replace(theme, name=theme.name or name)
+    return themes
+
+
+def _parse_active_theme(raw, themes: dict[str, Theme]) -> str | None:
+    """Which theme the button wears: **one pointer**, exactly like
+    `scenes.active`, and there is no second one.
+
+    Fails soft to "your own colours" rather than to some other theme: a
+    pointer at a theme nobody has is a rename or a typo, and picking a
+    different theme on the user's behalf would be the quiet repointing the
+    action pool's dangling rule already refuses.
+    """
+    value = raw.get("active_theme")
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        log.error(
+            "config: 'active_theme' must be the name of a theme - "
+            "using the config's own colours",
+        )
+        return None
+    if value not in themes and value not in BUILTIN_THEMES:
+        log.warning(
+            "config: active_theme names %r, which is not in 'themes' (or one of "
+            "%s) - using the config's own colours", value,
+            "/".join(sorted(BUILTIN_THEMES)),
+        )
+        return None
+    return value
+
+
+def theme_for(config: "AppConfig", name: str | None) -> Theme | None:
+    """The theme `name` refers to: the config's own first, then the shipped
+    ones. One lookup, so a gesture, the parser and the web API can never
+    disagree about which Ember they mean."""
+    if not name:
+        return None
+    return config.themes.get(name) or BUILTIN_THEMES.get(name)
+
+
+def themed(own: Colours, theme: Theme | None) -> Colours:
+    """`own` with `theme` laid over it - the whole of what applying a theme
+    does, in one pure function so the parser and a running `load_theme` can
+    never do it two different ways.
+
+    Three different merges, and each is argued in `Theme`: the palette and the
+    look pool merge key by key, and `state_looks` is replaced outright.
+    """
+    if theme is None:
+        return own
+    return Colours(
+        led_palette={**own.led_palette, **theme.palette},
+        looks={**own.looks, **theme.looks},
+        state_looks=dict(theme.state_looks),
+    )
+
+
 def _parse_action_pool(raw) -> dict[str, Action]:
     """The named-action pool: `{"smoke": {"action": "log", "event": "cig"}}`.
 
@@ -2154,8 +2832,8 @@ def _parse_reflexes(
     return tuple(out)
 
 
-def _parse_reflex_source(raw, where: str) -> MidiSource | None:
-    """`{"midi": {"port": "Button", "note": 95, "channel": 1}}`, or None.
+def _parse_reflex_source(raw, where: str) -> MidiSource | UrlSource | None:
+    """`{"midi": {...}}` or `{"url": {...}}`, or None.
 
     Dropping the source keeps the reflex, exactly as a broken test does: the
     URL still fires it, so what is lost is one way in rather than the whole
@@ -2170,12 +2848,25 @@ def _parse_reflex_source(raw, where: str) -> MidiSource | None:
     if not isinstance(raw, dict):
         log.error("config: %s must be an object - ignored, the URL still fires it", where)
         return None
-    unknown = set(raw) - {"midi"}
+    unknown = set(raw) - set(REFLEX_SOURCES)
     if unknown:
         log.warning(
             "config: %s has no source called %s - ignored",
             where, ", ".join(sorted(repr(k) for k in unknown)),
         )
+    named = [key for key in REFLEX_SOURCES if raw.get(key) is not None]
+    if len(named) > 1:
+        # One payload per arrival, so one source per reflex: two would leave
+        # `when` judging a different shape depending on which way in fired,
+        # which is a config that means two different things on two days.
+        log.error(
+            "config: %s names %s - a reflex hears from one source, so all are "
+            "ignored and the URL still fires it",
+            where, " and ".join(repr(k) for k in named),
+        )
+        return None
+    if raw.get("url") is not None:
+        return _parse_url_source(raw["url"], f"{where}.url")
     spec = raw.get("midi")
     if spec is None:
         return None
@@ -2206,6 +2897,55 @@ def _parse_reflex_source(raw, where: str) -> MidiSource | None:
         log.error("config: %s.midi port must be a name - using the first input", where)
         port = ""
     return MidiSource(port=port, kind=kind, number=number, channel=channel)
+
+
+def _parse_url_source(raw, where: str) -> UrlSource | None:
+    """`{"url": "https://...", "every_minutes": 15, "read": "ics"}`, or None.
+
+    **Only the URL can drop the source; everything else falls back.** Without
+    a URL there is nothing to fetch, so there is no half of this worth keeping
+    - but an interval of `"soon"` or a reader called `"calendar"` are typos
+    with an obvious right answer, and refusing the whole source over one would
+    turn a small mistake into a silent feature. Each is reported, so the
+    editor shows what was actually accepted.
+
+    The interval is **clamped and warned about**, never clamped quietly: a
+    floor that lies about the number it was given is the failure
+    `min_flash_period_s` is written up to avoid, one subsystem over. And the
+    floor exists because somebody else's calendar server is on the other end.
+    """
+    if not isinstance(raw, dict):
+        log.error("config: %s must be an object - ignored, the URL still fires it", where)
+        return None
+    url = raw.get("url")
+    if not (isinstance(url, str) and url.strip().startswith(("http://", "https://"))):
+        log.error(
+            "config: %s needs an http(s) address to fetch - ignored, the URL "
+            "still fires it", where,
+        )
+        return None
+    every = raw.get("every_minutes", poll.DEFAULT_PERIOD_MINUTES)
+    if isinstance(every, bool) or not isinstance(every, (int, float)):
+        log.error(
+            "config: %s.every_minutes must be a number of minutes - using %g",
+            where, poll.DEFAULT_PERIOD_MINUTES,
+        )
+        every = poll.DEFAULT_PERIOD_MINUTES
+    elif every < poll.MIN_PERIOD_MINUTES:
+        log.warning(
+            "config: %s.every_minutes is %g, below the %g minute floor - "
+            "polling every %g minutes instead",
+            where, every, poll.MIN_PERIOD_MINUTES, poll.MIN_PERIOD_MINUTES,
+        )
+        every = poll.MIN_PERIOD_MINUTES
+    read = raw.get("read", "json")
+    if read not in poll.READERS:
+        log.error(
+            "config: %s.read is %r, which is not one of %s - reading it as "
+            "JSON", where, read, " ".join(poll.READERS),
+        )
+        read = "json"
+    return UrlSource(url=url.strip(), every_minutes=float(every), read=read)
 
 
 def _parse_reflex_test(raw, where: str) -> ReflexTest | None:
@@ -2256,7 +2996,10 @@ def reflex_hears(reflex: Reflex, kind: str, number: int, channel: int) -> bool:
     A source with no channel hears every channel.
     """
     source = reflex.source
-    if source is None:
+    # `isinstance`, not `is not None`: `source` is a union since TODO 99 and a
+    # polled reflex has no note number to compare. Asking here keeps every
+    # caller from asking - `_dispatch_midi` hands over whatever it finds.
+    if not isinstance(source, MidiSource):
         return False
     if source.kind != kind or source.number != number:
         return False
@@ -2454,6 +3197,23 @@ class AppConfig:
     # `_parse_state_looks`). The palette stays underneath either way, as what a
     # host-less button shows.
     state_looks: dict[str, str] = field(default_factory=dict)
+    # Coordinated colour sets this config carries of its own (TODO 95). The
+    # shipped four are *not* in here - they are `BUILTIN_THEMES`, found by
+    # `theme_for` - so nobody's file grows four themes they did not write, the
+    # same relationship a look preset has with the look pool.
+    themes: dict[str, Theme] = field(default_factory=dict)
+    # **One pointer, and there is no second one.** Which theme the three colour
+    # fields above have already been resolved through - `led_palette`, `looks`
+    # and `state_looks` are the *themed* answer, so nothing downstream of the
+    # parser knows a theme was involved, exactly as nothing downstream knows a
+    # scene was. None means the config's own colours.
+    active_theme: str | None = None
+    # What the file itself said its colours were, before the theme. Read by
+    # `as_dict` (so a Save can never bake a theme into colours somebody chose)
+    # and by `apply_theme` (so switching themes never compounds one over
+    # another). None means no theme has been laid over these - the three fields
+    # above are already the file's own.
+    own_colours: Colours | None = None
     # Where the swappable scene files live and which one is active. The scene
     # itself is merged in before parsing (see load_config_full), so nothing
     # downstream of here knows a scene was involved.
@@ -2568,6 +3328,116 @@ def _parse_action_sequence(
     return SequenceAction(steps=tuple(steps))
 
 
+# Not a colour, and it cannot be mistaken for one: `_parse_color` only ever
+# returns "#rrggbb" or the default it was handed, so handing it this identifies
+# a dropped entry *and* completes the sentence it logs.
+_COLOR_DROPPED = "the scheme's own"
+
+
+def _parse_readout_colors(raw, where: str) -> tuple[str, ...]:
+    """A scheme's own colours, in the order that scheme uses them.
+
+    Per-entry fallback, like every other list here: a typo costs that colour
+    and the rest of the list still stands. Anything that is not a list at all
+    costs the whole list, which leaves the scheme on its own defaults rather
+    than on nothing - a readout with no colours would be a readout you cannot
+    see, and the defaults in `readout.py` are chosen, not arbitrary.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, (list, tuple)):
+        log.error(
+            "config: %s must be a list of colours - using the scheme's own",
+            where,
+        )
+        return ()
+    chosen = []
+    for index, entry in enumerate(raw):
+        # The "default" here is a phrase rather than a colour, and deliberately:
+        # there is no sensible substitute for a colour the scheme was never
+        # told about, so a bad entry is *dropped* and that position falls back
+        # to whatever the scheme itself would have used. `_parse_color` writes
+        # its default into the log line, so the sentence it prints is true.
+        color = _parse_color(entry, f"{where}[{index}]", _COLOR_DROPPED)
+        if color != _COLOR_DROPPED:
+            chosen.append(color)
+    return tuple(chosen)
+
+
+def _parse_readout(raw: dict, where: str) -> ReadoutAction | None:
+    """One `readout` binding (TODO 118a), falling back per field.
+
+    Its own function because a readout now asks three questions where it used
+    to ask one - where the number comes from, how it is drawn, and in what
+    colours - and each falls back on its own the way `_parse_effect`'s fields
+    do. An unknown scheme costs you the scheme and leaves the tens/units
+    digits; a bad colour costs you that colour; a `source` nobody has heard of
+    reads the event log, which is what a readout has always meant.
+
+    None means there is no number to read *at all* - no event under the event
+    source, no app or slot under the app source. The caller lets that fall
+    through to the generic "not a valid action", where a readout with no event
+    has always been reported.
+    """
+    defaults = ReadoutAction()
+
+    source = raw.get("source", defaults.source)
+    if source not in READOUT_SOURCES:
+        log.error(
+            "config: %s.source must be one of %s - counting the event log",
+            where, ", ".join(READOUT_SOURCES),
+        )
+        source = defaults.source
+
+    scheme = raw.get("scheme", defaults.scheme)
+    if not isinstance(scheme, str) or (scheme and scheme not in READOUT_SCHEMES):
+        log.error(
+            "config: %s.scheme must be one of %s, or empty for the tens and "
+            "units digits - using those", where, "/".join(READOUT_SCHEMES),
+        )
+        scheme = defaults.scheme
+
+    event = raw.get("event", defaults.event)
+    if not isinstance(event, str):
+        log.error("config: %s.event must be a name - ignored", where)
+        event = defaults.event
+    app = raw.get("app", defaults.app)
+    slot = raw.get("slot", defaults.slot)
+    app = app.strip() if isinstance(app, str) else ""
+    slot = slot.strip() if isinstance(slot, str) else ""
+
+    if source == "app":
+        # Checked here and not warned about later, unlike the *name* itself: an
+        # app-sourced readout with no app named is an unfinished binding, while
+        # one naming an app that does not exist is a dangling reference and is
+        # kept (`_warn_about_documents`).
+        if not app:
+            log.error("config: %s.app must name an app - ignored", where)
+            return None
+        if not slot:
+            log.error("config: %s.slot must name a value to read - ignored", where)
+            return None
+    elif not event:
+        return None
+
+    return ReadoutAction(
+        event=event,
+        tens_color=_parse_color(
+            raw.get("tens_color", defaults.tens_color),
+            f"{where}.tens_color", defaults.tens_color,
+        ),
+        units_color=_parse_color(
+            raw.get("units_color", defaults.units_color),
+            f"{where}.units_color", defaults.units_color,
+        ),
+        source=source,
+        app=app,
+        slot=slot,
+        scheme=scheme,
+        colors=_parse_readout_colors(raw.get("colors", ()), f"{where}.colors"),
+    )
+
+
 def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | None:
     """One gesture's action: an inline object, or a bare string naming one in
     the pool (`AppConfig.actions`).
@@ -2639,20 +3509,25 @@ def _parse_action(raw, where: str, known: set[str] | None = None) -> Action | No
         if isinstance(event, str) and event:
             return LogAction(event=event)
     elif kind == "readout":
-        event = raw.get("event")
-        if isinstance(event, str) and event:
-            defaults = ReadoutAction(event=event)
-            return ReadoutAction(
-                event=event,
-                tens_color=_parse_color(
-                    raw.get("tens_color", defaults.tens_color),
-                    f"{where}.tens_color", defaults.tens_color,
-                ),
-                units_color=_parse_color(
-                    raw.get("units_color", defaults.units_color),
-                    f"{where}.units_color", defaults.units_color,
-                ),
-            )
+        # Its own function now, because a readout asks three questions rather
+        # than one. It answers None for a binding with no number to read at
+        # all, which falls through to the generic "not a valid action" below -
+        # where a readout with no event has always been reported.
+        action = _parse_readout(raw, where)
+        if action is not None:
+            return action
+    elif kind == "load_theme":
+        # An empty name is meaningful here rather than missing: it is "back to
+        # the config's own colours", which is the other half of a gesture that
+        # loads one. So the check is on the *type*, not on emptiness - unlike
+        # every field above, where blank means the binding was never finished.
+        # Whether a theme by that name exists is left to `_warn_about_themes`,
+        # which is the only place with the finished config to answer it.
+        theme = raw.get("theme", "")
+        if isinstance(theme, str):
+            return LoadThemeAction(theme=theme.strip())
+        log.error("config: %s.theme must be the name of a theme - ignored", where)
+        return None
     elif kind == "standby":
         # No fields: it is a toggle, and which way it goes is session state
         # the run loop holds rather than anything a config can say.
@@ -2798,6 +3673,36 @@ def _parse_days(raw_days, where: str) -> frozenset[int] | None | object:
 _INVALID = object()  # sentinel: a key was present but malformed -> skip the mode
 
 
+def _parse_between(raw: dict, where: str) -> tuple[time, time] | None | object:
+    """A `between: ["HH:MM", "HH:MM"]` pair, or None when the key is absent,
+    or the `_INVALID` sentinel when it is present and malformed.
+
+    The one reader of that key, shared by `window` and `schedule` activations
+    (TODO 106) so the two cannot drift about what a window is - it is the same
+    half-open, possibly-midnight-crossing span in both, tested by the same
+    `rules._in_window` / `scheduler._in_window` predicate.
+
+    **Malformed is `_INVALID` and the caller skips the mode**, not a fallback
+    to "no window": every other key in this file falls back individually
+    because the failure direction is harmless, and this one's is not. A window
+    is what stops a scoped mode running at the wrong time, so losing it
+    silently is the `_parse_activation` docstring's "running a scoped mode at
+    the wrong time is worse than not running it", one key down.
+    """
+    if "between" not in raw:
+        return None
+    pair = raw["between"]
+    if isinstance(pair, list) and len(pair) == 2:
+        start, end = _parse_time(pair[0]), _parse_time(pair[1])
+        if start is not None and end is not None:
+            return (start, end)
+    log.error(
+        "config: %s must be [\"HH:MM\", \"HH:MM\"] - mode skipped",
+        f"{where}.activation.between",
+    )
+    return _INVALID
+
+
 def _parse_activation(raw, where: str) -> Activation | None:
     """Parse an activation object (tagged by .type). Returns None on any
     problem so the caller skips the whole mode - running a scoped mode at
@@ -2814,19 +3719,9 @@ def _parse_activation(raw, where: str) -> Activation | None:
         return ManualActivation()
 
     if kind == "window":
-        between = None
-        if "between" in raw:
-            pair = raw["between"]
-            if isinstance(pair, list) and len(pair) == 2:
-                start, end = _parse_time(pair[0]), _parse_time(pair[1])
-                if start is not None and end is not None:
-                    between = (start, end)
-            if between is None:
-                log.error(
-                    "config: %s.activation.between must be [\"HH:MM\", \"HH:MM\"] - mode skipped",
-                    where,
-                )
-                return None
+        between = _parse_between(raw, where)
+        if between is _INVALID:
+            return None
         days = None
         if "days" in raw:
             days = _parse_days(raw["days"], f"{where}.activation.days")
@@ -2849,7 +3744,45 @@ def _parse_activation(raw, where: str) -> Activation | None:
             if days is _INVALID:
                 log.error("config: %s - mode skipped", where)
                 return None
-        return ScheduleActivation(at=at, days=days)
+        # Both new and both optional (TODO 106): absent means exactly what a
+        # schedule has always meant, once a day at `at`, which is why neither
+        # is defaulted to something and why an unusable value falls back to
+        # "off" rather than to a guess.
+        every = raw.get("every")
+        if every is None or every == "":
+            every = None
+        elif not (isinstance(every, str) and every in SCHEDULE_REPEATS):
+            log.error(
+                "config: %s must be one of %s - firing once a day instead",
+                f"{where}.activation.every", "/".join(SCHEDULE_REPEATS),
+            )
+            every = None
+        between = _parse_between(raw, where)
+        if between is _INVALID:
+            return None
+        if between is not None and between[0] == between[1]:
+            # `_in_window` reads start == end as "crosses midnight", which for
+            # an equal pair means *the whole day* - the opposite of what
+            # ["09:00", "09:00"] plainly looks like it says. Refused rather
+            # than reinterpreted: guessing which of the two a person meant is
+            # exactly the silent rewrite this file does not do.
+            log.error(
+                "config: %s starts and ends at the same time, which is not a "
+                "window - mode skipped", f"{where}.activation.between",
+            )
+            return None
+        if every == "hour" and at.hour:
+            # Not an error - the mode runs, hourly, at `at`'s minute - but the
+            # one thing about this shape that will surprise someone, and it
+            # surprises them silently: "08:30 every hour" looks like it starts
+            # at 08:30 and it does not. Said here rather than left in the docs
+            # because the symptom is a chime at 00:30 the first night.
+            log.warning(
+                "config: %s repeats hourly, so only the minute of \"at\" is "
+                "used (:%02d past every hour) - set \"between\" to choose "
+                "which hours", f"{where}.activation.at", at.minute,
+            )
+        return ScheduleActivation(at=at, days=days, every=every, between=between)
 
     log.error("config: %s.activation has unknown type %r - mode skipped", where, kind)
     return None
@@ -2997,11 +3930,26 @@ def _parse_notice_body(
     message = _string(raw, "message", where, defaults.message)
     label = _string(raw, "label", where, defaults.label)
     snooze = _nonneg(raw, "snooze_minutes", where, defaults.snooze_minutes)
+    # What this mode's `interrupts` falls back to when the config predates the
+    # field. `when_free` for anything that is not a migrated alarm - see the
+    # override below for why that one differs.
+    interrupts_default = defaults.interrupts
 
     if template == "alarm":
         timeout = _nonneg(raw, "grace_minutes", where, 0.0)
         urgent = True
         chime = True
+        # Pinned for exactly the reason `urgent` above is pinned (TODO 84): an
+        # alarm rang through everything, standby included, and that is the
+        # whole of what an alarm is. The *field* is new; the *behaviour* it
+        # names is not, so there is a legacy meaning here and it has to be
+        # preserved. Letting a migrated alarm take the new `when_free` default
+        # would mean it waits for a wake instead of causing one - a silent
+        # regression measured in people oversleeping. A reminder is not given
+        # the same treatment on purpose: 105's "a reminder that interrupts a
+        # Pomodoro is a reminder people turn off" is the same alarm/reminder
+        # split 84 already encodes as `urgent`/`chime`, one field along.
+        interrupts_default = "always"
         explicit_log = _string(raw, "dismiss_event", where, "")
         on_missed = (
             _parse_action(raw["on_timeout"], f"{where}.on_timeout", actions)
@@ -3036,6 +3984,23 @@ def _parse_notice_body(
             if raw.get("on_missed") is not None else None
         )
 
+    # Always readable and always writable, on all three template names - what
+    # differs is only what it falls back *to* when the key is absent, which
+    # `interrupts_default` decided above. So a migrated alarm can still be
+    # taken down to `when_free` deliberately; it just is not taken there by
+    # the mere absence of a field nobody could have written yet.
+    #
+    # An unknown value falls back and *warns* rather than raising or silently
+    # picking a tier - a bad config never crashes the service, and the shape is
+    # `_parse_effect`'s / `_style`'s.
+    interrupts = raw.get("interrupts", interrupts_default)
+    if not (isinstance(interrupts, str) and interrupts in INTERRUPT_TIERS):
+        log.error(
+            "config: %s must be one of %s - using %r",
+            f"{where}.interrupts", "/".join(INTERRUPT_TIERS), interrupts_default,
+        )
+        interrupts = interrupts_default
+
     # Outcome logging is unconditional (TODO 84) - no opt-in field to remember.
     # A config that already named its event (dismiss_event/cleared_event/
     # log_as) keeps that exact name and its history; one that didn't gets the
@@ -3043,16 +4008,56 @@ def _parse_notice_body(
     # name" for a mode nobody configured this on.
     log_as = explicit_log or name
 
-    if on_missed is not None and not timeout:
+    if on_missed is not None and not timeout and interrupts != "never":
         log.warning(
             "config: %s sets on_missed but timeout_minutes is 0 - it will "
             "never fire, because this notice rings/flashes until answered", where,
+        )
+    # TODO 106, and the same shape as `interrupts` right above it: an
+    # allow-list, an unknown value warned about and dropped rather than
+    # guessed at, and absent meaning "the ordinary ring" - so no notice
+    # written before this field existed changes behaviour by acquiring it.
+    # The legacy `alarm`/`reminders` template names read it too: migrating a
+    # config must never be the reason a field is unreachable.
+    scheme = raw.get("readout_scheme")
+    if scheme is None or scheme == "":
+        scheme = None
+    elif not (isinstance(scheme, str) and scheme in READOUT_SCHEMES):
+        log.error(
+            "config: %s must be one of %s - ringing normally instead",
+            f"{where}.readout_scheme", "/".join(READOUT_SCHEMES),
+        )
+        scheme = None
+    readout_fade = _nonneg(
+        raw, "readout_fade_s", where, defaults.readout_fade_s,
+    )
+    if scheme is not None and interrupts == "always":
+        # The one combination that reads as a promise the light cannot keep:
+        # a chime renders on the ambient layer, which standby dims (TODO 104),
+        # so "even wakes a sleeping button" is exactly what this cannot do.
+        # Warned rather than rewritten - the tier still governs whether the
+        # notice *fires*, and its log row and `on_enter` are real.
+        log.warning(
+            "config: %s says the hour, which shows on the ambient layer and "
+            "stays dark while the button is asleep - it will not wake it",
+            where,
+        )
+    if interrupts == "never" and on_missed is None:
+        # The tier most likely to become an accidental no-op (TODO 105): it
+        # shows nothing by definition, so with nothing bound it is a scheduled
+        # log row and not much else. Said at parse time because the symptom -
+        # "my 9 AM webhook never ran" - is otherwise indistinguishable from the
+        # feature not working.
+        log.warning(
+            "config: %s never interrupts, so nothing will show - bind "
+            "on_missed (or on_enter) or it only writes a log row", where,
         )
 
     return NoticeBehavior(
         message=message, label=label, log_as=log_as,
         timeout_minutes=timeout, snooze_minutes=snooze,
-        urgent=urgent, chime=chime,
+        urgent=urgent, chime=chime, interrupts=interrupts,
+        readout_scheme=scheme, readout_fade_s=readout_fade,
         on_cleared=on_cleared, on_snoozed=on_snoozed, on_missed=on_missed,
     )
 
@@ -3166,11 +4171,72 @@ def _parse_stopwatch_body(raw: dict, where: str) -> StopwatchBehavior:
 
 
 def _parse_counter_body(raw: dict, where: str) -> CounterBehavior:
-    """Parse the flat counter-template fields, falling back per-key."""
+    """Parse the flat counter-template fields, falling back per-key.
+
+    The gesture steps are read the way a Pomodoro's commands are - flat trigger
+    keys on the mode - with two differences that are both rules rather than
+    taste:
+
+      * **`long_press` is refused**, warned about and dropped, exactly as
+        `_parse_control_body` refuses it. Long press means "up one level"
+        everywhere, and a tally is a place you leave.
+      * **0 means the gesture does nothing**, and is dropped from the map
+        rather than stored. That keeps `bound_triggers` honest: a counter that
+        offers five slots but fills two must not make the button count to five,
+        because counting further is what costs every shorter tap its instant
+        response.
+    """
     defaults = CounterBehavior()
+    steps = dict(defaults.steps)
+    for trigger in TRIGGER_TYPES:
+        if trigger not in raw:
+            continue
+        if trigger == TriggerType.LONG_PRESS.value:
+            log.error(
+                "config: %s.long_press cannot be given a step - long press "
+                "leaves the tally, as it leaves every app - ignoring it",
+                where,
+            )
+            continue
+        step = raw[trigger]
+        if step in (None, "", 0):  # explicitly "this press counts nothing"
+            steps.pop(trigger, None)
+        elif _is_num(step):
+            steps[trigger] = float(step)
+        else:
+            log.error(
+                "config: %s.%s must be a number (0 = does nothing) - keeping %r",
+                where, trigger, steps.get(trigger),
+            )
+    # The scheme this tally's number is drawn in (TODO 91/118a). Read the same
+    # way a notice's chime scheme is, and falling back the same way: an unknown
+    # word costs the scheme, not the tally, and leaves the tens/units digits
+    # every tally written before this has always shown.
+    scheme = raw.get("readout_scheme", defaults.readout_scheme)
+    if not isinstance(scheme, str) or (scheme and scheme not in READOUT_SCHEMES):
+        log.error(
+            "config: %s.readout_scheme must be one of %s, or empty for the "
+            "tens and units digits - using those",
+            where, "/".join(READOUT_SCHEMES),
+        )
+        scheme = defaults.readout_scheme
     return CounterBehavior(
         event=_string(raw, "event", where, defaults.event),
         durable=_flag(raw, "durable", where, defaults.durable),
+        steps=steps,
+        show_every_s=_nonneg(raw, "show_every_s", where, defaults.show_every_s),
+        tens_color=_parse_color(
+            raw.get("tens_color", defaults.tens_color),
+            f"{where}.tens_color", defaults.tens_color,
+        ),
+        units_color=_parse_color(
+            raw.get("units_color", defaults.units_color),
+            f"{where}.units_color", defaults.units_color,
+        ),
+        readout_scheme=scheme,
+        readout_colors=_parse_readout_colors(
+            raw.get("readout_colors", ()), f"{where}.readout_colors",
+        ),
     )
 
 
@@ -3714,6 +4780,7 @@ def parse_config(raw: dict) -> AppConfig:
         "web_enabled", "web_host", "web_port",
         "modes", "rules", "commands", "led_palette", "looks", "actions",
         "reflexes", "state_looks", "scenes", "min_flash_period_s",
+        "themes", "active_theme",
     }
     for key in raw:
         if key not in known:
@@ -3729,10 +4796,27 @@ def parse_config(raw: dict) -> AppConfig:
     # should have changed colour or the gesture should have done something.
     looks = _parse_looks(raw, min_flash_period_s)
     action_pool = _parse_action_pool(raw)
+
+    # The theme is resolved *here*, inside the one parser, for exactly the
+    # reason a scene is merged before it: everything downstream then reads one
+    # set of colours and never has to ask whether a theme was involved
+    # (TODO 95). `own_colours` keeps what the file actually said, which is what
+    # `as_dict` writes back and what clearing the theme returns you to.
+    themes = _parse_themes(raw, min_flash_period_s)
+    active_theme = _parse_active_theme(raw, themes)
+    theme = themes.get(active_theme) or BUILTIN_THEMES.get(active_theme or "")
+    own_colours = Colours(
+        led_palette=_parse_palette(raw),
+        looks=looks,
+        state_looks=_parse_state_looks(raw, looks),
+    )
+    colours = themed(own_colours, theme)
+
     # And the modes before the reflexes, for the third instance of the same
     # rule: a reflex scoped to an app that is not there is worth saying at
-    # load, not at the moment nothing happened.
-    modes = _parse_modes(raw, looks, set(action_pool))
+    # load, not at the moment nothing happened. Against the *themed* pool, so
+    # a mode may wear a look the active theme brought with it.
+    modes = _parse_modes(raw, colours.looks, set(action_pool))
 
     config = AppConfig(
         ble_device_name=_take(raw, "ble_device_name", str, defaults.ble_device_name),
@@ -3742,22 +4826,87 @@ def parse_config(raw: dict) -> AppConfig:
         web_host=_take(raw, "web_host", str, defaults.web_host),
         web_port=_take(raw, "web_port", int, defaults.web_port),
         modes=modes,
-        led_palette=_parse_palette(raw),
-        looks=looks,
+        led_palette=colours.led_palette,
+        looks=colours.looks,
         actions=action_pool,
         reflexes=_parse_reflexes(
             raw, set(action_pool), {mode.name for mode in modes}
         ),
-        state_looks=_parse_state_looks(raw, looks),
+        state_looks=colours.state_looks,
         scenes=scenes.parse_settings(raw.get("scenes")),
         min_flash_period_s=min_flash_period_s,
+        themes=themes,
+        active_theme=active_theme,
+        own_colours=own_colours,
     )
     _warn_about_documents(config)
+    _warn_about_themes(config)
     return config
 
 
+def _warn_about_themes(config: AppConfig) -> None:
+    """Complain about a `load_theme` naming a theme nobody has.
+
+    **Last, beside `_warn_about_documents` and for its reasons**: it needs the
+    finished config, because a theme may be one of this config's own as well as
+    one of the shipped four, and `iter_actions` is what makes it one short pass
+    rather than a second tour of every binding.
+
+    **Warned about and kept**, the dangling-reference rule every named thing
+    here follows: repointing the gesture at some other theme would be worse,
+    and a rename is a far likelier explanation than a mistake. The runtime says
+    the same thing at the moment it costs you a press.
+    """
+    for where, action in iter_actions(config):
+        if not isinstance(action, LoadThemeAction) or not action.theme:
+            continue
+        if theme_for(config, action.theme) is None:
+            log.warning(
+                "config: %s loads theme %r, which is not in 'themes' (or one of "
+                "%s) - it does nothing until one exists", where, action.theme,
+                "/".join(sorted(BUILTIN_THEMES)),
+            )
+
+
+def apply_theme(config: AppConfig, name: str | None) -> AppConfig:
+    """`config` wearing the theme called `name`, or its own colours for None.
+
+    Pure, and **never compounds**: the theme is always laid over
+    `own_colours`, so switching from Ember to Nocturne is the same answer as
+    loading Nocturne from a cold start. That is the whole reason `own_colours`
+    exists - re-merging over an already-themed palette would leave whichever
+    states the new theme happened not to name wearing the old one's.
+
+    Answers `config` unchanged for a name nothing has, because the caller that
+    cares (`ConfigManager.set_active_theme`) has already refused it and said
+    so; this stays a total function so nothing else has to.
+    """
+    own = config.own_colours or Colours(
+        led_palette=config.led_palette,
+        looks=config.looks,
+        state_looks=config.state_looks,
+    )
+    theme = theme_for(config, name)
+    if name and theme is None:
+        return config
+    colours = themed(own, theme)
+    return replace(
+        config,
+        led_palette=colours.led_palette,
+        looks=colours.looks,
+        state_looks=colours.state_looks,
+        active_theme=name or None,
+        own_colours=own,
+    )
+
+
 def _warn_about_documents(config: AppConfig) -> None:
-    """Complain about a `set_value` that names an app or a slot nobody has.
+    """Complain about an app-bound action naming an app or a slot nobody has.
+
+    Two actions reach an app's document now: `set_value` writes one and an
+    app-sourced `readout` (TODO 118a) reads one. One pass over both, because
+    the question is identical and a second copy of it would be the drift this
+    file's own mirror rule warns about.
 
     **Last, because it needs the finished config**: an app-bound action points
     at a mode, and which slots that mode has depends on its template, so
@@ -3771,23 +4920,29 @@ def _warn_about_documents(config: AppConfig) -> None:
     more likely explanation than a mistake. The runtime writes the slot
     anyway - a document is keyed by name and needs no mode to exist - so the
     value is still there when the app comes back.
+
+    **What the two do at press time differs, and only there.** A write still
+    lands; a read has no number to show, so `main.show_readout` fails it
+    loudly rather than blinking the document store's default zero.
     """
     by_name = {mode.name: mode for mode in config.modes}
     for where, action in iter_actions(config):
-        if not isinstance(action, SetValueAction):
+        if isinstance(action, SetValueAction):
+            app, slot, verb = action.app, action.slot, "writes"
+        elif isinstance(action, ReadoutAction) and action.source == "app":
+            app, slot, verb = action.app, action.slot, "reads"
+        else:
             continue
-        mode = by_name.get(action.app)
+        mode = by_name.get(app)
         if mode is None:
             log.warning(
-                "config: %s writes to app %r, which no mode is named", where,
-                action.app,
+                "config: %s %s app %r, which no mode is named", where, verb, app,
             )
             continue
-        slots = {slot.name for slot in DOC_SLOTS.get(mode.template, ())}
-        if action.slot not in slots:
+        slots = {declared.name for declared in DOC_SLOTS.get(mode.template, ())}
+        if slot not in slots:
             log.warning(
-                "config: %s writes %r on %r, which keeps %s", where, action.slot,
-                action.app,
+                "config: %s %s %r on %r, which keeps %s", where, verb, slot, app,
                 ", ".join(sorted(slots)) if slots else "no values of its own",
             )
 
@@ -4356,6 +5511,14 @@ def _action_to_dict(action: Action) -> dict | str:
         return {
             "action": "readout", "event": action.event,
             "tens_color": action.tens_color, "units_color": action.units_color,
+            # The four TODO 118a fields are written always, the call `keys`
+            # makes about its own two empties: the editor's widgets have no
+            # "absent" state, so a key that vanished on Save would come back
+            # looking like a field that had been ignored. `source: "event"`
+            # with an empty scheme is what every readout written before this
+            # already means, so nothing changes meaning by being spelled out.
+            "source": action.source, "app": action.app, "slot": action.slot,
+            "scheme": action.scheme, "colors": list(action.colors),
         }
     if isinstance(action, TimerToggleAction):
         return {"action": "timer_toggle", "log_as": action.log_as}
@@ -4387,6 +5550,8 @@ def _action_to_dict(action: Action) -> dict | str:
         return {"action": "enter_mode", "target": action.target}
     if isinstance(action, SetPositionAction):
         return {"action": "set_position", "name": action.name}
+    if isinstance(action, LoadThemeAction):
+        return {"action": "load_theme", "theme": action.theme}
     if isinstance(action, SequenceAction):
         steps: list[dict | str] = []
         for step in action.steps:
@@ -4415,12 +5580,18 @@ def _reflex_to_dict(reflex: Reflex) -> dict:
             "op": reflex.when.op,
             "value": reflex.when.value,
         }
-    if reflex.source is not None:
+    if isinstance(reflex.source, MidiSource):
         midi_spec: dict = {"port": reflex.source.port}
         midi_spec[reflex.source.kind] = reflex.source.number
         if reflex.source.channel is not None:
             midi_spec["channel"] = reflex.source.channel
         entry["from"] = {"midi": midi_spec}
+    elif isinstance(reflex.source, UrlSource):
+        entry["from"] = {"url": {
+            "url": reflex.source.url,
+            "every_minutes": reflex.source.every_minutes,
+            "read": reflex.source.read,
+        }}
     if reflex.while_app:
         entry["while"] = reflex.while_app
     return entry
@@ -4440,6 +5611,13 @@ def _activation_to_dict(activation: Activation) -> dict:
         return entry
     if isinstance(activation, ScheduleActivation):
         entry = {"type": "schedule", "at": activation.at.strftime("%H:%M")}
+        # Written only when set, unlike a notice's `interrupts`: absent is the
+        # value here, not merely the default, so an existing schedule that
+        # never heard of TODO 106 round-trips byte for byte.
+        if activation.every is not None:
+            entry["every"] = activation.every
+        if activation.between is not None:
+            entry["between"] = [t.strftime("%H:%M") for t in activation.between]
         if activation.days is not None:
             entry["days"] = [_DAY_NAMES[i] for i in sorted(activation.days)]
         return entry
@@ -4528,6 +5706,19 @@ def _mode_to_dict(mode: Mode) -> dict:
         entry["snooze_minutes"] = mode.behavior.snooze_minutes
         entry["urgent"] = mode.behavior.urgent
         entry["chime"] = mode.behavior.chime
+        # Written always, not only when non-default (TODO 105): the editor's
+        # select widget has no empty state, and a key that vanished on save
+        # would read as the field having been ignored - the same rule the
+        # counter's gesture slots are written under.
+        entry["interrupts"] = mode.behavior.interrupts
+        # Both written always, for `interrupts`' reason one line up: the
+        # scheme is a select with an "off" option rather than an empty state,
+        # and a fade length that vanished on save would come back as 0 in the
+        # editor - which is a chime with no fade, not a chime with the default
+        # one. `""` is how "off" is spelled on the way out, and the parser
+        # reads it back as None.
+        entry["readout_scheme"] = mode.behavior.readout_scheme or ""
+        entry["readout_fade_s"] = mode.behavior.readout_fade_s
         if mode.behavior.on_cleared is not None:
             entry["on_cleared"] = _action_to_dict(mode.behavior.on_cleared)
         if mode.behavior.on_snoozed is not None:
@@ -4544,6 +5735,23 @@ def _mode_to_dict(mode: Mode) -> dict:
     elif isinstance(mode.behavior, CounterBehavior):
         entry["event"] = mode.behavior.event
         entry["durable"] = mode.behavior.durable
+        entry["show_every_s"] = mode.behavior.show_every_s
+        entry["tens_color"] = mode.behavior.tens_color
+        entry["units_color"] = mode.behavior.units_color
+        # Both written always, for the reason a notice's chime scheme is: the
+        # scheme is a select whose "off" is an empty string rather than a
+        # missing key, and a colour list that vanished on Save would read as
+        # the field having been ignored.
+        entry["readout_scheme"] = mode.behavior.readout_scheme
+        entry["readout_colors"] = list(mode.behavior.readout_colors)
+        # Every slot is written, 0 for the ones nobody filled: the editor's
+        # number widget has no empty state, and a key that vanished on save
+        # would read as the field having been ignored. `long_press` is never
+        # among them - the parser refuses it, so nothing can round-trip one.
+        for trigger in TRIGGER_TYPES:
+            if trigger == TriggerType.LONG_PRESS.value:
+                continue
+            entry[trigger] = mode.behavior.steps.get(trigger, 0)
     elif isinstance(mode.behavior, PomodoroBehavior):
         # Seconds only. A config that came in with the legacy `*_minutes`
         # names is rewritten the first time it is saved, which is the whole
@@ -4648,12 +5856,45 @@ def _mode_to_dict(mode: Mode) -> dict:
     return entry
 
 
+def _theme_to_dict(theme: Theme) -> dict:
+    """One theme, in the shape `_parse_theme` reads. `looks` and `state_looks`
+    are omitted when empty rather than written as `{}`, so every theme written
+    before either existed - and every palette-only theme, which is all four of
+    the shipped ones - round-trips byte for byte."""
+    entry: dict = {
+        "label": theme.name,
+        "about": theme.about,
+        "palette": {
+            name: _effect_to_dict(effect)
+            for name, effect in theme.palette.items()
+        },
+    }
+    if theme.looks:
+        entry["looks"] = {
+            name: look_to_dict(look) for name, look in theme.looks.items()
+        }
+    if theme.state_looks:
+        entry["state_looks"] = dict(theme.state_looks)
+    return entry
+
+
 def as_dict(cfg: AppConfig) -> dict:
     """JSON-ready view of an AppConfig. Round-trips: the output is valid
     input for parse_config, so the web UI can edit the effective config.
 
     Only activation fields that are set are emitted; a window with neither
-    bound is never produced (migration picks `always` instead)."""
+    bound is never produced (migration picks `always` instead).
+
+    **The colours written out are the config's own, not the themed ones**
+    (TODO 95). The editor edits this object and posts it back, so emitting the
+    active theme's palette here would bake it into `led_palette` on the very
+    next Save and there would be no way back to the colours somebody chose.
+    `active_theme` goes out beside them and the parser re-applies it, which is
+    what makes the round-trip exact either way.
+    """
+    own = cfg.own_colours or Colours(
+        led_palette=cfg.led_palette, looks=cfg.looks, state_looks=cfg.state_looks,
+    )
     return {
         "ble_device_name": cfg.ble_device_name,
         "sounds_enabled": cfg.sounds_enabled,
@@ -4665,14 +5906,18 @@ def as_dict(cfg: AppConfig) -> dict:
         "scenes": scenes.settings_to_dict(cfg.scenes),
         "modes": [_mode_to_dict(mode) for mode in cfg.modes],
         "led_palette": {
-            name: _effect_to_dict(effect) for name, effect in cfg.led_palette.items()
+            name: _effect_to_dict(effect) for name, effect in own.led_palette.items()
         },
-        "looks": {name: look_to_dict(look) for name, look in cfg.looks.items()},
+        "looks": {name: look_to_dict(look) for name, look in own.looks.items()},
         "actions": {
             name: _action_to_dict(action) for name, action in cfg.actions.items()
         },
         "reflexes": [_reflex_to_dict(reflex) for reflex in cfg.reflexes],
-        "state_looks": dict(cfg.state_looks),
+        "state_looks": dict(own.state_looks),
+        "themes": {
+            name: _theme_to_dict(theme) for name, theme in cfg.themes.items()
+        },
+        "active_theme": cfg.active_theme or "",
     }
 
 
@@ -4707,6 +5952,44 @@ class ConfigManager:
         scenes.set_active), which is what keeps the two files from ever
         holding two copies of the same modes list."""
         return self._loaded.scene_path or self._path
+
+    def set_active_theme(self, name: str | None) -> str | None:
+        """Put the live config on the theme called `name`. None on success, a
+        sentence to show the user otherwise.
+
+        **In memory only, and that is the design decision in TODO 95 rather
+        than an unfinished edge.** Three reasons, in the order they bind:
+
+        - **Fire-and-forget.** This is reached from `execute()`, on the press
+          that fired it; a disk write in that path is the thing the whole
+          feedback rule exists to keep out of a press.
+        - **`write_path` sends edits to the active scene.** Persisting from
+          here would mean a reflex loading Nocturne at sunset silently rewrote
+          the scene file every evening - a config that changes with nobody
+          editing it, and since TODO 92 a git diff a day. The pointer belongs
+          to whoever is *editing*, which is the ordinary Save path, and there
+          it is an ordinary key: a scene is a whole arrangement, and which
+          theme that arrangement wears is part of it. (Unlike `scenes.active`,
+          which has to stay in config.json because a scene pointing at a scene
+          is a loop. A theme pool lives *inside* the one parsed config, so
+          there is no loop to avoid and no special case to write.)
+        - **`standby` is the precedent, and the shape is identical**: live,
+          host-side, gesture-toggled state that nobody expects to survive a
+          restart. A reflex that set the theme at sunset sets it again
+          tomorrow, so persisting buys nothing and costs a surprise.
+
+        The light catches up with no new code: `main`'s loop already pushes the
+        palette whenever `cm.config.led_palette` differs from what it last
+        sent, and re-asserts IDLE when its resolved look changes. That is the
+        one palette call site, floor included, and this goes through it.
+        """
+        if name and theme_for(self.config, name) is None:
+            return f"no theme named {name!r}"
+        self._loaded = replace(
+            self._loaded, config=apply_theme(self.config, name or None)
+        )
+        log.info("theme %s", f"{name!r}" if name else "cleared - the config's own colours")
+        return None
 
     def reload(self) -> None:
         self._loaded = load_config_full(self._path)
