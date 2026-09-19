@@ -1,0 +1,64 @@
+{
+  "title": "The Desk Default",
+  "blurb": "One button, four things: a focus timer, a mute key, a do-not-disturb light, and a shortcut - the honest all-purpose scene for anyone at a computer.",
+  "for": "Anyone with a computer and a desk who wants one object doing the four small things they reach for all day, rather than a niche use.",
+  "assumes": ["a voice-chat or conferencing app with a global mute hotkey"],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": {
+        "action": "keys", "combo": "ctrl+alt+m", "click": ""
+      },
+      "double_tap": { "action": "enter_mode", "target": "Status" },
+      "triple_tap": { "action": "enter_mode", "target": "Focus timer" },
+      "tap_4": {
+        "action": "keys", "combo": "win+space", "click": ""
+      }
+    },
+    {
+      "name": "Status",
+      "template": "signal",
+      "activation": { "type": "manual" },
+      "states": [
+        { "name": "Free", "color": "#00ff00", "style": "solid" },
+        { "name": "Heads-down", "color": "#ff8800", "style": "solid" },
+        { "name": "Do not disturb", "color": "#ff0033", "style": "breathe" }
+      ],
+      "start_at": 0,
+      "log_as": "status"
+    },
+    {
+      "name": "Focus timer",
+      "template": "pomodoro",
+      "activation": { "type": "manual" },
+      "work_s": 1500,
+      "break_s": 300,
+      "long_break_s": 900,
+      "blocks_before_long_break": 4,
+      "rounds": 0,
+      "lead_in_s": 0,
+      "advance": "auto",
+      "log_as": "desk_focus",
+      "waiting_style": "solid",
+      "short_press": "toggle",
+      "long_press": "exit",
+      "double_tap": "extend",
+      "extend_s": 600
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "solid", "color": "#0a0f14", "color2": "#000000", "period_s": 6 },
+    "LISTENING": { "style": "solid", "color": "#5c9dff", "color2": "#000000", "period_s": 3 },
+    "WORKING": { "style": "breathe", "color": "#4400ff", "color2": "#000000", "period_s": 8 },
+    "RESTING": { "style": "breathe", "color": "#00c896", "color2": "#000000", "period_s": 8 }
+  },
+
+  "looks": {},
+  "actions": {},
+  "reflexes": [],
+  "state_looks": {}
+}

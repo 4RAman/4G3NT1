@@ -1,0 +1,75 @@
+{
+  "title": "Stage Cues",
+  "blurb": "One press panics the backing track to silence, a second opens patch-and-transport control wired to your rig over MIDI, and a tally counts the sets you've played.",
+  "for": "Gigging musicians running backing tracks and patch changes who need one hand-reachable control that works without a glance.",
+  "assumes": ["a DAW", "a loopMIDI port named 'Button'"],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": {
+        "action": "midi", "port": "Button", "kind": "note_on",
+        "channel": 1, "number": 93, "value": 127
+      },
+      "double_tap": { "action": "enter_mode", "target": "Rig" },
+      "triple_tap": { "action": "enter_mode", "target": "Sets" }
+    },
+    {
+      "name": "Rig",
+      "template": "control",
+      "activation": { "type": "manual" },
+      "short_press": {
+        "action": "midi", "port": "Button", "kind": "note_on",
+        "channel": 1, "number": 94, "value": 127
+      },
+      "double_tap": {
+        "action": "midi", "port": "Button", "kind": "note_on",
+        "channel": 1, "number": 93, "value": 127
+      },
+      "triple_tap": {
+        "action": "midi", "port": "Button", "kind": "cc",
+        "channel": 1, "number": 20, "value": 127
+      },
+      "tap_4": {
+        "action": "midi", "port": "Button", "kind": "cc",
+        "channel": 1, "number": 21, "value": 127
+      },
+      "tap_5": {
+        "action": "midi", "port": "Button", "kind": "note_on",
+        "channel": 1, "number": 95, "value": 127
+      },
+      "log_as": "rig_press",
+      "return_after": true,
+      "positions": [
+        { "name": "Stopped", "look": "Stopped" },
+        { "name": "Playing", "look": "Playing" },
+        { "name": "Recording", "look": "Recording" }
+      ]
+    },
+    {
+      "name": "Sets",
+      "template": "counter",
+      "activation": { "type": "manual" },
+      "event": "set",
+      "durable": true
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "breathe", "color": "#120024", "color2": "#000000", "period_s": 6 },
+    "LISTENING": { "style": "solid", "color": "#ffb703", "color2": "#000000", "period_s": 3 },
+    "COUNTING": { "style": "fade", "color": "#ff006e", "color2": "#1a0010", "period_s": 5 }
+  },
+
+  "looks": {
+    "Stopped": { "style": "solid", "color": "#3a0ca3", "color2": "#000000", "period_s": 3 },
+    "Playing": { "style": "solid", "color": "#00f5a0", "color2": "#000000", "period_s": 3 },
+    "Recording": { "style": "breathe", "color": "#ff1030", "color2": "#000000", "period_s": 2.2 }
+  },
+
+  "actions": {},
+  "reflexes": [],
+  "state_looks": {}
+}

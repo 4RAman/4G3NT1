@@ -1,0 +1,70 @@
+{
+  "title": "Festival Wristband",
+  "blurb": "A press cycles the crowd moments you actually want at a show, a light show plays your own sequence for the encore, and a tally keeps count of every event you've brought it to.",
+  "for": "Concert, festival and con-goers who want a light-up keepsake that is actually theirs - configured once, and ready again at the next show.",
+  "assumes": [],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": { "action": "enter_mode", "target": "Moments" },
+      "double_tap": { "action": "enter_mode", "target": "Light show" },
+      "triple_tap": { "action": "enter_mode", "target": "Shows" }
+    },
+    {
+      "name": "Moments",
+      "template": "signal",
+      "activation": { "type": "manual" },
+      "states": [
+        { "name": "Glow", "color": "#00b4a0", "style": "solid" },
+        { "name": "Hype", "color": "#ff006e", "style": "flash" },
+        { "name": "Slow song", "color": "#4361ee", "style": "breathe" },
+        { "name": "Encore", "color": "#ffd60a", "style": "flash" }
+      ],
+      "start_at": 0,
+      "log_as": "moment"
+    },
+    {
+      "name": "Light show",
+      "template": "lightshow",
+      "activation": { "type": "manual" },
+      "cues": ["Aurora", "Pulse", "Strobe beat"],
+      "dwell_s": 5,
+      "auto": true,
+      "log_as": "show_cue"
+    },
+    {
+      "name": "Shows",
+      "template": "counter",
+      "activation": { "type": "manual" },
+      "event": "show",
+      "durable": true
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "breathe", "color": "#1b1030", "color2": "#000000", "period_s": 8 },
+    "LISTENING": { "style": "solid", "color": "#ff006e", "color2": "#000000", "period_s": 3 },
+    "COUNTING": { "style": "fade", "color": "#ffd60a", "color2": "#2b1d0e", "period_s": 5 }
+  },
+
+  "looks": {
+    "Aurora": {
+      "stops": [
+        { "color": "#00b4a0", "hold_s": 0.6, "fade_s": 0.8, "curve": "ease_in_out" },
+        { "color": "#4361ee", "hold_s": 0.6, "fade_s": 0.8, "curve": "ease_in_out" },
+        { "color": "#ff006e", "hold_s": 0.6, "fade_s": 0.8, "curve": "ease_in_out" }
+      ],
+      "repeat": true,
+      "drive": "clock"
+    },
+    "Pulse": { "style": "breathe", "color": "#ff006e", "color2": "#000000", "period_s": 1.5 },
+    "Strobe beat": { "style": "flash", "color": "#ffffff", "color2": "#000000", "period_s": 0.3 }
+  },
+
+  "actions": {},
+  "reflexes": [],
+  "state_looks": {}
+}

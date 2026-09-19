@@ -1,0 +1,78 @@
+{
+  "title": "On a Call",
+  "blurb": "One press mutes your call and flips the light to busy; ten minutes before your calendar's next meeting, it goes red on its own.",
+  "for": "Remote and hybrid workers whose desk sits by a door people walk through, who want the do-not-disturb light to know about a meeting before they do.",
+  "assumes": [
+    "a voice-chat or conferencing app with a global mute hotkey",
+    "a calendar that publishes a secret .ics link (Google/Outlook/iCloud \"secret address in iCal format\")"
+  ],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": {
+        "action": "keys", "combo": "ctrl+alt+m", "click": ""
+      },
+      "double_tap": { "action": "enter_mode", "target": "Status" },
+      "triple_tap": { "action": "enter_mode", "target": "Focus" }
+    },
+    {
+      "name": "Status",
+      "template": "signal",
+      "activation": { "type": "manual" },
+      "states": [
+        { "name": "Available", "color": "#00ff2a", "style": "solid" },
+        { "name": "On a call", "color": "#ff0033", "style": "solid" },
+        { "name": "Do not disturb", "color": "#ff0033", "style": "breathe" }
+      ],
+      "start_at": 0,
+      "log_as": "call_status"
+    },
+    {
+      "name": "Focus",
+      "template": "pomodoro",
+      "activation": { "type": "manual" },
+      "work_s": 1500,
+      "break_s": 300,
+      "long_break_s": 900,
+      "blocks_before_long_break": 4,
+      "rounds": 0,
+      "lead_in_s": 0,
+      "advance": "auto",
+      "log_as": "remote_focus",
+      "waiting_style": "solid",
+      "short_press": "toggle",
+      "long_press": "exit",
+      "double_tap": "extend",
+      "extend_s": 600
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "breathe", "color": "#0b1620", "color2": "#000000", "period_s": 8 },
+    "LISTENING": { "style": "solid", "color": "#f4a300", "color2": "#000000", "period_s": 3 },
+    "WORKING": { "style": "breathe", "color": "#1e6091", "color2": "#000000", "period_s": 8 },
+    "RESTING": { "style": "breathe", "color": "#52b69a", "color2": "#000000", "period_s": 8 }
+  },
+
+  "looks": {},
+  "actions": {},
+  "reflexes": [
+    {
+      "name": "meeting_soon",
+      "then": { "action": "set_position", "name": "On a call" },
+      "when": { "field": "minutes", "op": "<=", "value": 10 },
+      "from": {
+        "url": {
+          "url": "https://calendar.example.com/replace-with-your-secret-ics-link/basic.ics",
+          "every_minutes": 5,
+          "read": "ics"
+        }
+      },
+      "while": "Status"
+    }
+  ],
+  "state_looks": {}
+}

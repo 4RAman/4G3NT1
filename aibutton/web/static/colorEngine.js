@@ -12,11 +12,12 @@
 
 import { clear, el } from './dom.js';
 import {
-  CURVES, DRIVES, LED_FIELDS, LED_STYLES, LED_STYLE_BY_TYPE, LOOK_PRESETS,
-  LOOK_PRESET_GROUPS, describeEffect, presetIsSequence, presetLook,
+  CURVES, DRIVES, LED_FIELDS, LED_STYLES, LED_STYLE_BY_TYPE,
+  THEMES, describeEffect,
 } from './schema.js';
 import { createField } from './widgets.js';
 import { paint as applySwatch } from './ledPreview.js';
+import { createLibraryBrowser, lookFromRow } from './lightLibrary.js';
 
 /**
  * Whether `style` renders `spec`. Two specs share the key `color` - a hue
@@ -779,7 +780,25 @@ export function createLookEditor(o) {
 
   // --- the library ----------------------------------------------------
 
-  const applyPreset = (preset) => {
+  /**
+   * Drop `look` in as the thing being edited - what picking a row out of the
+   * light library does, and what a diagnostic colour does.
+   *
+   * **Takes a look, not a preset.** The library and schema.js's inlined
+   * `LOOK_PRESETS` are different record shapes, and lightLibrary.js maps both
+   * to one at the boundary; below that line nothing knows or asks where a
+   * colour came from.
+   *
+   * The object is emptied and refilled rather than replaced, because callers
+   * hold a reference to it - that is the whole point of editing in place. It
+   * is emptied *completely* (`switchShape` does the same) rather than by
+   * deleting the keys of whichever shape is being left: three shapes with
+   * optional keys apiece made that a list that had to be right, and it was not
+   * - a clock-driven stop list omits `drive` entirely, so assigning one over a
+   * beats-driven look used to leave the old `drive` behind and silently
+   * mis-drive the result.
+   */
+  const applyLook = (look) => {
     const target = effect();
     // Choosing a colour out of the library is an answer to "what does this
     // state look like", so it replaces a named look rather than being written
@@ -788,32 +807,11 @@ export function createLookEditor(o) {
       wantNamed = false;
       o.namedLook.set('');
     }
-    // Assigned key by key rather than replaced, because callers hold a
-    // reference to this object - the whole point of editing in place.
-    //
-    // A sequence preset and an effect preset are different *shapes*, so the
-    // keys of whichever one is being replaced have to go first - leaving
-    // `stops` behind after picking a plain effect would make the result read
-    // as a sequence that happens to carry a style, and `isSequence()` keys
-    // off exactly that.
-    // Every key the incoming shape might *not* carry has to go first, not just
-    // the other shape's keys. A clock-driven sequence omits `drive` entirely
-    // (it is the default), so assigning one over a beats-driven preset would
-    // leave the old `drive` behind and silently mis-drive the new look - which
-    // is exactly what happened before this line listed it.
-    //
-    // A preset is never a Morse message, so those keys go first unconditionally
-    // - the third shape neither branch below was written to expect.
-    for (const key of ['morse', 'dpm', 'ramp']) delete target[key];
-    if (presetIsSequence(preset)) {
-      for (const key of ['style', 'color', 'color2', 'period_s', 'drive']) delete target[key];
-    } else {
-      for (const key of ['stops', 'repeat', 'drive']) delete target[key];
-    }
-    Object.assign(target, presetLook(preset));
+    for (const key of Object.keys(target)) delete target[key];
+    Object.assign(target, look);
     // Land on whichever tab shows what you just picked, rather than leaving
     // the picker up over a result you can't see.
-    activeTab = presetIsSequence(preset) ? 'sequence' : 'single';
+    activeTab = shapeOf(target);
     renderFields();
     refresh();
     o.onChange?.();
@@ -822,37 +820,15 @@ export function createLookEditor(o) {
 
   const presetBody = () => {
     const body = el('div', { className: 'preset-groups' });
-    for (const group of LOOK_PRESET_GROUPS) {
-      const dots = el('div', { className: 'preset-dots' });
-      // A sequence preset is only offered where a sequence is allowed - the
-      // system palette rows opt out, because a palette entry ships to the
-      // device and a stop list is a schedule only the host can walk. Filtered
-      // here rather than disabled, so the drawer never shows you a look the
-      // Save would drop.
-      const offered = LOOK_PRESETS.filter(
-        (pr) => pr.group === group && (o.allowSequence || !presetIsSequence(pr)),
-      );
-      if (!offered.length) continue;
-      for (const preset of offered) {
-        const look = preset.sequence || preset.effect;
-        // The colour goes on an inner swatch rather than the button, so the
-        // label stays readable against the page instead of against whatever
-        // the preset happens to be.
-        const chip = el('span', { className: 'preset-dot-swatch' });
-        applySwatch(chip, look);  // animates exactly as the LED does
-        const dot = el('button', {
-          type: 'button',
-          className: 'preset-dot',
-          title: `${preset.label} - ${describeEffect(look)}`,
-        }, [chip, el('span', { className: 'preset-dot-label', textContent: preset.label })]);
-        dot.addEventListener('click', () => applyPreset(preset));
-        dots.append(dot);
-      }
-      body.append(
-        el('span', { className: 'preset-group-name', textContent: group }),
-        dots,
-      );
-    }
+    // The whole library, searched - not this widget's own copy of a browser.
+    // A schedule is offered only where one is a legal look at all: a palette
+    // entry ships to the device and renders unattended, where a stop list is
+    // something only the host can walk. Filtered rather than disabled, so the
+    // picker never shows you a look the Save would drop.
+    body.append(createLibraryBrowser({
+      allowSequence: o.allowSequence,
+      onPick: (row) => applyLook(lookFromRow(row)),
+    }).el);
 
     if (canPreview) {
       const dots = el('div', { className: 'preset-dots' });
@@ -864,7 +840,7 @@ export function createLookEditor(o) {
           title: `${known.label} - solid ${known.color}, pushed straight at the button`,
         }, [chip, el('span', { className: 'preset-dot-label', textContent: known.label })]);
         dot.addEventListener('click', () => {
-          applyPreset({ effect: { style: 'solid', color: known.color } });
+          applyLook({ style: 'solid', color: known.color });
         });
         dots.append(dot);
       }
@@ -1019,7 +995,7 @@ export function createLookEditor(o) {
   }) : null;
   const presetTab = el('button', {
     type: 'button', className: 'mini', textContent: 'Preset',
-    title: 'Start from a built-in look.',
+    title: 'Start from a look in the library - search it by name or tag.',
     onclick: () => { activeTab = 'preset'; renderFields(); },
   });
   const tabsEl = el('div', { className: 'look-mode-toggle' },
@@ -1051,5 +1027,166 @@ export function createLookEditor(o) {
       }
       return null;
     },
+  };
+}
+
+// Which states a theme row shows as swatches. Five, and these five: the four
+// the ambient layer actually wears between presses, plus the alarm - which is
+// the one a theme is most likely to get wrong and the one you least want to
+// discover at 3 AM. The rest are in the theme and simply are not the line.
+const THEME_SWATCH_STATES = ['IDLE', 'LISTENING', 'SUCCESS', 'ERROR', 'ALERT'];
+
+/**
+ * The theme picker: one pointer, chosen from a list (TODO 95).
+ *
+ * **A list of rows, one selected - not an editor per theme**, which is the
+ * named-look pool's own rule (CLAUDE.md's "the named-look pool is a list") for
+ * the same reason: a theme is identified by its light and its name, so those
+ * are the line. Editing a theme is editing the colours it loaded, which is
+ * what the rest of this tab already does - and "Save as a theme" is how that
+ * comes back as one.
+ *
+ * Returns the widget contract, so this drops into the Lights tab beside the
+ * system-state list like any other field.
+ *
+ * @param {object}   o
+ * @param {Function} o.get      - () => the active theme id, '' for your own colours
+ * @param {Function} o.set      - (id) => void
+ * @param {Function} [o.themes] - () => the config's own theme pool, {} if none
+ * @param {Function} [o.onSave] - (id, label) => void; shows "Save as a theme"
+ * @param {Function} [o.onDelete] - (id) => void; offered on the config's own only
+ * @param {Function} [o.onChange] - called after any edit
+ * @param {Function} [o.live]   - () => the theme the *service* says it is
+ *   wearing right now, which is not always the saved one: `load_theme` moves
+ *   the pointer without writing to disk, so a row would otherwise claim a
+ *   theme was off while the button wore it.
+ */
+export function createThemePicker(o) {
+  const wrap = el('div', { className: 'palette-wrap theme-list' });
+
+  /** Every theme on offer: the config's own first, then the shipped ones a
+   *  saved theme has not shadowed. Mirrors `config.theme_for`'s lookup order,
+   *  and it has to - a picker that resolved a name differently from the
+   *  parser would offer you a theme the button then would not load. */
+  const listed = () => {
+    const own = (typeof o.themes === 'function' && o.themes()) || {};
+    const rows = Object.entries(own).map(([id, t]) => ({
+      id,
+      label: (t && (t.label || t.name)) || id,
+      about: (t && t.about) || '',
+      palette: (t && t.palette) || {},
+      own: true,
+    }));
+    const taken = new Set(rows.map((r) => r.id));
+    return rows.concat(
+      THEMES.filter((t) => !taken.has(t.id)).map((t) => ({
+        id: t.id, label: t.label, about: t.about, palette: t.palette, own: false,
+      })),
+    );
+  };
+
+  const swatchStrip = (palette) => el(
+    'span', { className: 'theme-swatches' },
+    THEME_SWATCH_STATES.map((state) => {
+      const dot = el('span', { className: 'palette-swatch' });
+      // An unnamed state gets an empty ring rather than an invented colour -
+      // the same call the mode list makes for a template that owns no state.
+      if (palette[state]) applySwatch(dot, palette[state]);
+      dot.title = palette[state]
+        ? `${state}: ${describeEffect(palette[state])}`
+        : `${state}: left as you have it`;
+      return dot;
+    }),
+  );
+
+  const choose = (id) => {
+    o.set(id);
+    o.onChange?.();
+    render();
+  };
+
+  const row = (entry, active) => el(
+    'div', { className: `look-entry theme-entry${active ? ' open' : ''}` },
+    [el('div', { className: 'look-line' }, [
+      swatchStrip(entry.palette),
+      el('span', { className: 'palette-name', textContent: entry.label }),
+      el('span', { className: 'palette-meaning', textContent: entry.about }),
+      el('button', {
+        type: 'button', className: 'mini',
+        textContent: active ? 'In use' : 'Use',
+        disabled: active,
+        onclick: () => choose(entry.id),
+      }),
+      ...(entry.own && o.onDelete ? [el('button', {
+        type: 'button', className: 'mini',
+        textContent: 'Delete',
+        onclick: () => { o.onDelete(entry.id); o.onChange?.(); render(); },
+      })] : []),
+    ])],
+  );
+
+  function render() {
+    clear(wrap);
+    const active = o.get() || '';
+    const running = typeof o.live === 'function' ? (o.live() || '') : active;
+
+    // "Your own colours" is a row rather than a Clear button, because it is
+    // one of the choices rather than the absence of one - and it is the only
+    // row that can say what it will look like, since those colours are the
+    // rest of this tab.
+    wrap.append(el('div', {
+      className: `look-entry theme-entry${active ? '' : ' open'}`,
+    }, [el('div', { className: 'look-line' }, [
+      el('span', { className: 'palette-name', textContent: 'Your own colours' }),
+      el('span', {
+        className: 'palette-meaning',
+        textContent: 'The states below, exactly as you set them.',
+      }),
+      el('button', {
+        type: 'button', className: 'mini',
+        textContent: active ? 'Use' : 'In use',
+        disabled: !active,
+        onclick: () => choose(''),
+      }),
+    ])]));
+
+    for (const entry of listed()) wrap.append(row(entry, entry.id === active));
+
+    if (running !== active) {
+      // The button is wearing something nobody saved - a gesture or a reaction
+      // loaded it. Said plainly, because the alternative is a page that shows
+      // one theme while the light shows another and looks like a bug.
+      wrap.append(el('p', {
+        className: 'menu-hint',
+        textContent: `The button is wearing “${running || 'your own colours'}” `
+          + 'right now - something loaded it without saving. Saving this page '
+          + 'puts it back on the one ticked above.',
+      }));
+    }
+
+    if (o.onSave) {
+      wrap.append(el('button', {
+        type: 'button', textContent: '+ Save these colours as a theme',
+        title: 'Snapshots the states below into a theme of your own, which a '
+          + 'gesture or a reaction can then load.',
+        onclick: () => {
+          const own = (typeof o.themes === 'function' && o.themes()) || {};
+          let id = 'my-theme';
+          for (let n = 2; own[id]; n += 1) id = `my-theme-${n}`;
+          o.onSave(id, id);
+          o.onChange?.();
+          render();
+        },
+      }));
+    }
+  }
+
+  render();
+  return {
+    el: wrap,
+    refresh: render,
+    // Nothing here can be half-filled: every row is a choice, and the pointer
+    // either names a theme the parser can find or is empty.
+    validate: () => null,
   };
 }

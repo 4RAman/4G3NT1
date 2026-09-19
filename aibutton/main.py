@@ -48,7 +48,9 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import hotcold, ladder, ramp, reaction, sequencer
+import httpx
+
+from . import hotcold, ladder, poll, ramp, reaction, readout, sequencer
 from .device import (
     SAFE_MIN_PERIOD_S,
     STYLE_USES_COLOR,
@@ -124,6 +126,13 @@ _INBOUND_MAX = 16
 # would be a warning a second, so this paces it.
 _MIDI_RETRY_S = 15.0
 
+# How often the poller wakes to ask whether any URL is due (TODO 99). Not the
+# poll interval - that is per reflex and measured in minutes; this is only the
+# resolution at which a due time is noticed, and it matches the scheduler tick
+# for the same reason: a reflex added live should start polling without a
+# restart, and the idle cost is one comparison per second.
+_POLL_TICK_S = 1.0
+
 # The flash floor (device.SAFE_MIN_PERIOD_S, ~3 Hz per WCAG 2.3.1) is the
 # *default* for config.min_flash_period_s rather than a law - one button on one
 # desk, and its owner may decide it can go faster. Everything here reads the
@@ -183,6 +192,56 @@ def metronome_flash(
     beat_s = 60.0 / bpm
     per_flash = max(1, math.ceil(min_period_s / beat_s))
     return beat_s * per_flash, per_flash
+
+
+# What a notice that has come due is allowed to do right now (TODO 105). Three
+# answers and no fourth: show it, hold it back, or give up on it.
+NOTICE_SHOW = "show"
+NOTICE_WAIT = "wait"
+NOTICE_MISS = "miss"
+
+
+def notice_verdict(behavior, *, asleep: bool, busy: bool, due_at, now) -> str:
+    """Whether a notice that came due at `due_at` may show at `now`.
+
+    Pure, module-level and duck-typed on `behavior` (it reads `.interrupts` and
+    `.timeout_minutes` and nothing else), for the reasons `metronome_flash`
+    above is: the ladder is the part worth checking as a table rather than
+    against a real clock, and it is what survives the move onto the device -
+    the awaiting is the run loop's business and stays there.
+
+    The ladder (`config.INTERRUPT_TIERS`), read as two questions:
+
+    * `always` is never blocked, which is the precise statement of "the tier
+      that does not wait";
+    * `while_awake` is blocked by sleep only;
+    * `when_free` is blocked by sleep *or* by an app owning the button;
+    * `never` is blocked by everything, permanently - so it does not wait
+      either, and for the opposite reason. Waiting for a condition that cannot
+      change is a no-op with a timer on it, and with the common
+      `timeout_minutes: 0` ("wait forever") that no-op would be the whole
+      feature. It resolves to the missed outcome at once instead.
+
+    Blocked and still inside `timeout_minutes` means wait; blocked past it
+    means miss - the *same* field 84 already uses for "nobody answered", not a
+    second one. `timeout_minutes == 0` is 84's "waits forever" and still is.
+
+    An `interrupts` value outside the ladder cannot reach here - the parser is
+    the gate and falls back to `when_free` with a warning - and one that
+    somehow did would behave as the tier it is not equal to, never as `always`.
+    """
+    if behavior.interrupts == "never":
+        return NOTICE_MISS
+    blocked = (
+        (asleep and behavior.interrupts != "always")
+        or (busy and behavior.interrupts == "when_free")
+    )
+    if not blocked:
+        return NOTICE_SHOW
+    waited_s = (now - due_at).total_seconds()
+    if behavior.timeout_minutes > 0 and waited_s >= behavior.timeout_minutes * 60:
+        return NOTICE_MISS
+    return NOTICE_WAIT
 
 
 async def _wait_for_trigger(
@@ -350,6 +409,7 @@ async def run(
     args: argparse.Namespace,
     device: ButtonDevice | None = None,
     inbound: asyncio.Queue | None = None,
+    poll_transport: httpx.AsyncBaseTransport | None = None,
 ) -> None:
     """Drive the button until `stop` fires. `device` is the hardware seam:
     --ble picks the real ESP32, otherwise the in-memory MockDevice, and
@@ -357,11 +417,19 @@ async def run(
 
     `inbound` is the same seam for circumstances rather than presses (TODO
     71): the web endpoint fills the one made here, and a test hands in its own
-    so it can post a reflex without standing up a web server."""
+    so it can post a reflex without standing up a web server.
+
+    `poll_transport` is the third seam and the same idea one layer out (TODO
+    99): the URL poller's httpx transport, so the suite can answer a calendar
+    fetch without a network. It is `actions.execute`'s `webhook_transport`
+    exactly - a transport rather than a client, because everything else about
+    the request (the timeout, following redirects) is the poller's business
+    and a test should not have to restate it to fake one response."""
     from . import midi, midi_io
     from .actions import ActionResult, _fmt_elapsed, execute
     from .audio import ToneLibrary
     from .config import (
+        DOC_SLOTS,
         MODE_LED_STATES,
         ConfigManager,
         ControlBehavior,
@@ -373,7 +441,9 @@ async def run(
         LedEffect,
         LightShowBehavior,
         MetronomeBehavior,
+        MidiSource,
         NoticeBehavior,
+        READOUT_WASH_COLOR,
         SetPositionAction,
         SequenceAction,
         PomodoroBehavior,
@@ -382,11 +452,14 @@ async def run(
         SignalBehavior,
         StandbyAction,
         StopwatchBehavior,
+        UrlSource,
         blank_midi_ports,
         bound_triggers,
+        counter_readout,
         flash_safe,
         look_for,
         position_reporters,
+        readout_look,
         reflex_hears,
         reflex_matches,
         resolve_action,
@@ -442,7 +515,19 @@ async def run(
     # there are seven dispatch sites and the eighth is the one that would
     # forget `documents` and then silently do nothing - the same reasoning
     # `resolve_action` uses for being one function rather than seven inlines.
-    run_action = functools.partial(execute, store=store, documents=documents)
+    #
+    # `set_theme` is the third thing bound here and the theme's whole dispatch
+    # site (TODO 95): `load_theme` is fire-and-forget like every other
+    # primitive, so it needs no branch of its own in `handle` - it moves the
+    # live pointer and returns, and the palette push this loop already makes
+    # when `led_palette` differs carries the new colours to the button through
+    # the one call site that floors them. It writes nothing to disk; see
+    # `ConfigManager.set_active_theme` for why that is the decision rather
+    # than the shortcut.
+    run_action = functools.partial(
+        execute, store=store, documents=documents,
+        set_theme=cm.set_active_theme,
+    )
 
     # A `midi` action with no port goes to output 0, which on Windows is the
     # built-in synth - so the DAW hears nothing and nothing has failed. The
@@ -905,7 +990,11 @@ async def run(
                 # The port is this listener's own (one per port), so what is left
                 # to ask is whether the message itself is one this reflex hears -
                 # a pure question, asked in config.py where it can be tested.
-                if reflex.source is None or reflex.source.port != port:
+                # `isinstance`, not `is not None`: since TODO 99 a source may
+                # be a polled URL, which has no port to compare.
+                if not isinstance(reflex.source, MidiSource):
+                    continue
+                if reflex.source.port != port:
                     continue
                 if not reflex_hears(reflex, family, number, channel):
                     continue
@@ -929,7 +1018,7 @@ async def run(
             """
             wanted = {
                 reflex.source.port for reflex in self.cm.config.reflexes
-                if reflex.source is not None
+                if isinstance(reflex.source, MidiSource)
             }
             for port in list(self.midi_listeners):
                 if port not in wanted:
@@ -972,6 +1061,180 @@ async def run(
             self.midi_listeners.clear()
 
     midi_in = MidiIn(cm, fire_reflex)
+
+    class UrlPoller:
+        """The third source of circumstances: a clock and a URL (TODO 99/100).
+
+        **This whole class assumes the host is awake and connected** - it is a
+        Python service holding a TCP stack and a DNS resolver, and none of that
+        exists on the button. ARCHITECTURE.md's split puts it on the *phone*
+        permanently rather than on the device (anything needing a network, a
+        parser or a model belongs there), so when the brain moves this is one
+        of the pieces that stays behind rather than one that gets ported.
+        Flagged here because CLAUDE.md asks for exactly that comment.
+
+        `MidiIn`'s sibling, and shaped like it on purpose: it owns its own
+        lifecycle, re-reads `cm.config` on every pass so a reflex added in the
+        editor starts polling without a restart, and turns whatever it finds
+        into a payload that goes on the inbound queue through the same
+        `fire_reflex` a POST uses. **A poll is not a press**: nothing here
+        touches `device.events`, so an app's log never records a press nobody
+        made.
+
+        Where it differs from `MidiIn` is the wait. A MIDI listener is a driver
+        callback on someone else's thread; a fetch is an `await` that can take
+        ten seconds against a server that has gone away, so this runs as its
+        own task rather than on the main tick. That also means it keeps polling
+        while a takeover owns the button - the reading queues, and `wait_in_app`
+        or the run loop takes it when the button is free, which is exactly the
+        "a plant that has gone dry still means it" rule.
+
+        The pure half - what a body means, and whether a failure is worth
+        saying - is [poll.py](poll.py), so all of that is testable with no
+        network and no clock.
+        """
+
+        def __init__(self, cm: ConfigManager, fire_reflex, status, clock,
+                     transport=None):
+            self.cm = cm
+            self.fire_reflex = fire_reflex
+            self.status = status
+            self.clock = clock
+            # The httpx test seam, exactly as `execute`'s webhook takes one:
+            # a MockTransport here means the suite never opens a socket.
+            self.transport = transport
+            # Per reflex name. Health is *not* recreated per pass, which is
+            # the point of holding it here: it is what remembers that this URL
+            # has been failing for an hour and must not be logged again.
+            self.health: dict[str, poll.Health] = {}
+
+        def snapshot(self, now: float) -> dict:
+            """What every polled URL is doing right now.
+
+            TODO 99's third requirement - "findable when somebody asks why
+            nothing happened" - and deliberately a plain dict so the status
+            API can serve it verbatim when the editor grows a panel for it.
+            """
+            return {name: health.snapshot(now) for name, health in self.health.items()}
+
+        def _sources(self) -> dict[str, UrlSource]:
+            return {
+                reflex.name: reflex.source
+                for reflex in self.cm.config.reflexes
+                if isinstance(reflex.source, UrlSource)
+            }
+
+        async def _fetch(self, source: UrlSource) -> poll.Reading:
+            """One GET, turned into a `Reading`. Never raises.
+
+            `follow_redirects` because the calendar URLs this exists for are
+            all redirects - a Google `basic.ics` link answers 302 to a signed
+            storage host, and without this every poll of one reports a
+            perfectly healthy 302 carrying no calendar.
+            """
+            try:
+                async with httpx.AsyncClient(
+                    timeout=poll.FETCH_TIMEOUT_S,
+                    transport=self.transport,
+                    follow_redirects=True,
+                ) as client:
+                    response = await client.get(source.url)
+            except httpx.HTTPError as exc:
+                return poll.Reading(error=f"{type(exc).__name__}: {exc}")
+            if not response.is_success:
+                return poll.Reading(error=f"HTTP {response.status_code}")
+            body = response.content
+            if len(body) > poll.MAX_BODY_BYTES:
+                return poll.Reading(
+                    error=f"body is {len(body)} bytes, over the "
+                          f"{poll.MAX_BODY_BYTES} limit"
+                )
+            # `errors="replace"` rather than a decode failure: a calendar with
+            # one mangled byte in somebody's event title is still a calendar,
+            # and refusing it would be a reflex that stops for a typo.
+            text = body.decode(response.encoding or "utf-8", errors="replace")
+            return poll.read_body(text, source.read, self.clock.now())
+
+        async def sweep(self, now: float) -> None:
+            """Poll everything that is due. One pass, no sleeping.
+
+            Sequential rather than gathered: a config has one or two of these,
+            and three dead URLs costing thirty seconds of a task nobody is
+            waiting on is cheaper than the failure modes of running somebody's
+            calendar provider four requests deep.
+            """
+            sources = self._sources()
+            for name in list(self.health):
+                if name not in sources:
+                    self.health.pop(name)
+                    log.info("stopped polling for reflex %r", name)
+            for name, source in sources.items():
+                period_s = source.every_minutes * 60.0
+                health = self.health.get(name)
+                if health is None:
+                    # `next_at` defaults to 0, so a new reflex polls on the
+                    # very next pass rather than in fifteen minutes. "Check
+                    # this every hour" should have checked by the time you
+                    # have finished reading the sentence.
+                    health = self.health[name] = poll.Health(period_s=period_s)
+                elif health.period_s != period_s:
+                    # Edited live. Re-pace from now rather than honouring a
+                    # due time computed against the old interval.
+                    health.period_s = period_s
+                    health.next_at = min(health.next_at, now + period_s)
+                if not health.due(now):
+                    continue
+                reading = await self._fetch(source)
+                if not reading.ok:
+                    # **No payload, so nothing is fired** - there is no "use
+                    # the last reading" path here, deliberately. And nothing
+                    # is written to the event store either: those rows are
+                    # named after the reflex and hold its readings, so a row
+                    # meaning "the server was down" would poison the chart
+                    # that makes a sensor readable.
+                    if health.failed(now, reading.error):
+                        # The URL is in the line because a config can hold
+                        # several polled reflexes and "which one is down?"
+                        # should not need the config open beside the log.
+                        log.warning(
+                            "reflex %r: %s (%s) - retrying in %s",
+                            name, reading.error, source.url,
+                            _fmt_elapsed(max(0.0, health.next_at - now)),
+                        )
+                        self.status.last_message = (
+                            f"reflex {name}: {reading.error}"
+                        )
+                    continue
+                if health.succeeded(now):
+                    log.info("reflex %r: %s is answering again", name, source.url)
+                    self.status.last_message = f"reflex {name}: polling again"
+                # From here it is an ordinary reflex: the payload goes on the
+                # same queue a POST fills, `handle_reflex` applies `when` and
+                # logs the reading under the reflex's own name. A new source
+                # builds a payload and stops there.
+                self.fire_reflex(name, reading.payload)
+
+        async def run(self) -> None:
+            """Sweep until `stop`. Faults are caught per pass, for the reason
+            the main loop catches its own: a poller that dies on one malformed
+            body takes every other reflex's clock with it."""
+            # Fetched here rather than closed over: this task is created
+            # before `run()`'s own `loop` name exists, and a due time that a
+            # wall-clock change can move is a poll schedule that stops for an
+            # hour twice a year - so it is the loop's monotonic clock.
+            monotonic = asyncio.get_running_loop().time
+            while not stop.is_set():
+                try:
+                    await self.sweep(monotonic())
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - a bad body must not stop the clock
+                    log.exception("URL poller fault - continuing")
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=_POLL_TICK_S)
+
+    url_poller = UrlPoller(cm, fire_reflex, status, clock, transport=poll_transport)
+    poll_task = asyncio.create_task(url_poller.run())
 
     web_server = None
     web_task = None
@@ -1063,20 +1326,77 @@ async def run(
         set_status("ERROR")
         await asyncio.sleep(_ERROR_DISPLAY_S)
 
-    def show_readout(action: ReadoutAction) -> str:
-        """Put a count on the light and say what it was.
+    def readout_number(action: ReadoutAction) -> tuple[int | None, str]:
+        """The number a readout is asking for and the line that says so - or
+        None and why there isn't one (TODO 118a).
+
+        Each branch writes its own sentence with the value it has just found,
+        rather than handing back a template for the caller to fill in: an app
+        or an event may be named anything at all, and a `%` in one of those
+        names would otherwise turn a status line into a formatting error.
+
+        **Two sources.** `event` counts today's rows, which is what a readout
+        has always done. `app` reads one slot of an app's document - the same
+        `(app, slot)` `set_value` writes - so a durable tally's "show the
+        count" shows the tally's own number rather than a recount of a log
+        that agrees with it only while nothing counts by more than one.
+
+        **A dangling app fails here rather than showing a zero.** The document
+        store answers a missing app with the slot's default, which is 0.0, and
+        blinking that would be the button stating a number nobody owns.
+        `_warn_about_documents` has already said so at load; this is the same
+        complaint at the moment it costs someone a press, the way a dangling
+        `enter_mode` target fails.
+
+        **Assumes the host is awake and connected** (CLAUDE.md) - both stores
+        are this process's, which is exactly why this is the half that stayed
+        here. `config.readout_look` is the other half and is pure, so it
+        survives the move onto the device unchanged; the *sources* are what
+        will have to be found again over there.
+        """
+        if action.source != "app":
+            count = store.count_today(action.event)
+            return count, f"{action.event}: {count} today"
+        mode = next((m for m in cm.config.modes if m.name == action.app), None)
+        if mode is None:
+            return None, f"readout: no app named {action.app!r}"
+        # The *declared* default, not a local zero: a slot reads as its
+        # declaration until something writes it (DocSlot), so a durable tally
+        # nobody has pressed yet shows 0 rather than failing - while a slot
+        # that app never declares has no reading at all and says so.
+        declared = next(
+            (s for s in DOC_SLOTS.get(mode.template, ()) if s.name == action.slot),
+            None,
+        )
+        if declared is None:
+            return None, f"readout: {action.app!r} keeps no {action.slot!r}"
+        value = documents.get(action.app, action.slot, declared.default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            # A slot may hold a word or a flag (documents.Scalar). There is no
+            # honest number of blinks for either, and `readout` renders counts.
+            return None, (
+                f"readout: {action.app}.{action.slot} is {value!r}, not a number"
+            )
+        value = int(value)
+        return value, f"{action.app}.{action.slot}: {value}"
+
+    def show_readout(action: ReadoutAction) -> ActionResult:
+        """Put a number on the light and say what it was.
 
         Shared by the two places a readout is answered - bound to a gesture,
         and ending a sequence (TODO 117) - so the digits, the log line and the
-        status text cannot drift between them.
+        status text cannot drift between them. It answers an `ActionResult`
+        rather than a string because it can now fail (see `readout_number`),
+        and a readout that cannot find its number must not push a light at
+        all: the light is this action's whole output, so showing *something*
+        would be worse than showing nothing.
         """
-        count = store.count_today(action.event)
-        set_led(
-            LEDState.IDLE,
-            sequencer.readout(count, action.tens_color, action.units_color),
-        )
-        log.info("readout %s -> %d today", action.event, count)
-        return f"{action.event}: {count} today"
+        value, message = readout_number(action)
+        if value is None:
+            return ActionResult(False, message)
+        set_led(LEDState.IDLE, readout_look(action, value))
+        log.info("readout -> %s", message)
+        return ActionResult(True, message)
 
     def reminder_look(behavior: NoticeBehavior):
         """What a gentle (non-`urgent`) notice shows on ALERT.
@@ -1094,6 +1414,146 @@ async def run(
         return None if base is None else replace(
             base, style="breathe", period_s=max(base.period_s, _REMINDER_PERIOD_S)
         )
+
+    def hour_chime(behavior: NoticeBehavior, hour: int) -> sequencer.Sequence:
+        """The hour, as a one-shot stop list (TODO 106): wash up to white, count
+        `hour` in `behavior.readout_scheme`, fade back to whatever the light was
+        resting on.
+
+        The hour is passed in rather than read from `clock` here, for the
+        reason every pure module in this package takes its clock as an
+        argument: this is the half that is a function of a number, and the
+        caller is the half that knows what time it is.
+
+        **There is no bell renderer here, and that is the whole design.** The
+        middle is `readout.render`, the same compiler a counter's readout uses
+        (TODO 91), and the result is an ordinary `Sequence` walked by the
+        ordinary walker - so the flash floor still runs at its one call site
+        inside `set_led` and nothing downstream knows a clock was involved.
+
+        The two `RESTING` stops are the token (`sequencer.RESTING`), resolved
+        one line below against this state's own resting look. The *first* one
+        matters as much as the last: a one-shot fades from black by
+        construction, so without a zero-length stop at the current colour the
+        wash would begin by snapping the light off - the same move
+        `set_standby`'s fade makes, for the same reason.
+        """
+        fade_s = behavior.readout_fade_s
+        stops = (
+            sequencer.Stop(sequencer.RESTING, hold_s=0.0, fade_s=0.0),
+            sequencer.Stop(READOUT_WASH_COLOR, hold_s=0.0, fade_s=fade_s,
+                           curve="ease_in"),
+            *readout.render(hour, behavior.readout_scheme),
+            sequencer.Stop(sequencer.RESTING, hold_s=0.0, fade_s=fade_s,
+                           curve="ease_out"),
+        )
+        return sequencer.resolve_resting(
+            sequencer.Sequence(stops=stops, repeat=False),
+            # What IDLE is wearing right now, which is what "back to whatever it
+            # was" means. `getattr` because a look may be a Sequence or None and
+            # neither has a colour - `set_standby` reads it the same way.
+            getattr(base_look(LEDState.IDLE), "color", None),
+        )
+
+    async def say_the_hour(behavior: NoticeBehavior, mode_name: str) -> ActionResult:
+        """A notice that announces instead of demanding (TODO 106).
+
+        `ring_notice`'s loop is a question with no timeout by default - it holds
+        the button until someone answers. A chime has nothing to answer: it says
+        the hour and stops. So this plays its one-shot, waits exactly as long as
+        the sequence lasts, and returns cleared - a press only cuts it short,
+        which is the "yes, thank you, I heard" gesture and costs one branch.
+
+        **On `LEDState.IDLE`, not ALERT**, and that is what makes the landing
+        seamless: when a one-shot finishes, `_drive_sequence` drops the state
+        back to its palette entry, and `fire_alarm` then re-asserts IDLE. Both
+        of those are the colour the last stop just faded to, so neither shows.
+        On ALERT the same two moments would flash the alarm colour after a
+        chime that had just finished getting out of the way. It is also the
+        honest status line: the button is not alerting, it is telling the time.
+
+        **Assumes the host is awake and connected** (CLAUDE.md), like every
+        other run loop in this file - and one level beyond them, since the whole
+        feature is a clock this process is holding. When the brain moves to the
+        device this is the shape that survives: a stop list, compiled from a
+        number, played by a walker.
+        """
+        # **Twelve-hour, uniformly, whatever the scheme, and folded here** -
+        # before any scheme sees the number. A scheme that folded 13 to 1
+        # itself would be lying about every other value (`readout.hour_colors`
+        # says so at length), and folding for the colour scheme alone would be
+        # the special case at the call site this feature was written to avoid.
+        # It also gives the honest argument for the cheap schemes its sharpest
+        # form: noon in binary is four symbols, not twelve.
+        hour = clock.now().hour % 12 or 12
+        # `set_led` answers with the sequence that actually went out - floored
+        # by `sequence_safe` at its one call site - so the wait is measured
+        # against what is playing, not against what was asked for.
+        playing = set_led(LEDState.IDLE, hour_chime(behavior, hour))
+        status.last_message = behavior.message or behavior.label or mode_name
+        set_status("IDLE")
+        if behavior.chime:
+            # The second ack of the fire: `fire_alarm` already played one on
+            # entry, unconditionally, exactly as it does for a gentle notice
+            # whose `chime` is on. Left matching that rather than made an
+            # exception of - the double is older than this feature and worth
+            # fixing for both at once, not for one of them here.
+            play_sound(Sound.ACK)
+        # A Sequence unless the ambient layer is asleep, where `set_led`
+        # substitutes the standby dark and there is nothing playing to wait for
+        # - see NoticeBehavior's "a chime speaks on the ambient layer". Nothing
+        # showed, so this returns at once rather than holding the button dark
+        # for twenty seconds of a chime nobody can see.
+        length = (
+            sequencer.span_total(playing)
+            if isinstance(playing, sequencer.Sequence) else 0.0
+        )
+        trigger = await _wait_for_trigger(device.events, stop, length)
+        if behavior.log_as:
+            # 1, like any other cleared notice: it showed. There is no missed
+            # outcome to reach from here - a chime nobody looked at still
+            # happened, and logging that as a miss would make "answered 6 of
+            # the last 7" mean something different for this one template.
+            store.log_event(behavior.log_as, mode=mode_name, value=1)
+        action = resolve_action(cm.config, behavior.on_cleared)
+        if action is not None:
+            await run_action(action, trigger="cleared", mode_name=mode_name)
+        cut = " (cut short)" if trigger is not None and not stop.is_set() else ""
+        return ActionResult(True, f"chimed {hour} in {behavior.readout_scheme}{cut}")
+
+    async def notice_missed(
+        behavior: NoticeBehavior, mode_name: str, why: str
+    ) -> ActionResult:
+        """The missed outcome, in one place because there are two ways to
+        reach it and they must not drift apart.
+
+        84's way: it rang, and nobody answered before `timeout_minutes` was
+        up. 105's way: it was never allowed to ring at all - `never` by
+        definition, or a middle tier whose wait ran out of that same
+        `timeout_minutes`. Either way the outcome is the one 84 fixed: log 0
+        under `log_as` *unconditionally* and first, then `on_missed` as an
+        action layered on top of that log rather than instead of it.
+
+        Touches neither the light nor the sound, which is what lets the
+        never-shown path use it: the caller that rang owns dropping back to
+        IDLE, and the caller that never rang must leave the light alone.
+        """
+        label = behavior.message or behavior.label or mode_name
+        if behavior.log_as:
+            # Logged on *every* outcome, not only on a clear: a notice that
+            # fires while nobody is watching is only trustworthy if the record
+            # says what happened. value is numeric: 0 = missed, 1 = cleared -
+            # same event name, one place to look.
+            store.log_event(behavior.log_as, mode=mode_name, value=0)
+        action = resolve_action(cm.config, behavior.on_missed)
+        if action is None:
+            return ActionResult(True, f"{label} - {why}")
+        result = await run_action(action, trigger="timeout", mode_name=mode_name)
+        log.warning(
+            "notice %r: %s - ran %s (%s)",
+            mode_name, why, type(action).__name__, result.message,
+        )
+        return ActionResult(result.ok, f"{label} - {why}: {result.message}")
 
     async def ring_notice(behavior: NoticeBehavior, mode_name: str) -> ActionResult:
         """The merged alarm/reminder loop (TODO 84): the light goes off until
@@ -1113,6 +1573,12 @@ async def run(
         """
         label = behavior.message or behavior.label or mode_name
         verb = "rings" if behavior.urgent else "flashes"
+        if behavior.readout_scheme:
+            # Before the demo branch on purpose (TODO 106): a chime already ends
+            # on its own in well under a minute, which is what `--demo` shortens
+            # everything else *to*. Ahead of the ring loop for the same reason a
+            # readout ends a sequence - the light is the whole result.
+            return await say_the_hour(behavior, mode_name)
         if args.demo:
             if behavior.urgent:
                 set_led(LEDState.ALERT)
@@ -1152,26 +1618,9 @@ async def run(
                 # is just noise on top of the thing it already did.
                 set_led(LEDState.IDLE)
                 set_status("IDLE")
-                late = f"{behavior.timeout_minutes:g} min"
-                if behavior.log_as:
-                    # Logged on *every* outcome, not only on a clear: a
-                    # notice that fires while nobody is watching is only
-                    # trustworthy if the record says what happened. value is
-                    # numeric: 0 = missed, 1 = cleared - same event name, one
-                    # place to look.
-                    store.log_event(behavior.log_as, mode=mode_name, value=0)
-                action = resolve_action(cm.config, behavior.on_missed)
-                if action is None:
-                    return ActionResult(True, f"{label} - unanswered after {late}")
-                result = await run_action(
-                    action, trigger="timeout", mode_name=mode_name,
-                )
-                log.warning(
-                    "notice %r: unanswered after %s - ran %s (%s)",
-                    mode_name, late, type(action).__name__, result.message,
-                )
-                return ActionResult(
-                    result.ok, f"{label} - unanswered after {late}: {result.message}"
+                return await notice_missed(
+                    behavior, mode_name,
+                    f"unanswered after {behavior.timeout_minutes:g} min",
                 )
             if trigger is None:  # shutting down mid-ring
                 set_led(LEDState.IDLE)
@@ -1293,6 +1742,121 @@ async def run(
         set_led(LEDState.IDLE)
         set_status("IDLE")
 
+    # Notices that came due but were not allowed to show yet (TODO 105), by
+    # occurrence key so the same minute cannot be parked twice. Session state,
+    # like `standby`: a notice held over a restart would arrive with no idea
+    # how long it had been waiting, and the honest thing is to have missed it.
+    pending_notices: dict[str, tuple] = {}
+
+    async def miss_notice(mode, why: str) -> None:
+        """A scheduled notice that never got to ring, ended the only way it
+        can (TODO 105).
+
+        Mirrors `fire_alarm`'s bookkeeping deliberately - the same mode_enter/
+        mode_exit pair and the same `on_enter`/`on_exit` hooks - because this
+        *is* a scheduled session that happened; it simply made no light. That
+        is what keeps `interrupts: "never"` from being a trap for a config
+        that already posts its webhook from `on_enter`.
+
+        **What it does not do is touch the light or the sound**: no ack, no
+        ALERT, no drop back to IDLE. Nothing about what the button is showing
+        changed, so re-asserting IDLE would be this feature cancelling
+        whatever the ambient layer was in the middle of (a readout's count,
+        the sleep fade) for no reason anyone asked for. That is the whole of
+        "a silent scheduled action".
+        """
+        status.last_trigger = None
+        status.last_mode = mode.name
+        log.info("scheduled notice %r: %s", mode.name, why)
+        entered_at = store.log_mode_enter(mode.name)
+        spawn_hook(mode, "on_enter")
+        result = await notice_missed(mode.behavior, mode.name, why)
+        store.log_mode_exit(mode.name, entered_at)
+        await fire_hook(mode, "on_exit", result.summary)
+        status.last_ok = result.ok
+        status.last_message = result.message
+
+    def _miss_reason(behavior) -> str:
+        """Why a notice is being given up on without having rung - which of
+        the two ways into `NOTICE_MISS` this was."""
+        if behavior.interrupts == "never":
+            return "not shown - it never interrupts"
+        return f"not shown - waited {behavior.timeout_minutes:g} min"
+
+    async def offer_notice(mode, key: str, due_at) -> None:
+        """A scheduled notice has come due: show it, hold it back, or give up.
+
+        **The one place TODO 105's ladder is applied**, and it is applied to
+        *unbidden* arrivals only. A notice you reached by pressing something -
+        an `enter_mode` binding, which is what the editor's "ring it now"
+        shortcut is - goes through `enter_takeover` and rings regardless,
+        because `interrupts` is about whether a notice may speak when nobody
+        asked, not about whether you are allowed to open one.
+        """
+        verdict = notice_verdict(
+            mode.behavior,
+            asleep=lighting.standby,
+            # **Assumes the host is awake and running this loop** (CLAUDE.md):
+            # `active_mode` is the only way "an app owns the button" is
+            # knowable here, and it is this loop that sets it. Today that also
+            # makes this answer always False at this call site - see
+            # `release_pending` - and it is written as the real question
+            # anyway, because the day the scheduler stops being blocked by the
+            # run loop is the day it starts answering True.
+            busy=lighting.active_mode is not None,
+            due_at=due_at, now=clock.now(),
+        )
+        if verdict == NOTICE_SHOW:
+            await fire_alarm(mode)
+        elif verdict == NOTICE_MISS:
+            await miss_notice(mode, _miss_reason(mode.behavior))
+        else:
+            pending_notices[key] = (mode, due_at)
+            log.info(
+                "notice %r held back (interrupts=%s) - waiting",
+                mode.name, mode.behavior.interrupts,
+            )
+
+    async def release_pending() -> None:
+        """Re-ask the ladder about everything held back, oldest first.
+
+        Called from the two moments a blocked notice can become unblocked: the
+        scheduler tick (which is where a wake is seen) and the end of
+        `enter_takeover` (which is where an app exiting is seen).
+
+        **The app-exit half is the one with no teeth today, and it is worth
+        knowing why**: this loop is what calls `due_alarm`, and it is not
+        running while a takeover is - so a notice that comes due *during* an
+        app is not parked, it is never seen at all, and `scheduler._FIRE_WINDOW`
+        drops it 60 seconds later. Catching those up is the separately-filed
+        offline/missed-window item, not this one. Everything below is correct
+        for the day that lands, and correct today for the tier that can
+        actually be blocked at a tick - `while_awake` (and `when_free`) while
+        the button is asleep.
+
+        The clock is re-read per entry rather than passed in: firing one notice
+        can take minutes, and the next one's wait has to be measured against
+        when it is actually being asked about.
+        """
+        for key, (mode, due_at) in sorted(
+            list(pending_notices.items()), key=lambda item: item[1][1]
+        ):
+            if key not in pending_notices:
+                continue  # already released while we were awaiting an earlier one
+            verdict = notice_verdict(
+                mode.behavior,
+                asleep=lighting.standby, busy=lighting.active_mode is not None,
+                due_at=due_at, now=clock.now(),
+            )
+            if verdict == NOTICE_WAIT:
+                continue
+            pending_notices.pop(key, None)
+            if verdict == NOTICE_SHOW:
+                log.info("notice %r released after waiting", mode.name)
+                await fire_alarm(mode)
+            else:
+                await miss_notice(mode, _miss_reason(mode.behavior))
+
     async def run_stopwatch(behavior: StopwatchBehavior, mode_name: str) -> ActionResult:
         """Takeover stopwatch: start a timer, then own the button - short_press
         or double_tap marks a lap (logs `<log_as>_lap`), long_press stops and
@@ -1374,10 +1938,24 @@ async def run(
 
     async def run_counter(behavior: CounterBehavior, mode_name: str) -> ActionResult:
         """Takeover counter: count starts at today's `count_today(event)`
-        rather than 0, then owns the button - short_press or double_tap logs
-        `event` (so count_today / streaks just work) and bumps the live
-        count, long_press exits with a session summary. A None trigger
+        rather than 0, then owns the button - each gesture with a step logs
+        `event` (so count_today / streaks just work) and moves the live count
+        by that step, long_press exits with a session summary. A None trigger
         (shutdown) just exits. The caller drops the LED/status back to IDLE.
+
+        **Five steppable gestures and one way out** (TODO 118c). Which press
+        adds what is `behavior.steps`, keyed by trigger name; `long_press` is
+        not in it and cannot be put there (the parser refuses), because long
+        press means "up one level" everywhere. A gesture with no step does
+        nothing, exactly like an unbound gesture anywhere else.
+
+        **A step other than 1 moves the number, and the row carries it.**
+        `count_today` counts *rows* and always will - it is what streaks and
+        every existing habit counter are built on - so a `durable` tally is
+        where a non-unit step survives the night: its document holds the real
+        total, while a day-counter re-seeds from the row count each morning.
+        The field hint says so rather than the parser warning about it; both
+        readings are legitimate, they just answer different questions.
 
         Starting from the store rather than a local zero is TODO 15's "one line
         of state": an ambient `log`/`readout` binding and this takeover log the
@@ -1413,32 +1991,91 @@ async def run(
         def tally() -> dict:
             return {"count": count, "added": count - opened_at}
 
-        def bump() -> int:
-            """One increment: a row for the history, and - when this counter
-            is durable - the document that holds the number. Both, never one:
-            the log is what "what happened in March" is asked of, and the
-            document is what "what is it now" is asked of."""
-            store.log_event(event, mode=mode_name)
+        def bump(step: float) -> int:
+            """One press: a row for the history, and - when this counter is
+            durable - the document that holds the number. Both, never one: the
+            log is what "what happened in March" is asked of, and the document
+            is what "what is it now" is asked of.
+
+            The row carries `step` as its value only when it is not 1. One
+            press of one thing has nothing extra to say and the column stays
+            NULL exactly as it always has (`count_today` ignores it either
+            way); a press worth five is a quantity that would otherwise be
+            lost between the rows."""
+            store.log_event(event, mode=mode_name, value=None if step == 1 else step)
             if behavior.durable:
-                return int(documents.add(mode_name, "count", 1) or 0)
-            return count + 1
+                return int(documents.add(mode_name, "count", step) or 0)
+            return int(count + step)
+
+        # The count on the light, unasked, every so often (TODO 118c) - the one
+        # way a single pixel can state a number. Pushed as an ephemeral effect
+        # on COUNTING rather than as a state of its own: nothing here is worth
+        # a wire code (CLAUDE.md), and the floor is applied for us at
+        # `set_led`'s single gate.
+        show_every_s = behavior.show_every_s if behavior.show_every_s > 0 else None
+        # **Rendered through the tally's own readout, not through a second copy
+        # of one** (TODO 118a). `counter_readout` is the same object the "show
+        # the count" shortcut carries, so the surface and the shortcut cannot
+        # disagree about the scheme, the colours or - on a durable tally -
+        # which number is being shown at all. Built once: nothing about it
+        # changes while the app is open.
+        own_readout = counter_readout(behavior, mode_name)
+
+        def show_count() -> float:
+            """Flash the count; answer how long the digits take.
+
+            The *value* is the live one this loop is holding rather than a
+            re-read through `readout_number`, and the two agree by
+            construction: `count` was seeded from whichever source
+            `own_readout` names and `bump` keeps it there. Re-reading would
+            cost a query per tick to learn a number this frame already knows.
+            """
+            digits = readout_look(own_readout, int(count))
+            set_led(LEDState.COUNTING, digits)
+            return sequencer.span_total(digits)
 
         if args.demo:
-            count = bump()  # one increment, then out
+            count = bump(next(iter(behavior.steps.values()), 1))  # one press, then out
             play_sound(Sound.ACK)
             status.last_message = f"{event}: {count}"
             await asyncio.sleep(_SUCCESS_DISPLAY_S)
             return ActionResult(True, f"{event}: {count} this session (demo)", tally())
+        # True while the light is resting on the app's own look, False while a
+        # readout's digits are still playing. The two need different waits: one
+        # is the interval you configured, the other is however long the digits
+        # take - and a finished one-shot lands on COUNTING's *palette* entry
+        # (`_drive_sequence`), so a counter that names a look for COUNTING has
+        # to be handed it back or it loses it after the first readout.
+        resting = True
+        digits_s = 0.0
         while True:
-            trigger = await _wait_for_trigger(device.events, stop)
+            wait_s = None
+            if show_every_s is not None:
+                wait_s = show_every_s if resting else digits_s
+            trigger = await _wait_for_trigger(device.events, stop, wait_s)
+            if trigger is None and wait_s is not None and not stop.is_set():
+                if resting:  # a tick: say the number
+                    digits_s = show_count()
+                    resting = False
+                else:  # the digits are done: back to the app's own look
+                    set_led(LEDState.COUNTING)
+                    resting = True
+                continue
             if trigger is None:  # shutting down
                 return ActionResult(
                     True, f"{event}: {count} this session (shutdown)", tally()
                 )
             if trigger is TriggerType.LONG_PRESS:
                 return ActionResult(True, f"{event}: {count} this session", tally())
-            # short_press / double_tap -> +1
-            count = bump()
+            step = behavior.steps.get(trigger.value)
+            if step is None:
+                continue  # a gesture with no step does nothing, like any unbound one
+            if not resting:
+                # A press reclaims the light: finishing the digits first would
+                # answer a question nobody is still asking.
+                set_led(LEDState.COUNTING)
+                resting = True
+            count = bump(step)
             play_sound(Sound.ACK)
             status.last_message = f"{event}: {count}"
 
@@ -2919,6 +3556,14 @@ async def run(
 
         set_led(LEDState.IDLE)
         set_status("IDLE")
+        # The button has just come back to the ambient layer, which is the
+        # moment a notice held back by `when_free` has been waiting for (TODO
+        # 105). Here rather than only on the next scheduler tick because this
+        # is where the condition actually changes; the tick is the backstop.
+        # Not re-entrant - `fire_alarm` never calls back into this loop - and
+        # after the chain has fully unwound, so a launcher handing off to a
+        # second app is still one app running, not a gap between two.
+        await release_pending()
 
     def toggle_standby(mode_name: str | None) -> None:
         """Sleep or wake, and say so on the status line. One place, two ways in
@@ -3034,8 +3679,15 @@ async def run(
             # than falling into the shared SUCCESS/IDLE tail.
             mode = resolved[0]
             status.last_mode = mode.name
+            result = show_readout(action)
+            if not result.ok:
+                # A readout with no number to read fails the way a dangling
+                # `enter_mode` target does, and for the same reason: silence
+                # would be indistinguishable from a gesture nobody bound.
+                await fail(result.message)
+                return
             status.last_ok = True
-            status.last_message = show_readout(action)
+            status.last_message = result.message
             set_status("IDLE")
             return
         elif isinstance(action, SequenceAction) and isinstance(
@@ -3071,9 +3723,19 @@ async def run(
                     play_sound(Sound.ERROR)
             if tail.wait_s:
                 await asyncio.sleep(tail.wait_s)
-            message = show_readout(tail.action)
+            result = show_readout(tail.action)
+            message = (
+                result.message if failure is None
+                else f"{failure}; {result.message}"
+            )
+            if not result.ok:
+                # The readout itself failing is different from a lead step
+                # failing: there is no light saying anything, so this is an
+                # ordinary failed action and goes through `fail()`.
+                await fail(message)
+                return
             status.last_ok = failure is None
-            status.last_message = message if failure is None else f"{failure}; {message}"
+            status.last_message = message
             set_status("IDLE")
             return
         else:
@@ -3375,11 +4037,24 @@ async def run(
                     k for k in fired
                     if k.rsplit("@", 1)[-1].startswith(f"{today_prefix}T")
                 }
+                # Held-back notices (TODO 105) are pruned by the same rule and
+                # for the same reason - one that waits forever waits until the
+                # day it belonged to is over, which is as long as "forever" can
+                # honestly mean for a thing named after a minute.
+                for stale in [
+                    k for k in pending_notices
+                    if not k.rsplit("@", 1)[-1].startswith(f"{today_prefix}T")
+                ]:
+                    dropped, _ = pending_notices.pop(stale)
+                    log.info("notice %r expired while waiting", dropped.name)
                 due = due_alarm(cm.config.modes, now, fired)
                 if due is not None:
                     mode, key = due
                     fired.add(key)
-                    await fire_alarm(mode)
+                    await offer_notice(mode, key, now)
+                # Whether or not one arrived, ask again about anything held
+                # back: this tick may be the one where the button woke up.
+                await release_pending()
             except asyncio.CancelledError:
                 raise  # shutdown, not a fault
             except Exception as exc:
@@ -3403,6 +4078,13 @@ async def run(
         # callback the driver still has the address of, and a callback freed
         # while winmm can still reach it takes the process with it (CLAUDE.md).
         midi_in.close()
+        # The poller may be mid-fetch against a server that will take another
+        # ten seconds to admit it is gone, so it is cancelled rather than
+        # waited for - nothing downstream of a reading needs it to land, and
+        # `stop` alone would hold shutdown open for the timeout.
+        poll_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await poll_task
         if lighting.sequence_task is not None:
             # Not another `set_led` - shutting down never repaints the light,
             # it just stops walking whatever sequence was mid-flight so the

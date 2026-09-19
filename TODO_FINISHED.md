@@ -14,6 +14,145 @@ back here; until then, one file is simpler and costs nothing extra to keep.
 
 ## Shipped items, in full
 
+### 118. An app contributes actions — shipped 2026-09-10
+
+**Asked 2026-09-09:** *"the paradigm should move more from Modes to Apps. Apps
+on phones have widgets, features you can trigger with shortcuts (actions),
+notifications... The counter app should start with two actions: count and
+reveal count."*
+
+**The finding that made it cheap, and it is the part that still binds:** the
+codebase had already anticipated this. `docSlots` on a template descriptor
+declared an app's durable values, with its own comment calling it *"the
+manifest's precursor"*; `set_value` called itself *"the third action family
+(ROADMAP 3d): app-bound."* **`actions:` is one field over from a field that
+already existed.**
+
+**Zero new action types, and that is the design.** A contributed action is a
+**pre-filled instance of an existing action**, declared as a function of the
+mode beside `docSlots`, so `actions: (mode) => [{ id, label, about, body }]`.
+`contributedActions(modes, allowed)` filters by **the caller's own allow-list**
+(or by `appOnly` when a gesture asks), so nothing was widened and nothing is
+declared twice. Picking one **copies the body** — nothing new reaches
+`config.json`, which is why it needed no migration. If a future change wants an
+`if template === …` in the editor, it has taken the wrong turn.
+
+**Six templates contribute**, which is what proves it is a mechanism and not a
+counter special case: counter, stopwatch, notice, launcher, signal and control.
+Signal's and control's are one `set_position` per position, and because
+`set_position` is `appOnly` they come out **reflex-only for free** — the
+allow-list rule demonstrating itself rather than being asserted.
+
+**Five assignable counter gestures, not four** — `GESTURES` has six keys and
+`long_press` stays the exit. Stored as flat trigger keys mirroring
+`PomodoroBehavior.gestures`, so `bound_triggers` picks them up for free and
+`tap_5` correctly raises `max_taps` while an untouched tally costs nothing.
+
+**118a — `readout` reading an app's `docSlot` — was the seam the item hung on.**
+`ReadoutAction` gained `source`/`app`/`slot`/`scheme`/`colors` (appended, so
+positional construction still means what it did), and `CounterBehavior` gained
+`readout_scheme`/`readout_colors` **on the tally rather than on each binding**.
+`show_count` branches on `mode.durable` exactly as `count_up` does, so a
+counter's two shortcuts finally read and write the same number.
+**The back-compat check is the part worth remembering: the old
+`sequencer.readout` and `readout.place_value` are NOT equivalent** — measured
+across 0-99 they differ on essentially every value, because the old renderer
+gives the tens group its own slower dwells and a different group gap. So the
+legacy path still calls `sequencer.readout` and `readout_look` branches.
+Assuming equivalence would have silently restyled every existing readout.
+
+**The ceiling, stated when it shipped:** this delivers the *shortcuts* and the
+*surface*. Notifications owned by an app, and true install/uninstall,
+background work and third-party apps, remain **Stage 3's manifest** (ROADMAP
+3a/3b). 118 does not pre-empt that — it **prototypes the manifest's `actions`
+section in the place the manifest will be generated from**.
+
+**It is NOT the trigger to reopen 48b.** 118 nests nothing: `modes` stays flat
+and resolution stays a name lookup. 48b's reopen condition is app-level state
+no single item can own, and this is not it.
+
+**What it could not express became 119**: four rejected candidates (alarm
+snooze, alarm arm, Pomodoro skip, light-show next cue) all failed for one
+reason — nothing in the action vocabulary reaches *into* a running app.
+
+### 91. The counter stops being an app — the pool declined, the readout shipped — 2026-09-10
+
+**Asked 2026-08-29:** *"Counter feels wrong... Count should be an action -
+`counter_name` counts by x."*
+
+**The pool was DECLINED by the owner on 2026-09-09, and the reasoning binds:**
+this item recommended counters become a top-level `counters` object and the
+takeover be deleted. The owner's design keeps the Counter as an app with its
+own surface — a periodic readout and five assignable increments. **The real ask
+was discoverability, not deletion**, and that was answered by **118** making the
+Counter hand you two ready-made actions. Do not re-propose the pool without new
+evidence.
+
+**The readout half shipped as `aibutton/readout.py`** — a pure module, no
+`config` import, `SCHEMES` + `render()`: Morse (calls **83**'s compiler
+directly rather than re-rendering), place-value (the old scheme generalised to
+N configurable places), binary, and `hour_colors` added by **106**. **The 0-99
+cap is gone.** Every scheme clears `SAFE_MIN_PERIOD_S / 2` **by construction**
+rather than leaning on the clamp, exactly as the old `sequencer.readout` did.
+
+**"All three are stop-list generators" was the right unifying call** — a number
+and a scheme in, a `tuple[Stop, ...]` out, and everything downstream treats the
+result as the ordinary stop list it is. That is why **106** cost no renderer of
+its own and why a fifth scheme is a table row plus one function.
+
+The scheme and its colours are configured **on the counter**, not on each
+binding (`CounterBehavior.readout_scheme` / `readout_colors`) — see 118a.
+
+### 95. Colour themes — a pool with an action — shipped 2026-09-10
+
+**Asked 2026-08-29:** a theme the whole button follows, rather than colours set
+one at a time. Sharpened by the owner 2026-09-09: *"like scenes but only
+controls lights... users can edit and save their own. **Load Theme is a new
+action.**"*
+
+**The choice that still binds: a theme is NOT a scene, and the investigation
+that settled it is the reusable part.** Mechanically a scene carrying only
+`led_palette`/`looks`/`state_looks` *is* a colour theme — `scenes.merge` is
+shallow and key-by-key. **But a scene is a slot, not a layer, and the slot is
+already taken**: `scenes.active` is a single id, so a theme in that slot would
+*replace* the arrangement rather than tint it, and `ConfigManager.write_path`
+would then make it where every subsequent edit landed. Stacking a second
+overlay is exactly what *"one parser, and scenes merge before it"* exists to
+prevent. So: `themes` is a **pool** beside `looks`/`actions`/`reflexes`, and
+`active_theme` is **one pointer resolved by the one parser** — one layer, one
+pointer, no precedence stack.
+
+**`load_theme` is in `FIRE_AND_FORGET_ACTIONS`**, which puts it on a gesture, a
+hook, a reflex, a pool entry and a sequence step at once. The case that earns
+that reach is a reflex: *at sunset, load Nocturne*.
+
+**The decision most likely to be re-litigated, so it is recorded here:
+`ConfigManager.set_active_theme` is in-memory only, deliberately.** Three
+reasons in the order they bind: a disk write in a press path is precisely what
+the fire-and-forget rule exists to keep out; `write_path` sends edits to the
+**active scene**, so persisting here would mean a sunset reflex silently
+rewriting the scene file every evening — a config that changes with nobody
+editing it, and since **92** a git diff a day; and **`standby` is the
+precedent** — live, host-side, gesture-toggled state nobody expects to survive
+a restart. A theme chosen *in the editor* is saved like any other edit. Note
+the asymmetry with `scenes.active`, which must stay in `config.json` because a
+scene pointing at a scene is a loop; a theme pool lives *inside* the one parsed
+config, so there is no loop to avoid.
+
+**`own_colours` on `AppConfig`** keeps what the file itself said before a theme
+was applied, which is what makes switching Ember→Nocturne the same answer as
+loading Nocturne from cold.
+
+**Four shipped, each earning its place by a different argument** — Signal (max
+hue separation *plus a distinct motion per state*, so hue is not carrying the
+load alone; the accessible default), Ember (the black-body curve — and the
+format's stress test, because when every state shares a hue family, brightness
+and motion must carry the distinction), Nocturne (a nightstand at 3 AM is not a
+torch), Studio (desaturated everywhere except record, **so that red means
+record**). A fifth "legible on the 3V3 ring's colour cast" theme waits on
+**0c**'s eyeball test — authoring it before the bench sitting would be
+inventing numbers.
+
 ### 70. Reflexes — a circumstance, with an action attached
 
 **Asked for 2026-08-26, and named by the owner: these are reflexes.** Not
@@ -1292,8 +1431,32 @@ Readout & events):
 Verified end to end through `run()` against a recording `MockDevice`: one blue
 unit pulse on the first press, two more on the second, and `LEDState.ERROR`
 never pushed. The `readout`-inside-a-control-surface bullet in TODO.md is the
-same class of gap at a second site and stayed open.
+same class of gap at a second site and stayed open. **Closes TODO 110**, which
+had asked the same question from the other side of the fix and left it
+undecided.
 
+### 110. A sequence cannot show a count — closed by 117, 2026-09-09
+
+**Reported 2026-08-29**, before 117 existed: *"Read count isn't available in
+the 'Do several things in order' dropdown."* Correct, and for the reason 117
+later fixed - `readout` was absent from `SEQUENCE_ACTIONS`, `execute()` has no
+light, and the SUCCESS flash cuts a running stop list off mid-digit. 110's own
+write-up framed the fix as widening `execute()` itself - an optional `show=`
+callback plus an `ActionResult` flag for "don't flash over me" - and left the
+decision open, reasoning that `execute()` moves to the device in Stage 3 and a
+seam added now would just be re-decided there.
+
+**117 chose narrower, and that is the choice that binds.** `execute()` was not
+widened at all - it still has no light and never will, by design. Instead the
+readout got its own list, `SEQUENCE_TAIL_ACTIONS`, checked only at the one
+dispatch site that already owns a light (`main.handle`), via
+`resolve_action(..., tail_ok=True)` defaulted off everywhere else. So 110's
+"obstacle 1" (`execute()` has no light) is now a permanent boundary rather
+than an open question: a sequence run from a hook, a reflex or a control
+surface still cannot end in a readout, and that is deliberate, not a gap left
+over from this item. The Stage-3 worry that motivated waiting never had to be
+spent - the narrow fix touches nothing `execute()` owns, so there is nothing
+there to re-decide when that code moves. See **117** above for the mechanics.
 
 ## Small fixes
 

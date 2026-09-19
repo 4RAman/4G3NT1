@@ -1,0 +1,97 @@
+{
+  "title": "Time, Not Numbers",
+  "blurb": "Start a timer with one press and watch time pass as colour instead of digits - no screen, no nagging, no app to open.",
+  "for": "People who are time-blind, pay a real cost to task-switch, and want an off-screen way to feel time passing.",
+  "assumes": [],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": { "action": "enter_mode", "target": "Focus" },
+      "double_tap": { "action": "enter_mode", "target": "Quick timer" },
+      "triple_tap": { "action": "enter_mode", "target": "Switch log" },
+      "tap_4": { "action": "enter_mode", "target": "Open timer" }
+    },
+    {
+      "name": "Focus",
+      "template": "pomodoro",
+      "activation": { "type": "manual" },
+      "work_s": 1200,
+      "break_s": 300,
+      "long_break_s": 900,
+      "blocks_before_long_break": 3,
+      "rounds": 0,
+      "lead_in_s": 5,
+      "advance": "break_only",
+      "log_as": "focus_block",
+      "waiting_style": "solid",
+      "ramp": [
+        { "color": "#00c853", "at": 0 },
+        { "color": "#ffd600", "at": 0.6 },
+        { "color": "#ff6d00", "at": 0.9 },
+        { "color": "#ff3d00", "at": 1 }
+      ],
+      "short_press": "toggle",
+      "long_press": "exit",
+      "double_tap": "extend",
+      "extend_s": 300
+    },
+    {
+      "name": "Quick timer",
+      "template": "countdown",
+      "activation": { "type": "manual" },
+      "minutes": 5,
+      "label": "5 min",
+      "style": "breathe",
+      "period_s": 2,
+      "ramp": [
+        { "color": "#00c853", "at": 0 },
+        { "color": "#ffd600", "at": 0.5 },
+        { "color": "#ff6d00", "at": 0.8 },
+        { "color": "#ffffff", "at": 1 }
+      ],
+      "ring_on_finish": true,
+      "log_as": "quick_timer",
+      "ladder": { "enabled": false, "tick_s": 1, "base": "#000000", "rungs": [] }
+    },
+    {
+      "name": "Switch log",
+      "template": "counter",
+      "activation": { "type": "manual" },
+      "event": "task_switch",
+      "durable": false
+    },
+    {
+      "name": "Open timer",
+      "template": "stopwatch",
+      "activation": { "type": "manual" },
+      "log_as": "open_timer",
+      "ladder": {
+        "enabled": true,
+        "tick_s": 1,
+        "base": "#000000",
+        "rungs": [
+          { "every_s": 3600, "color": "#ffffff" },
+          { "every_s": 600, "color": "#4fc3f7" },
+          { "every_s": 60, "color": "#0d3b4f" }
+        ]
+      }
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "breathe", "color": "#062018", "color2": "#000000", "period_s": 8 },
+    "LISTENING": { "style": "solid", "color": "#26c6da", "color2": "#000000", "period_s": 3 },
+    "WORKING": { "style": "breathe", "color": "#00c853", "color2": "#000000", "period_s": 6 },
+    "RESTING": { "style": "breathe", "color": "#00c853", "color2": "#000000", "period_s": 6 },
+    "TIMING": { "style": "breathe", "color": "#ffab00", "color2": "#000000", "period_s": 3 },
+    "COUNTING": { "style": "fade", "color": "#4fc3f7", "color2": "#062038", "period_s": 6 }
+  },
+
+  "looks": {},
+  "actions": {},
+  "reflexes": [],
+  "state_looks": {}
+}

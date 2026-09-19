@@ -1,0 +1,71 @@
+{
+  "format_version": 1,
+  "generated": "2026-09-10",
+  "generator": "tools/build_scene_index.py",
+  "fallback": null,
+  "settings": {
+    "max_shard_rows": 200,
+    "source": "scenes/library"
+  },
+  "counts": {
+    "total": 13,
+    "curated": 13,
+    "generated": 0
+  },
+  "facets": {
+    "group": [
+      {
+        "id": "library",
+        "label": "Scene library",
+        "count": 13
+      }
+    ],
+    "assumes": [
+      {
+        "id": "a-voice-chat-or-conferencing-app-with-a-global-mute-hotkey",
+        "label": "a voice-chat or conferencing app with a global mute hotkey",
+        "count": 4
+      },
+      {
+        "id": "an-external-script-that-can-post-to-the-button-s-rest-reflex-end",
+        "label": "an external script that can POST to the button's REST reflex endpoint",
+        "count": 4
+      },
+      {
+        "id": "nothing-beyond-the-button",
+        "label": "nothing beyond the button",
+        "count": 3
+      },
+      {
+        "id": "a-daw",
+        "label": "a DAW",
+        "count": 2
+      },
+      {
+        "id": "a-loopmidi-port-named-button",
+        "label": "a loopMIDI port named 'Button'",
+        "count": 2
+      },
+      {
+        "id": "obs-studio-with-matching-global-hotkeys-settings-hotkeys",
+        "label": "OBS Studio with matching global hotkeys (Settings > Hotkeys)",
+        "count": 1
+      },
+      {
+        "id": "a-calendar-that-publishes-a-secret-ics-link-google-outlook-iclou",
+        "label": "a calendar that publishes a secret .ics link (Google/Outlook/iCloud \"secret address in iCal format\")",
+        "count": 1
+      }
+    ]
+  },
+  "shards": [
+    {
+      "file": "library.json",
+      "group": "library",
+      "label": "Scene library",
+      "part": 1,
+      "rows": 13,
+      "bytes": 68333
+    }
+  ]
+}

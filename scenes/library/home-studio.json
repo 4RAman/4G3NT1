@@ -1,0 +1,129 @@
+{
+  "title": "Home Studio",
+  "blurb": "Arms record, drops a marker and taps tempo without leaving the take - the light doubles as your DAW's transport state.",
+  "for": "Solo producers and songwriters working in a DAW most evenings.",
+  "assumes": ["a DAW", "a loopMIDI port named 'Button'"],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": { "action": "log", "event": "studio_session" },
+      "double_tap": { "action": "enter_mode", "target": "DAW" },
+      "triple_tap": { "action": "enter_mode", "target": "Metronome" },
+      "tap_4": { "action": "enter_mode", "target": "Takes" },
+      "tap_5": { "action": "enter_mode", "target": "Stopwatch" }
+    },
+    {
+      "name": "DAW",
+      "template": "control",
+      "activation": { "type": "manual" },
+      "short_press": {
+        "action": "midi", "port": "Button", "kind": "note_on",
+        "channel": 1, "number": 94, "value": 127
+      },
+      "double_tap": {
+        "action": "midi", "port": "Button", "kind": "note_on",
+        "channel": 1, "number": 93, "value": 127
+      },
+      "triple_tap": {
+        "action": "midi", "port": "Button", "kind": "note_on",
+        "channel": 1, "number": 95, "value": 127
+      },
+      "tap_4": {
+        "action": "midi", "port": "Button", "kind": "note_on",
+        "channel": 1, "number": 84, "value": 127
+      },
+      "tap_5": {
+        "action": "midi", "port": "Button", "kind": "note_on",
+        "channel": 1, "number": 86, "value": 127
+      },
+      "log_as": "daw_cmd",
+      "return_after": true,
+      "positions": [
+        { "name": "Stopped", "look": "Stopped" },
+        { "name": "Playing", "look": "Playing" },
+        { "name": "Recording", "look": "Recording" }
+      ]
+    },
+    {
+      "name": "Metronome",
+      "template": "metronome",
+      "activation": { "type": "manual" },
+      "start_bpm": 100,
+      "max_bpm": 300,
+      "tap_history": 6,
+      "reset_gap_s": 2,
+      "sound_on_tap": true,
+      "log_as": "studio_tempo",
+      "clock_port": "",
+      "ladder": {
+        "enabled": true,
+        "tick_s": 1,
+        "base": "#000000",
+        "rungs": [
+          { "every_s": 4, "color": "#ffffff" },
+          { "every_s": 2, "color": "#ffb400" },
+          { "every_s": 1, "color": "#3d1e78" }
+        ]
+      }
+    },
+    {
+      "name": "Takes",
+      "template": "counter",
+      "activation": { "type": "manual" },
+      "event": "take",
+      "durable": true
+    },
+    {
+      "name": "Stopwatch",
+      "template": "stopwatch",
+      "activation": { "type": "manual" },
+      "log_as": "studio_time",
+      "ladder": {
+        "enabled": true,
+        "tick_s": 0.5,
+        "base": "#000000",
+        "rungs": [
+          { "every_s": 600, "color": "#ffffff" },
+          { "every_s": 60, "color": "#00c2ff" },
+          { "every_s": 10, "color": "#1b0f33" }
+        ]
+      }
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "solid", "color": "#140a1e", "color2": "#000000", "period_s": 6 },
+    "LISTENING": { "style": "breathe", "color": "#7d5cff", "color2": "#000000", "period_s": 3 },
+    "TIMING": { "style": "flash", "color": "#00c2ff", "color2": "#000000", "period_s": 0.6 },
+    "METRONOME": { "style": "flash", "color": "#ffb400", "color2": "#000000", "period_s": 0.5 },
+    "COUNTING": { "style": "fade", "color": "#ffcc00", "color2": "#402400", "period_s": 6 }
+  },
+
+  "looks": {
+    "Stopped": { "style": "solid", "color": "#0b1a40", "color2": "#000000", "period_s": 3 },
+    "Playing": { "style": "solid", "color": "#00d26a", "color2": "#000000", "period_s": 3 },
+    "Recording": { "style": "breathe", "color": "#ff1030", "color2": "#000000", "period_s": 2.2 }
+  },
+
+  "reflexes": [
+    {
+      "name": "recording_armed",
+      "then": { "action": "set_position", "name": "Recording" },
+      "when": { "field": "velocity", "op": "==", "value": 127 },
+      "from": { "midi": { "port": "Button", "note": 95, "channel": 1 } },
+      "while": "DAW"
+    },
+    {
+      "name": "recording_disarmed",
+      "then": { "action": "set_position", "name": "Stopped" },
+      "when": { "field": "velocity", "op": "==", "value": 0 },
+      "from": { "midi": { "port": "Button", "note": 95, "channel": 1 } },
+      "while": "DAW"
+    }
+  ],
+
+  "state_looks": {}
+}

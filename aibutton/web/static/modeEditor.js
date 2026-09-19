@@ -13,7 +13,7 @@
 import { el, clear } from './dom.js';
 import {
   GESTURES, MODE_HOOKS, DAYS, ACTIONS, ACTION_BY_TYPE,
-  TEMPLATES, TEMPLATE_BY_TYPE,
+  TEMPLATES, TEMPLATE_BY_TYPE, contributedActions,
   ACTIVATIONS, ACTIVATION_BY_TYPE, describeActivation,
   describeExit, findEntryPoints, modeLook,
   LED_STATE_BY_KEY, describeEffect, LOOK_PRESETS, LOOK_PRESET_GROUPS, presetLook,
@@ -822,7 +822,15 @@ export class ModeEditor {
     if (activation.type === 'window') {
       this.activationBody.append(this._window(activation), this._days(activation));
     } else if (activation.type === 'schedule') {
-      this.activationBody.append(this._scheduleTime(activation), this._days(activation));
+      this.activationBody.append(
+        this._scheduleTime(activation), this._repeat(activation), this._days(activation),
+      );
+      // The window is only offered once it repeats: "between 08:00 and 22:00"
+      // on a once-a-day schedule either says nothing or contradicts `at`.
+      // Offering it there would be inviting a setting that cannot mean
+      // anything - and TODO 106's whole point is that the window is what
+      // stops an hourly chime ringing at 3 AM, not a general refinement.
+      if (activation.every) this.activationBody.append(this._window(activation));
     }
     // 'always' and 'manual' have no scope fields, so no body.
   }
@@ -871,6 +879,31 @@ export class ModeEditor {
     return el('div', { className: 'scope-row' }, [
       el('span', { className: 'scope-lbl', textContent: 'Fire at' }),
       input, err,
+    ]);
+  }
+
+  // schedule: how often within the day (TODO 106). The options come from the
+  // descriptor's `repeats`, which mirrors `config.SCHEDULE_REPEATS` - a second
+  // repeat is a table row there and needs no edit here.
+  _repeat(activation) {
+    const repeats = ACTIVATION_BY_TYPE.schedule?.repeats || [];
+    const select = el('select', {
+      className: 'inp',
+      onchange: () => {
+        // '' is how the absent key is spelled in a select with no empty state,
+        // so choosing it *deletes* rather than writing a falsy `every`: a
+        // schedule that never heard of this must stay byte-identical in the
+        // file, not gain `"every": ""`.
+        if (select.value) activation.every = select.value;
+        else { delete activation.every; delete activation.between; }
+        this._buildActivationBody();
+        this._changed();
+      },
+    }, repeats.map((r) => el('option', { value: r.value, textContent: r.label })));
+    select.value = activation.every || '';
+    return el('div', { className: 'scope-row' }, [
+      el('span', { className: 'scope-lbl', textContent: 'Repeat' }),
+      select,
     ]);
   }
 
@@ -939,6 +972,12 @@ export class ModeEditor {
     // the parser's kind branches. The leading underscores keep it out of the
     // namespace an action type could ever occupy.
     const NAMED = '__named__';
+    // The other sentinel, and the same reasoning: a contributed shortcut is a
+    // pre-filled *instance* of an action, so it can never be an action type and
+    // must not sit in the namespace one could occupy. The digits after it index
+    // `contributed` below, which sidesteps having to escape an app name that
+    // happens to contain the separator.
+    const CONTRIB = '__app__:';
     // A binding may narrow what it will accept (MODE_HOOKS does; a gesture
     // does not). Offering an action the parser will drop is the failure this
     // list exists to prevent, and filtering here keeps it one rule rather than
@@ -949,6 +988,19 @@ export class ModeEditor {
     const offered = gesture.actions
       ? ACTIONS.filter((a) => gesture.actions.includes(a.type))
       : ACTIONS.filter((a) => !a.appOnly);
+    // The shortcuts your apps contribute (TODO 118b), grouped under the app
+    // that offers them. **Filtered by the same allow-list as `offered` above**
+    // and by nothing else, so a contributed action is offered exactly where
+    // its underlying action already is - see `contributedActions`.
+    const contributed = contributedActions(
+      this.handlers.getModes ? this.handlers.getModes() : [],
+      gesture.actions || null,
+    );
+    const byApp = new Map();
+    contributed.forEach((shortcut, index) => {
+      if (!byApp.has(shortcut.app)) byApp.set(shortcut.app, []);
+      byApp.get(shortcut.app).push({ shortcut, index });
+    });
     const select = el('select', {
       className: 'inp',
       onchange: () => {
@@ -957,7 +1009,18 @@ export class ModeEditor {
         // entry for someone would bind a gesture to an action they never
         // chose, and the validator below stops an empty one being saved.
         else if (select.value === NAMED) this.mode[gesture.key] = '';
-        else this.mode[gesture.key] = ACTION_BY_TYPE[select.value].defaults();
+        else if (select.value.startsWith(CONTRIB)) {
+          // **Copied, not referenced.** A contributed action is a starting
+          // point exactly as a look preset is: the body lands in the binding
+          // and the app that offered it is forgotten, so nothing new reaches
+          // config.json and there is nothing to migrate. Editing it afterwards
+          // is the ordinary case, which is why the select settles back onto
+          // the underlying action type below.
+          const picked = contributed[Number(select.value.slice(CONTRIB.length))];
+          if (!picked) return;
+          this.mode[gesture.key] = structuredClone(picked.body);
+          select.value = picked.body.action;
+        } else this.mode[gesture.key] = ACTION_BY_TYPE[select.value].defaults();
         buildFields();
         this._changed();
       },
@@ -965,6 +1028,15 @@ export class ModeEditor {
       el('option', { value: '', textContent: '- do nothing -' }),
       ...offered.map((a) => el('option', { value: a.type, textContent: a.label })),
       el('option', { value: NAMED, textContent: 'Use a named action' }),
+      // After the built-in list rather than before it: these are the shorter
+      // road to the same actions, not a different set, and an app's own name
+      // is the label people will look for.
+      ...[...byApp].map(([app, entries]) => el('optgroup', { label: app },
+        entries.map(({ shortcut, index }) => el('option', {
+          value: `${CONTRIB}${index}`,
+          textContent: shortcut.label,
+          title: shortcut.about || '',
+        })))),
     ]);
     // A string binding is a pool reference (config.py's NamedAction). Read as
     // `?.action` it would show as "do nothing" and then be deleted on Save, so

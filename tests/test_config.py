@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import time
 
 import pytest
@@ -8,6 +9,7 @@ from aibutton.config import (
     ActionsBehavior,
     AlwaysActivation,
     AppConfig,
+    Colours,
     ConfigManager,
     CounterBehavior,
     CountdownBehavior,
@@ -831,8 +833,22 @@ def test_as_dict_roundtrips_actions_and_alarm(tmp_path):
 
 
 def test_default_config_roundtrips(tmp_path):
+    """The one field a hand-built config cannot already have. `own_colours` is
+    what the *file* said its colours were before a theme was laid over them
+    (TODO 95), so the constructor leaves it None - nothing has been laid over
+    anything - and the first parse writes it down. Asserted rather than
+    excluded from the comparison: a round-trip that skipped it would let a
+    Save bake the active theme into `led_palette` unnoticed, which is the
+    single failure the field exists to prevent."""
     cfg = AppConfig()
-    assert parse_config(as_dict(cfg)) == cfg
+    parsed = parse_config(as_dict(cfg))
+    assert parsed.own_colours == Colours(
+        led_palette=cfg.led_palette, looks=cfg.looks, state_looks=cfg.state_looks,
+    )
+    assert parsed == replace(cfg, own_colours=parsed.own_colours)
+    # And from there it is a fixed point, which is exactly what the editor
+    # does on every Save: parse, dump, parse, and nothing may drift.
+    assert parse_config(as_dict(parsed)) == parsed
 
 
 def test_constructed_mode_roundtrips():
@@ -848,7 +864,18 @@ def test_constructed_mode_roundtrips():
             behavior=ActionsBehavior(actions={"short_press": LogAction(event="x")}),
         ),
     ))
-    assert parse_config(as_dict(cfg)) == cfg
+    parsed = parse_config(as_dict(cfg))
+    # `own_colours` again, and the same reason as above: the constructor cannot
+    # have one, the parser always does. Named in the comparison rather than
+    # dropped from it, and checked to be the colours this config actually has -
+    # with no theme on, "what the file said" and "what is rendering" are the
+    # same palette, and a serialiser that wrote the themed one would fail here
+    # the moment a theme was involved.
+    assert parsed.own_colours == Colours(
+        led_palette=cfg.led_palette, looks=cfg.looks, state_looks=cfg.state_looks,
+    )
+    assert parsed == replace(cfg, own_colours=parsed.own_colours)
+    assert parse_config(as_dict(parsed)) == parsed
 
 
 def test_all_four_templates_and_enter_mode_roundtrip(tmp_path):

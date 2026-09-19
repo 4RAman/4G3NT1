@@ -1,0 +1,20 @@
+id,name,tags,family,group,curated,morse,dpm,color
+msg-sos,SOS,sos|distress|emergency|mayday|help|beacon|morse|message,red,Messages,true,SOS,300,#ff0000
+msg-help,HELP,help|distress|emergency|sos|morse|message,red,Messages,true,HELP,300,#ff0000
+msg-ok,OK,ok|okay|status|fine|acknowledged|morse|message,green,Messages,true,OK,300,#00c853
+msg-on-air,ON AIR,on air|broadcast|live|recording|studio|status|morse|message,red,Messages,true,ON AIR,300,#ff0000
+msg-busy,BUSY,busy|dnd|do not disturb|occupied|status|morse|message,orange,Messages,true,BUSY,300,#ff9500
+msg-brb,BRB,brb|be right back|away|status|morse|message,yellow,Messages,true,BRB,300,#ffee00
+msg-yes,YES,yes|affirmative|confirm|morse|message,green,Messages,true,YES,300,#00c853
+msg-no,NO,no|negative|deny|morse|message,red,Messages,true,NO,300,#ff0000
+msg-hi,HI,hi|hello|hey|greeting|morse|message,cyan,Messages,true,HI,300,#00b8ff
+msg-bye,BYE,bye|goodbye|farewell|greeting|morse|message,blue,Messages,true,BYE,300,#0066ff
+msg-love,LOVE,love|heart|affection|romance|morse|message,pink,Messages,true,LOVE,300,#ff2d78
+msg-xoxo,XOXO,xoxo|hugs|kisses|affection|love|morse|message,pink,Messages,true,XOXO,300,#ff2d78
+msg-cq,CQ,cq|ham radio|amateur radio|callsign|prosign|calling any station|morse|message,blue,Messages,true,CQ,300,#0044ff
+msg-sk,SK,sk|ham radio|amateur radio|callsign|prosign|end of contact|morse|message,blue,Messages,true,SK,300,#0044ff
+msg-73,73,73|ham radio|amateur radio|best regards|prosign|morse|message,blue,Messages,true,73,300,#0044ff
+msg-88,88,88|ham radio|amateur radio|love and kisses|prosign|morse|message,pink,Messages,true,88,300,#ff2d78
+msg-qsl,QSL,qsl|ham radio|amateur radio|acknowledged|confirmed|prosign|morse|message,blue,Messages,true,QSL,300,#0044ff
+msg-911,911,911|emergency|number|call for help|morse|message,red,Messages,true,911,300,#ff0000
+msg-countdown,3 2 1,countdown|321|launch|numbers|morse|message,white,Messages,true,3 2 1,300,#ffffff

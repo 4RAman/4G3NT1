@@ -1,0 +1,85 @@
+{
+  "title": "Smart Home Panel",
+  "blurb": "A control surface fires the automations you already built over webhook, and the light mirrors whatever your setup already knows - a door open, the laundry done, someone home.",
+  "for": "Home Assistant and MQTT tinkerers who want one physical control wired into automations they already have, not a phone app nobody else in the house opens.",
+  "assumes": ["an external script that can POST to the button's REST reflex endpoint"],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": { "action": "enter_mode", "target": "Scenes" },
+      "double_tap": { "action": "enter_mode", "target": "House" }
+    },
+    {
+      "name": "Scenes",
+      "template": "control",
+      "activation": { "type": "manual" },
+      "short_press": {
+        "action": "webhook",
+        "url": "http://homeassistant.local:8123/api/webhook/button_movie_mode",
+        "payload": { "source": "button" }
+      },
+      "double_tap": {
+        "action": "webhook",
+        "url": "http://homeassistant.local:8123/api/webhook/button_goodnight",
+        "payload": { "source": "button" }
+      },
+      "triple_tap": {
+        "action": "webhook",
+        "url": "http://homeassistant.local:8123/api/webhook/button_all_off",
+        "payload": { "source": "button" }
+      },
+      "tap_4": {
+        "action": "webhook",
+        "url": "http://homeassistant.local:8123/api/webhook/button_arrive_home",
+        "payload": { "source": "button" }
+      },
+      "log_as": "scene_press",
+      "return_after": true
+    },
+    {
+      "name": "House",
+      "template": "signal",
+      "activation": { "type": "manual" },
+      "states": [
+        { "name": "All clear", "color": "#00ff2a", "style": "solid" },
+        { "name": "Door open", "color": "#ffb703", "style": "flash" },
+        { "name": "Laundry done", "color": "#00b4d8", "style": "breathe" },
+        { "name": "Someone home", "color": "#7d2bff", "style": "solid" }
+      ],
+      "start_at": 0,
+      "log_as": "house_state"
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "breathe", "color": "#2b1d0e", "color2": "#000000", "period_s": 9 },
+    "LISTENING": { "style": "solid", "color": "#00b4d8", "color2": "#000000", "period_s": 3 }
+  },
+
+  "looks": {},
+  "actions": {},
+  "reflexes": [
+    {
+      "name": "door_opened",
+      "then": { "action": "set_position", "name": "Door open" },
+      "when": { "field": "value", "op": "==", "value": 1 },
+      "while": "House"
+    },
+    {
+      "name": "laundry_done",
+      "then": { "action": "set_position", "name": "Laundry done" },
+      "when": { "field": "value", "op": "==", "value": 1 },
+      "while": "House"
+    },
+    {
+      "name": "someone_home",
+      "then": { "action": "set_position", "name": "Someone home" },
+      "when": { "field": "value", "op": "==", "value": 1 },
+      "while": "House"
+    }
+  ],
+  "state_looks": {}
+}

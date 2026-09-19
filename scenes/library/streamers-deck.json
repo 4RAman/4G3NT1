@@ -1,0 +1,80 @@
+{
+  "title": "Streamer's Deck",
+  "blurb": "The LED is your on-air light and it is on camera - one press flips the scene, one mutes the mic, one starts the clip.",
+  "for": "Twitch/YouTube/TikTok streamers running OBS at a busy desk.",
+  "assumes": ["OBS Studio with matching global hotkeys (Settings > Hotkeys)", "a voice-chat or conferencing app with a global mute hotkey"],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": {
+        "action": "keys", "combo": "ctrl+alt+m", "click": ""
+      },
+      "double_tap": { "action": "enter_mode", "target": "Deck" },
+      "triple_tap": {
+        "action": "keys", "combo": "ctrl+alt+r", "click": ""
+      },
+      "tap_4": { "action": "enter_mode", "target": "Clip counter" }
+    },
+    {
+      "name": "Deck",
+      "template": "control",
+      "activation": { "type": "manual" },
+      "short_press": {
+        "action": "keys", "combo": "ctrl+alt+1", "click": ""
+      },
+      "double_tap": {
+        "action": "keys", "combo": "ctrl+alt+2", "click": ""
+      },
+      "triple_tap": {
+        "action": "keys", "combo": "ctrl+alt+3", "click": ""
+      },
+      "tap_4": {
+        "action": "keys", "combo": "ctrl+alt+r", "click": ""
+      },
+      "tap_5": {
+        "action": "keys", "combo": "ctrl+alt+m", "click": ""
+      },
+      "log_as": "deck_press",
+      "return_after": true,
+      "positions": [
+        { "name": "Offline", "look": "Offline" },
+        { "name": "Live", "look": "On Air" },
+        { "name": "Muted", "look": "Muted" }
+      ]
+    },
+    {
+      "name": "Clip counter",
+      "template": "counter",
+      "activation": { "type": "manual" },
+      "event": "clip_worthy",
+      "durable": false
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "breathe", "color": "#101018", "color2": "#000000", "period_s": 8 },
+    "LISTENING": { "style": "solid", "color": "#8f2fff", "color2": "#000000", "period_s": 3 },
+    "COUNTING": { "style": "fade", "color": "#00e5ff", "color2": "#001a2b", "period_s": 5 },
+    "SUCCESS": { "style": "solid", "color": "#00ff88", "color2": "#000000", "period_s": 1 }
+  },
+
+  "looks": {
+    "Offline": { "style": "solid", "color": "#202020", "color2": "#000000", "period_s": 4 },
+    "On Air": { "style": "solid", "color": "#ff0000", "color2": "#000000", "period_s": 3 },
+    "Muted": {
+      "stops": [
+        { "color": "#ff0000", "hold_s": 0.4, "fade_s": 0.15, "curve": "linear" },
+        { "color": "#3a0000", "hold_s": 0.4, "fade_s": 0.15, "curve": "linear" }
+      ],
+      "repeat": true,
+      "drive": "clock"
+    }
+  },
+
+  "actions": {},
+  "reflexes": [],
+  "state_looks": {}
+}

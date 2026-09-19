@@ -1,0 +1,73 @@
+{
+  "title": "Matchday",
+  "blurb": "Idles in your team's colours, steps through the stages of the game with a press, and tallies every scoring play.",
+  "for": "Season-ticket holders and watch-party hosts who want their team's colours on the desk and an easy way to mark the big moments without checking a score app.",
+  "assumes": ["an external script that can POST to the button's REST reflex endpoint"],
+
+  "modes": [
+    {
+      "name": "Home",
+      "template": "actions",
+      "activation": { "type": "always" },
+      "short_press": { "action": "enter_mode", "target": "Scoreboard" },
+      "double_tap": { "action": "enter_mode", "target": "Scoring plays" },
+      "triple_tap": { "action": "enter_mode", "target": "Game clock" }
+    },
+    {
+      "name": "Scoreboard",
+      "template": "signal",
+      "activation": { "type": "manual" },
+      "states": [
+        { "name": "Pregame", "color": "#7a0000", "style": "breathe" },
+        { "name": "Live", "color": "#c81e1e", "style": "solid" },
+        { "name": "Timeout", "color": "#ffb703", "style": "breathe" },
+        { "name": "Final", "color": "#ffd60a", "style": "solid" },
+        { "name": "Score", "color": "#ffffff", "style": "flash" }
+      ],
+      "start_at": 0,
+      "log_as": "game_state"
+    },
+    {
+      "name": "Scoring plays",
+      "template": "counter",
+      "activation": { "type": "manual" },
+      "event": "score",
+      "durable": false
+    },
+    {
+      "name": "Game clock",
+      "template": "stopwatch",
+      "activation": { "type": "manual" },
+      "log_as": "game_clock",
+      "ladder": {
+        "enabled": true,
+        "tick_s": 1,
+        "base": "#000000",
+        "rungs": [
+          { "every_s": 2700, "color": "#ffffff" },
+          { "every_s": 900, "color": "#ffb703" },
+          { "every_s": 300, "color": "#7a0000" }
+        ]
+      }
+    }
+  ],
+
+  "led_palette": {
+    "IDLE": { "style": "breathe", "color": "#4d0000", "color2": "#000000", "period_s": 10 },
+    "LISTENING": { "style": "solid", "color": "#ffb703", "color2": "#000000", "period_s": 3 },
+    "COUNTING": { "style": "fade", "color": "#ff595e", "color2": "#3a0000", "period_s": 5 },
+    "TIMING": { "style": "breathe", "color": "#ffca3a", "color2": "#000000", "period_s": 4 }
+  },
+
+  "looks": {},
+  "actions": {},
+  "reflexes": [
+    {
+      "name": "score_ping",
+      "then": { "action": "set_position", "name": "Score" },
+      "when": { "field": "value", "op": ">", "value": 0 },
+      "while": "Scoreboard"
+    }
+  ],
+  "state_looks": {}
+}

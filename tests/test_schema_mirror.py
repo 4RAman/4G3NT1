@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from aibutton import config as cfg
+from aibutton import poll, readout
 from aibutton.device import (
     LED_STYLES,
     STYLE_STROBES,
@@ -708,6 +709,63 @@ def test_the_operators_a_reflex_may_test_with_match_on_both_sides():
     match = re.search(r"export const REFLEX_OPS = \[(.*?)\];", SCHEMA_JS, re.S)
     assert match, "REFLEX_OPS is not a flat array literal any more"
     assert sorted(re.findall(r"'([^']+)'", match.group(1))) == sorted(cfg.REFLEX_OPS)
+
+
+def test_schema_js_offers_the_same_sources_the_parser_accepts():
+    """The other half of a reaction's `from` (TODO 99/100): which ways in the
+    editor may offer. The dropdown is *generated* from this table, so a source
+    the parser has and the table does not is one nobody can pick, and one the
+    table has and the parser does not is a `from` dropped on the next Save."""
+    match = re.search(r"export const REFLEX_SOURCES = \[(.*?)\n\];", SCHEMA_JS, re.S)
+    assert match, "REFLEX_SOURCES is not an array literal any more"
+    # A source's own key sits at the top of its entry; a reader's is nested
+    # one brace deeper, so the indent is what tells them apart.
+    keys = re.findall(r"\n    key: '([^']+)'", match.group(1))
+    assert keys == list(cfg.REFLEX_SOURCES)
+
+
+def test_a_readout_offers_the_same_two_sources_the_parser_accepts():
+    """TODO 118a. A readout reads an event's rows or an app's own slot, and
+    the pair is mirrored: a source the editor offers and the parser drops is a
+    readout that silently goes back to counting the log on the next Save -
+    which is the one failure mode this item existed to remove, arriving from
+    the other direction."""
+    match = re.search(
+        r"key: 'source', label: 'Which number'.*?options: \[(.*?)\],\n",
+        SCHEMA_JS, re.S,
+    )
+    assert match, "the readout's source field is not a literal option list any more"
+    assert tuple(re.findall(r"value: '(\w+)'", match.group(1))) == cfg.READOUT_SOURCES
+
+
+def test_a_readout_offers_the_same_schemes_the_compiler_has():
+    """The second half of the same mirror: `readout.SCHEMES` plus `''`, which
+    is the tens/units renderer this action has always had and which is not a
+    scheme. Checked in two places because the tally configures the same list
+    on itself (TODO 91's "on the counter, not on each binding"), and a tally
+    offering a fifth scheme nobody compiled would fail at the moment it flashed
+    rather than at the moment it was chosen."""
+    for where, label in (
+        ("key: 'scheme', label: 'How to read it out'", "the readout action"),
+        ("key: 'readout_scheme', label: 'Read the count as'", "the tally"),
+    ):
+        match = re.search(
+            re.escape(where) + r".*?options: \[(.*?)\],\n", SCHEMA_JS, re.S,
+        )
+        assert match, f"{label}'s scheme field is not a literal option list"
+        offered = re.findall(r"value: '(\w*)'", match.group(1))
+        assert offered[0] == "", f"{label} lost its 'no scheme' option"
+        assert set(offered[1:]) == set(readout.SCHEMES), label
+
+
+def test_schema_js_offers_the_same_readers_the_poller_has():
+    """And what a polled body may be read as. A reader the editor offers and
+    `poll.READERS` does not is a reflex that parses to JSON whatever the page
+    said, which is a calendar that silently never fires."""
+    match = re.search(r"readers: \[(.*?)\n    \],", SCHEMA_JS, re.S)
+    assert match, "the url source has no readers list any more"
+    keys = re.findall(r"\{ key: '([^']+)'", match.group(1))
+    assert keys == list(poll.READERS)
 
 
 def test_every_json_field_says_whether_it_is_a_list_or_an_object():
